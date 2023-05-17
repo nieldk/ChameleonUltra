@@ -155,13 +155,14 @@ class ChameleonCLI:
 
             # clear screen
             if cmd_str == "clear":
-                if platform.system() == 'Windows':
-                    os.system("cls")
-                elif platform.system() == 'Linux':
-                    os.system("clear")
-                else:
-                    print("No screen clear implement")
-                continue
+                os = platform.system()
+                match os:
+                    case 'Windows' :
+                        os.system("cls")
+                    case 'Linux' :
+                        os.system("clear")
+                    case _  :
+                        print("Not implemented")
 
             if cmd_str == "exit":
                 print("Bye, thank you.  ^.^ ")
