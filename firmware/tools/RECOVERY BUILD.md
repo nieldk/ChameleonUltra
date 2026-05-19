@@ -1,4 +1,3 @@
-# ================================================================
 RECOVERY-MODE BUILD — revert from UF2 bootloader to stock
 
 This builds a “recovery” application whose only job is to:
@@ -72,7 +71,6 @@ The version tag matters if upstream ever changes the bootloader between
 releases — versioned filenames let users match what they intend to revert
 to.
 
-# ================================================================
 END USER FLOW
 
 1. Cold-boot the device, hold B, plug back in (UF2 DFU mode)
@@ -89,7 +87,6 @@ The second reset is what trips up first-time users. Tell them to expect
 the CHAMELEON drive to vanish — that’s the success signal, not a
 failure.
 
-# ================================================================
 SAFETY NOTES
 
 - This is one-shot. Once the user runs the recovery UF2, the device’s
@@ -112,24 +109,3 @@ SAFETY NOTES
   (writes the same bytes — wasted operation, not destructive), then
   self-destructs and resets. Either way the device converges to the
   working “stock BL + DFU mode” state.
-
-# ================================================================
-SHARED INFRASTRUCTURE
-
-bl_updater.c and bl_updater.h are the same files in both the normal UF2
-build and the RECOVERY_MODE build. Only the embedded bootloader bytes
-differ (via embedded_bootloader.h), and only which entry point gets
-called (manual `hw update_bl` from the CLI vs automatic on-boot in
-recovery mode).
-
-This means:
-
-- One source tree, two build targets
-- Changes to the bootloader update mechanism land in both paths
-  simultaneously
-- The CRC validation catches accidentally building one variant with
-  the other’s embedded BL header
-
-The recovery hook in app_main.c is gated entirely behind #ifdef
-RECOVERY_MODE, so the patched app_main.c is also safe to keep
-permanently in your tree — normal builds compile it out entirely.
