@@ -175,14 +175,20 @@ static void dfu_observer(nrf_dfu_evt_type_t evt_type) {
 /**
  * @brief Magic value written to GPREGRET to request UF2 drag-and-drop mode.
  *
- * Uses the standard NRF_BL_DFU_ENTER_METHOD_GPREGRET top-5-bits pattern so
- * the SDK's dfu_enter_check() picks it up as a DFU request. The lower 3
- * bits are free for our use — we steal bit 1 to mark "UF2 mode".
+ * The SDK's dfu_enter_check() in nrf_bootloader.c tests:
+ *     (GPREGRET & BOOTLOADER_DFU_START_MASK) == BOOTLOADER_DFU_START
+ * where START_MASK = 0xF8|0x01 = 0xF9 and START = 0xB0|0x01 = 0xB1.
  *
- * (BOOTLOADER_DFU_GPREGRET = 0xB0, BOOTLOADER_DFU_GPREGRET_MASK = 0xF8.)
+ * So bit 0 (BOOTLOADER_DFU_START_BIT_MASK) MUST be set for the SDK to
+ * recognise the GPREGRET as a DFU-enter request. Bits 1-2 are free for
+ * us to encode the sub-mode (UF2 vs legacy CDC). We use bit 1.
+ *
+ * Resulting GPREGRET = 0xB0 | 0x01 | 0x02 = 0xB3.
+ *   - masked by 0xF9 → 0xB1 (matches BOOTLOADER_DFU_START) → DFU entered
+ *   - bit 1 set → UF2 mode (informational for the application side)
  */
 #define BOOTLOADER_DFU_UF2_BIT_MASK   (0x02)
-#define BOOTLOADER_DFU_UF2_MAGIC      (BOOTLOADER_DFU_GPREGRET | BOOTLOADER_DFU_UF2_BIT_MASK)
+#define BOOTLOADER_DFU_UF2_MAGIC      (BOOTLOADER_DFU_START | BOOTLOADER_DFU_UF2_BIT_MASK)
 
 /**@brief Function for application main entry. */
 int main(void) {
