@@ -57,7 +57,7 @@ NRF_LOG_MODULE_REGISTER();
 #define MSC_INTERFACE        2
 #define MSC_EPIN             NRF_DRV_USBD_EPIN3
 #define MSC_EPOUT            NRF_DRV_USBD_EPOUT2
-#define MSC_WORKBUFFER_SIZE  1024
+#define MSC_WORKBUFFER_SIZE  512
 
 static nrf_dfu_observer_t m_observer;
 
