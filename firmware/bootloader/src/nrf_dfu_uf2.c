@@ -83,7 +83,7 @@ static void msc_user_ev_handler(app_usbd_class_inst_t const *p_inst,
 APP_USBD_MSC_GLOBAL_DEF(m_app_msc,
                         MSC_INTERFACE,
                         msc_user_ev_handler,
-                        APP_USBD_MSC_EPIN_EPOUT(MSC_EPIN, MSC_EPOUT),
+                        (MSC_EPIN, MSC_EPOUT),
                         (&uf2_blockdev),
                         MSC_WORKBUFFER_SIZE);
 
