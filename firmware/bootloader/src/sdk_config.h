@@ -1276,7 +1276,7 @@
 // <i> This reduced feature set is used by the BLE transport to reduce flash usage.
 
 #ifndef NRF_DFU_PROTOCOL_REDUCED
-#define NRF_DFU_PROTOCOL_REDUCED 0
+#define NRF_DFU_PROTOCOL_REDUCED 1
 #endif
 
 // <q> NRF_DFU_PROTOCOL_VERSION_MSG  - Protocol version message support.
@@ -1286,7 +1286,7 @@
 // <i> If disabled, protocol version requests will return NRF_DFU_RES_CODE_OP_CODE_NOT_SUPPORTED.
 
 #ifndef NRF_DFU_PROTOCOL_VERSION_MSG
-#define NRF_DFU_PROTOCOL_VERSION_MSG 1
+#define NRF_DFU_PROTOCOL_VERSION_MSG 0
 #endif
 
 // </h>
