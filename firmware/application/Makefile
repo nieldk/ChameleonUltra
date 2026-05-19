@@ -374,6 +374,14 @@ else
 $(error Chameleon <Application>: No device type define.)
 endif
 
+# Recovery-mode build: gates the bl_updater self-update hook at the very
+# top of main() in app_main.c. Triggered by build.sh when RECOVERY_ZIP is
+# set, which also swaps embedded_bootloader.h to carry the stock BL.
+ifdef RECOVERY_MODE
+  CFLAGS += -DRECOVERY_MODE=1
+$(info  Chameleon <Application>: RECOVERY_MODE build — revert-to-stock UF2.)
+endif
+
 ifeq (${NRF_LOG_UART_ON_SWO_ENABLED}, 1)
 SRC_FILES += \
   $(SDK_ROOT)/components/libraries/log/src/nrf_log_backend_uart.c \
