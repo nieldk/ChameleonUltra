@@ -8,6 +8,7 @@ $(OUTPUT_DIRECTORY)/application.out: \
 SRC_FILES += \
   $(SRC_COMMON)/hw_connect.c \
   $(SRC_COMMON)/libc_nano_stubs.c \
+  $(PROJ_DIR)/application/src/bl_updater.c \
   $(PROJ_DIR)/app_main.c \
   $(PROJ_DIR)/app_cmd.c \
   $(PROJ_DIR)/ble_main.c \
