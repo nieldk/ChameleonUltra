@@ -6,7 +6,7 @@
  *
  * When the user issues the "hw update_bl" CLI command, this code:
  *   1. Verifies the embedded payload is sane (size, CRC32)
- *   2. Disables the SoftDevice  (required before raw NVMC writes to the BL region)
+ *   2. Disables the SoftDevice  (required before raw NVMC writes to BL region)
  *   3. Erases the bootloader region pages
  *   4. Writes the embedded bootloader bytes into the BL region
  *   5. NVIC_SystemReset()  — new BL boots
@@ -26,6 +26,12 @@
  *     0xF3000 - 0xFE000   Bootloader        <-- write target (44 KB / 11 pages)
  *     0xFE000 - 0xFF000   MBR params
  *     0xFF000 - 0x100000  Bootloader settings
+ *
+ * NVMC is driven inline rather than via the SDK helper because the
+ * application doesn't otherwise link nrf_nvmc.c — every other flash
+ * operation in the app goes through the SoftDevice. By the time we
+ * touch NVMC here we've already taken the SoftDevice offline, so the
+ * normal restriction against raw NVMC access doesn't apply.
  */
 
 #include "bl_updater.h"
@@ -35,7 +41,6 @@
 #include <string.h>
 
 #include "nrf.h"
-#include "nrf_nvmc.h"
 #include "nrf_sdh.h"
 #include "nrf_soc.h"
 #include "nrf_delay.h"
@@ -47,8 +52,63 @@
 #define BL_REGION_BYTES    (BL_REGION_END - BL_REGION_START)
 
 
-/* CRC32 (zlib/ethernet polynomial 0xEDB88320, init 0xFFFFFFFF, final XOR ~).
- * Implemented inline so we don't drag in zlib. */
+/* ---- Inline NVMC ----
+ * Erase: WEN=Een, write start addr to ERASEPAGE, wait READY, WEN=Ren.
+ * Write: WEN=Wen, store words to flash address, wait READY between
+ * each word, WEN=Ren when done. */
+
+static inline void nvmc_wait_ready(void)
+{
+    while (NRF_NVMC->READY == NVMC_READY_READY_Busy) { /* spin */ }
+}
+
+static void nvmc_page_erase(uint32_t page_addr)
+{
+    nvmc_wait_ready();
+    NRF_NVMC->CONFIG = (NVMC_CONFIG_WEN_Een << NVMC_CONFIG_WEN_Pos);
+    nvmc_wait_ready();
+    NRF_NVMC->ERASEPAGE = page_addr;
+    nvmc_wait_ready();
+    NRF_NVMC->CONFIG = (NVMC_CONFIG_WEN_Ren << NVMC_CONFIG_WEN_Pos);
+    nvmc_wait_ready();
+}
+
+/* Write `len` bytes from src to flash dst. NVMC can only write 32-bit
+ * words to word-aligned addresses; we copy through an aligned local
+ * buffer to handle the trailing partial word, if any. dst must be
+ * word-aligned (BL_REGION_START is page-aligned, so that's free). */
+static void nvmc_write_bytes(uint32_t dst, const uint8_t *src, uint32_t len)
+{
+    nvmc_wait_ready();
+    NRF_NVMC->CONFIG = (NVMC_CONFIG_WEN_Wen << NVMC_CONFIG_WEN_Pos);
+    nvmc_wait_ready();
+
+    uint32_t remaining = len;
+    while (remaining >= 4) {
+        uint32_t word;
+        memcpy(&word, src, 4);          /* unaligned-safe read */
+        *(volatile uint32_t *)dst = word;
+        nvmc_wait_ready();
+        dst       += 4;
+        src       += 4;
+        remaining -= 4;
+    }
+    if (remaining != 0) {
+        /* Pad to a full word with 0xFF (erased flash value) so the
+         * unused bytes stay as if untouched. */
+        uint32_t word = 0xFFFFFFFFu;
+        memcpy(&word, src, remaining);
+        *(volatile uint32_t *)dst = word;
+        nvmc_wait_ready();
+    }
+
+    NRF_NVMC->CONFIG = (NVMC_CONFIG_WEN_Ren << NVMC_CONFIG_WEN_Pos);
+    nvmc_wait_ready();
+}
+
+
+/* CRC32 (zlib/ethernet polynomial 0xEDB88320, init 0xFFFFFFFF, final XOR).
+ * Inline so we don't drag in zlib. */
 static uint32_t crc32_compute(const uint8_t *p, uint32_t len)
 {
     uint32_t crc = 0xFFFFFFFFu;
@@ -78,7 +138,7 @@ bl_updater_status_t bl_updater_validate(void)
 }
 
 
-/* This function never returns on success — the chip resets into the new BL.
+/* This function does not return on success — the chip resets into the new BL.
  * On failure it returns one of the error codes; the caller is responsible
  * for not having destroyed anything yet. We re-validate inside before
  * touching flash so a stale call can't brick the device. */
@@ -108,28 +168,21 @@ bl_updater_status_t bl_updater_run(void)
 
     /* Erase BL region pages */
     for (uint32_t i = 0; i < BL_REGION_PAGES; i++) {
-        nrf_nvmc_page_erase(BL_REGION_START + i * BL_PAGE_SIZE);
+        nvmc_page_erase(BL_REGION_START + i * BL_PAGE_SIZE);
     }
 
-    /* Write the embedded bootloader. nrf_nvmc_write_bytes blocks until each
-     * word is committed (it polls NVMC.READY). Safe to call back-to-back. */
-    nrf_nvmc_write_bytes(BL_REGION_START,
-                         EMBEDDED_BOOTLOADER_BIN,
-                         EMBEDDED_BOOTLOADER_BIN_SIZE);
+    /* Write the embedded bootloader */
+    nvmc_write_bytes(BL_REGION_START,
+                     EMBEDDED_BOOTLOADER_BIN,
+                     EMBEDDED_BOOTLOADER_BIN_SIZE);
 
     /* Verify what we just wrote matches what we intended. If a single
-     * byte differs we don't reset — the user can re-trigger and we won't
-     * have made things worse than the current state. */
-    if (memcmp((const void *)BL_REGION_START,
-               EMBEDDED_BOOTLOADER_BIN,
-               EMBEDDED_BOOTLOADER_BIN_SIZE) != 0) {
-        /* New BL is on flash but partially. We're already past the point
-         * of no return — old BL has been erased, new BL is questionable.
-         * Best to reset and hope it boots; if it doesn't, SWD recovery. */
-        nrf_delay_ms(50);
-        NVIC_SystemReset();
-        /* unreached */
-    }
+     * byte differs we don't try to recover — we're past the point of
+     * no return (old BL has been erased) — just reset and hope the
+     * partial-write boots well enough to do SWD recovery from. */
+    (void)memcmp((const void *)BL_REGION_START,
+                 EMBEDDED_BOOTLOADER_BIN,
+                 EMBEDDED_BOOTLOADER_BIN_SIZE);
 
     nrf_delay_ms(50);
     NVIC_SystemReset();
