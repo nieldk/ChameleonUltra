@@ -200,5 +200,6 @@
 #define DATA_CMD_EM4X05_READSNIFF               (3032)
 #define DATA_CMD_LF_SNIFF                       (3031)
 #define DATA_CMD_ENTER_BOOTLOADER_UF2           (1041)
+#define DATA_CMD_UPDATE_BL                      (1042)
 
 #endif
