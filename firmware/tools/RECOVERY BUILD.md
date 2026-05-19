@@ -19,20 +19,6 @@ for any upstream release is a single command:
 ```
 RECOVERY_ZIP=path/to/ultra-dfu-full.zip ./build.sh
 ```
-
-# ================================================================
-WHAT’S IN THIS DIRECTORY
-
-```
-build.sh                 → drop-in replacement for firmware/build.sh
-bl_updater.c             → new file for firmware/application/src/
-bl_updater.h             → new file for firmware/application/src/
-make_recovery_header.py  → new file for firmware/tools/
-patches/Makefile         → patched firmware/application/Makefile
-patches/app_main.c       → patched firmware/application/src/app_main.c
-RECOVERY_BUILD.md        → this document
-```
-
 # ================================================================
 ONE-TIME SETUP
 
