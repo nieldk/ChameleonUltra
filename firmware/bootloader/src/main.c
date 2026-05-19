@@ -172,12 +172,43 @@ static void dfu_observer(nrf_dfu_evt_type_t evt_type) {
  *
  */
 
+/**
+ * @brief Magic value written to GPREGRET to request UF2 drag-and-drop mode.
+ *
+ * Uses the standard NRF_BL_DFU_ENTER_METHOD_GPREGRET top-5-bits pattern so
+ * the SDK's dfu_enter_check() picks it up as a DFU request. The lower 3
+ * bits are free for our use — we steal bit 1 to mark "UF2 mode".
+ *
+ * (BOOTLOADER_DFU_GPREGRET = 0xB0, BOOTLOADER_DFU_GPREGRET_MASK = 0xF8.)
+ */
+#define BOOTLOADER_DFU_UF2_BIT_MASK   (0x02)
+#define BOOTLOADER_DFU_UF2_MAGIC      (BOOTLOADER_DFU_GPREGRET | BOOTLOADER_DFU_UF2_BIT_MASK)
+
 /**@brief Function for application main entry. */
 int main(void) {
     ret_code_t ret_val;
 
     // Must to init hardware connect.
     hw_connect_init();
+
+    /*
+     * Hold BUTTON_2 while plugging in USB / powering on to enter UF2 drag-
+     * and-drop mode. The pull config matches the existing BUTTON_1 setup
+     * (pulldown, active-high). The flag is written to GPREGRET so the
+     * SDK's existing dfu_enter_check() picks it up; nrf_dfu_uf2.c can
+     * inspect the bits if it wants to distinguish UF2 from legacy DFU.
+     *
+     * BUTTON_1 + plug → legacy signed CDC/BLE DFU (existing behaviour).
+     * BUTTON_2 + plug → UF2 drag-and-drop mode (new).
+     */
+    nrf_gpio_cfg_input(BUTTON_2, BUTTON_PULL);
+    nrf_delay_ms(5);  /* let the pin settle before sampling */
+    if (nrf_gpio_pin_read(BUTTON_2) == 1) {
+        NRF_POWER->GPREGRET = BOOTLOADER_DFU_UF2_MAGIC;
+        /* Fall through; the GPREGRET enter-method in nrf_bootloader.c will
+         * recognise the magic and route us into DFU mode with both
+         * transports (CDC + MSC) active. */
+    }
     init_leds();
 
     // Must happen before flash protection is applied, since it edits a protected page.

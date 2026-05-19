@@ -6058,5 +6058,50 @@
 // </h>
 //==========================================================
 
+// ===========================================================================
+// UF2 transport additions (ChameleonUltra fork)
+// ---------------------------------------------------------------------------
+// Enables the USB Mass Storage class and a block device backing it.
+// Required by nrf_dfu_uf2.c / uf2_blockdev.c.
+// ===========================================================================
+
+#ifndef APP_USBD_MSC_ENABLED
+#define APP_USBD_MSC_ENABLED 1
+#endif
+
+#ifndef APP_USBD_MSC_CONFIG_LOG_ENABLED
+#define APP_USBD_MSC_CONFIG_LOG_ENABLED 0
+#endif
+
+#ifndef APP_USBD_MSC_CONFIG_LOG_LEVEL
+#define APP_USBD_MSC_CONFIG_LOG_LEVEL 3
+#endif
+
+#ifndef APP_USBD_MSC_CONFIG_LOG_INIT_FILTER_LEVEL
+#define APP_USBD_MSC_CONFIG_LOG_INIT_FILTER_LEVEL 3
+#endif
+
+#ifndef APP_USBD_MSC_CONFIG_LOG_INFO_COLOR
+#define APP_USBD_MSC_CONFIG_LOG_INFO_COLOR 0
+#endif
+
+#ifndef APP_USBD_MSC_CONFIG_LOG_DEBUG_COLOR
+#define APP_USBD_MSC_CONFIG_LOG_DEBUG_COLOR 0
+#endif
+
+#ifndef NRF_BLOCK_DEV_ENABLED
+#define NRF_BLOCK_DEV_ENABLED 1
+#endif
+
+/* Strings advertised on the USB descriptor — what the user sees in
+ * Finder / File Explorer when the UF2 drive mounts. */
+#ifndef APP_USBD_STRINGS_MANUFACTURER
+#define APP_USBD_STRINGS_MANUFACTURER  APP_USBD_STRING_DESC("RRG")
+#endif
+
+#ifndef APP_USBD_STRINGS_PRODUCT
+#define APP_USBD_STRINGS_PRODUCT       APP_USBD_STRING_DESC("ChameleonUltra UF2")
+#endif
+
 // <<< end of configuration section >>>
 #endif //SDK_CONFIG_H
