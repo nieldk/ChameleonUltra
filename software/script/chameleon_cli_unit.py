@@ -7033,6 +7033,50 @@ class HWUF2(DeviceRequiredUnit):
         time.sleep(0.1)
 
 
+@hw.command("update_bl")
+class HWUpdateBL(DeviceRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "Overwrite the device's bootloader region with a fresh copy "
+            "embedded in the application. One-shot operation; CDC will "
+            "drop when SoftDevice is disabled, then the device reboots "
+            "with the new bootloader. Power loss mid-write bricks the "
+            "device (recoverable only via SWD)."
+        )
+        parser.add_argument(
+            "--yes", "-y", action="store_true",
+            help="skip the interactive confirmation prompt",
+        )
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        if not args.yes:
+            print(color_string((CR,
+                "WARNING: this overwrites the bootloader region.")))
+            print("The USB connection will drop when SoftDevice goes down.")
+            print("Keep the device powered for several seconds after issuing.")
+            print("A power loss between erase and full write WILL brick the device.")
+            answer = input("Type 'yes' to proceed: ").strip().lower()
+            if answer != "yes":
+                print("Aborted.")
+                return
+        print("Issuing bootloader self-update...")
+        try:
+            self.cmd.update_bl()
+        except (chameleon_com.CMDInvalidException, TimeoutError):
+            # Expected — the device disables SoftDevice mid-handler and
+            # resets before any reply can be sent. The disconnect IS the
+            # success signal at the protocol level; visual confirmation
+            # comes from observing the new bootloader on reboot.
+            pass
+        print(" - Update issued. The device should reset within a second.")
+        print("   Replug and verify in DFU mode (cold-boot + hold B + plug).")
+        print("   Linux: 'sudo dmesg | tail -20' should show clean")
+        print("   usb-storage enumeration without descriptor warnings.")
+        time.sleep(0.1)
+
+
 @hw_settings.command("animation")
 class HWSettingsAnimation(DeviceRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:

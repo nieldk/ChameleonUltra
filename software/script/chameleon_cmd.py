@@ -1464,6 +1464,24 @@ class ChameleonCMD:
         """
         self.device.send_cmd_auto(Command.ENTER_BOOTLOADER_UF2, close=True)
 
+    def update_bl(self):
+        """
+        One-shot self-update of the bootloader region.
+
+        Triggers the application's embedded bootloader-update routine:
+        it validates the embedded blob (CRC32), disables SoftDevice,
+        and rewrites the BL flash region from the embedded copy, then
+        resets. The USB CDC link goes down before any reply can be
+        sent, so this looks like a disconnect to the host. Reconnect
+        after the device reboots.
+
+        Make sure the device stays powered for several seconds after
+        invoking this — a power loss mid-write bricks the bootloader.
+        Recovery from that state requires SWD.
+        """
+        self.device.send_cmd_auto(Command.UPDATE_BL, close=True)
+
+
     @expect_response(Status.SUCCESS)
     def get_animation_mode(self):
         """
