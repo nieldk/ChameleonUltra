@@ -61,9 +61,12 @@ NRF_LOG_MODULE_REGISTER();
 
 static nrf_dfu_observer_t m_observer;
 
-/* Forward decls for transport registration */
-static uint32_t uf2_transport_init(nrf_dfu_observer_t observer);
-static uint32_t uf2_transport_close(nrf_dfu_transport_t const *p_exception);
+/* Forward decls for transport registration. Marked non-static + used so
+ * LTO can't drop them — their addresses end up in a section-variable that
+ * the bootloader walks at runtime; the dataflow isn't visible at the IR
+ * level so LTO needs explicit hints. */
+uint32_t uf2_transport_init(nrf_dfu_observer_t observer)         __attribute__((used));
+uint32_t uf2_transport_close(nrf_dfu_transport_t const *p_excpt) __attribute__((used));
 
 DFU_TRANSPORT_REGISTER(nrf_dfu_transport_t const uf2_dfu_transport) =
 {
@@ -151,7 +154,7 @@ static void usbd_event_handler(app_usbd_event_type_t event)
     }
 }
 
-static uint32_t uf2_transport_init(nrf_dfu_observer_t observer)
+uint32_t uf2_transport_init(nrf_dfu_observer_t observer)
 {
     ret_code_t err;
 
@@ -200,7 +203,7 @@ static uint32_t uf2_transport_init(nrf_dfu_observer_t observer)
     return NRF_SUCCESS;
 }
 
-static uint32_t uf2_transport_close(nrf_dfu_transport_t const *p_exception)
+uint32_t uf2_transport_close(nrf_dfu_transport_t const *p_exception)
 {
     (void)p_exception;
     /* MSC class stays appended — nothing to tear down explicitly. */
