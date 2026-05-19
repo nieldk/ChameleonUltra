@@ -46,6 +46,10 @@ NRF_LOG_MODULE_REGISTER();
 #include "rc522.h"
 #endif
 
+#ifdef RECOVERY_MODE
+#include "bl_updater.h"
+#endif
+
 // Defining soft timers
 APP_TIMER_DEF(m_button_check_timer); // Timer for button debounce
 
@@ -995,6 +999,22 @@ static void ble_passkey_init(void) {
 /**@brief Application main function.
  */
 int main(void) {
+#ifdef RECOVERY_MODE
+    /* RECOVERY_MODE build — one-shot revert-to-stock app.
+     * Skip all normal init and run the bootloader replacement
+     * immediately. bl_updater_run_and_invalidate_app() doesn't return
+     * on success: writes the embedded (stock) BL into the BL region,
+     * erases our own vector table so the new BL won't boot us again,
+     * then NVIC_SystemReset()s.
+     *
+     * On validation failure, halt — user can power-cycle and re-push.
+     *
+     * SoftDevice is not enabled yet here, so the SD-disable inside
+     * bl_updater is a no-op. Raw NVMC access without ceremony. */
+    (void)bl_updater_run_and_invalidate_app();
+    while (1) { __WFE(); }
+#endif
+
     hw_connect_init();        // Remember to initialize the pins first
 
     fds_util_init();          // Initialize fds tool
