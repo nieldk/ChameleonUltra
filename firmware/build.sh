@@ -11,7 +11,7 @@ softdevice_id=0x0100
 
 # TODO: find a way to manage this automatically, I don't want to rely on action build #.
 application_version=1
-bootloader_version=1
+bootloader_version=4
 
 device_type=${CURRENT_DEVICE_TYPE:-ultra}
 case $device_type in
@@ -93,7 +93,12 @@ fi
     # contain our UF2 bootloader, which is the opposite of what end
     # users want here. Merged hex outputs aren't useful either —
     # users running this don't have SWD (that's the whole point).
-    ../tools/uf2conv.py application.hex -o ${device_type}-revert-to-stock.uf2
+    # Convert via .bin + --base rather than .hex, because the in-tree
+    # uf2conv.py is a minimal reimplementation that doesn't handle Intel
+    # HEX type 02 (Extended Segment Address) records — and Nordic SDK
+    # emits those. Going through bin sidesteps the parser entirely.
+    arm-none-eabi-objcopy -I ihex -O binary application.hex application.bin
+    ../tools/uf2conv.py application.bin --base 0x27000 -o ${device_type}-revert-to-stock.uf2
 
     set +x
     echo
@@ -145,8 +150,11 @@ fi
       --output fullimage.hex
 
     # UF2-format application for the drag-and-drop update flow with our
-    # UF2 bootloader installed.
-    ../tools/uf2conv.py application.hex -o ${device_type}-application.uf2
+    # UF2 bootloader installed. Conversion goes through bin + --base
+    # rather than .hex because the in-tree uf2conv.py doesn't handle
+    # Intel HEX type 02 records.
+    arm-none-eabi-objcopy -I ihex -O binary application.hex application.bin
+    ../tools/uf2conv.py application.bin --base 0x27000 -o ${device_type}-application.uf2
 
     tmp_dir=$(mktemp -d -t cu_binaries_XXXXXXXXXX)
     cp *.hex "$tmp_dir"

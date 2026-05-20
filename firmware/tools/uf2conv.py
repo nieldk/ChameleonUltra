@@ -37,13 +37,17 @@ def parse_hex(text):
         addr  = (raw[1] << 8) | raw[2]
         rtype = raw[3]
         data  = raw[4:4 + count]
+
         if rtype == 0x00:
             for i, b in enumerate(data):
                 mem[upper + addr + i] = b
+        elif rtype == 0x02:
+            upper = ((data[0] << 8) | data[1]) << 4
         elif rtype == 0x04:
             upper = ((data[0] << 8) | data[1]) << 16
         elif rtype == 0x01:
             break
+
     return mem
 
 
