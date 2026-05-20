@@ -1000,21 +1000,19 @@ static void ble_passkey_init(void) {
  */
 int main(void) {
 #ifdef RECOVERY_MODE
-    /* Diagnostic: visible signal so we know main() was reached */
-    NRF_P1->DIRSET = (1 << 15);   // LED_R as output, adjust pin if different
-    for (int i = 0; i < 6; i++) {
-        NRF_P1->OUTCLR = (1 << 15);   // LED on (active low typical)
-        nrf_delay_ms(200);
-        NRF_P1->OUTSET = (1 << 15);   // LED off
-        nrf_delay_ms(200);
-    }
-    /* Then check validation result with a different blink pattern */
-    bl_updater_status_t st = bl_updater_validate();
-    if (st != BL_UPDATER_OK) {
-        /* Solid LED = validation failed */
-        NRF_P1->OUTCLR = (1 << 15);
-        while (1) { __WFE(); }
-    }
+    /* RECOVERY_MODE build — this is a one-shot revert-to-stock app.
+     * Skip all normal application initialisation and run the bootloader
+     * replacement immediately. bl_updater_run_and_invalidate_app()
+     * doesn't return on success: it writes the embedded (stock) BL
+     * into the BL region, erases our own vector table so the new BL
+     * won't try to boot us again, then NVIC_SystemReset()s.
+     *
+     * On validation failure we fall through to a halt — the user can
+     * power-cycle and re-push the recovery UF2.
+     *
+     * SoftDevice is not enabled at this point in main(), so the SD-
+     * disable step inside bl_updater is a no-op. That's intentional —
+     * we want raw NVMC access without ceremony. */
     (void)bl_updater_run_and_invalidate_app();
     while (1) { __WFE(); }
 #endif
