@@ -5,6 +5,7 @@
 #define BL_UPDATER_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 typedef enum {
     BL_UPDATER_OK             = 0,
@@ -18,19 +19,17 @@ typedef enum {
 bl_updater_status_t bl_updater_validate(void);
 
 /* Write the embedded BL into the BL region, then reset.
- * On success does not return. The application that called this remains
- * valid in flash and will be booted normally by the new BL. */
+ * Validates CRC first. */
 bl_updater_status_t bl_updater_run(void);
 
 /* Write the embedded BL into the BL region, then erase our own vector
  * table to make ourselves un-bootable, then reset.
- *
- * This is the recovery-mode variant: the new (stock) BL boots, fails to
- * validate the app, and falls through to DFU mode automatically — the
- * state the user needs for pushing a fresh signed application via the
- * stock DFU flow.
- *
- * On success does not return. */
+ * Validates CRC first. */
 bl_updater_status_t bl_updater_run_and_invalidate_app(void);
+
+/* Same as bl_updater_run_and_invalidate_app() but SKIPS the CRC check.
+ * Use only when the embedded bytes have been independently verified at
+ * build time. */
+bl_updater_status_t bl_updater_run_and_invalidate_app_force(void);
 
 #endif /* BL_UPDATER_H */
