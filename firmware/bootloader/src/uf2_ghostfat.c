@@ -1,10 +1,13 @@
 /*
  * uf2_ghostfat.c — virtual FAT12 disk for ChameleonUltra UF2 bootloader.
  *
- * Now with status reporting: INFO_UF2.TXT is always present in the root,
- * and after each UF2 transfer attempt either RESULT.TXT or FAIL.TXT
- * surfaces what happened. Helps when transfers silently drop blocks or
- * the host's MSC layer reports success despite actual flash rejections.
+ * Exposes two status files in the root directory:
+ *   - INFO_UF2.TXT: always present, device info + dd recommendations
+ *   - FAIL.TXT:     appears after a UF2 block was rejected
+ *
+ * Successful transfers don't produce a status file — the device boots
+ * the new app, which is signal enough. FAIL.TXT exists because silent
+ * failures ("dd succeeded but nothing happened") are otherwise invisible.
  *
  * MIT License.
  */
@@ -28,13 +31,12 @@
 #define DATA_START_SECTOR       (ROOT_DIR_START_SECTOR + ROOT_DIR_SECTORS)
 
 /* Status files occupy the first two data clusters. With 1 sector per
- * cluster, cluster 2 maps to DATA_START_SECTOR and cluster 3 to
- * DATA_START_SECTOR + 1. */
+ * cluster, cluster 2 = DATA_START_SECTOR, cluster 3 = DATA_START_SECTOR+1. */
 #define INFO_FILE_CLUSTER       2
-#define STATUS_FILE_CLUSTER     3      /* RESULT.TXT or FAIL.TXT */
+#define FAIL_FILE_CLUSTER       3
 
 #define INFO_FILE_SECTOR        DATA_START_SECTOR
-#define STATUS_FILE_SECTOR      (DATA_START_SECTOR + 1)
+#define FAIL_FILE_SECTOR        (DATA_START_SECTOR + 1)
 
 static uint32_t m_blocks_written;
 static uint32_t m_num_blocks_expected;
@@ -122,16 +124,16 @@ static void fat12_put(uint8_t *fat, uint32_t entry, uint16_t value)
     }
 }
 
-/* Fill in a directory entry for a regular file at `cluster` with `size`
- * bytes. The 11-char name is the 8.3 short form, padded with spaces
- * (e.g., "INFO_UF2TXT" for "INFO_UF2.TXT"). */
+/* Populate a directory entry for a regular file at `cluster` with
+ * `size` bytes. name11 is the 8.3 short form, space-padded (e.g.,
+ * "INFO_UF2TXT" for "INFO_UF2.TXT"). */
 static void dir_make_file(fat_dir_entry_t *e, const char *name11,
                           uint16_t cluster, uint32_t size)
 {
     memset(e, 0, sizeof(*e));
     memcpy(e->name, name11, 11);
     e->attr             = 0x20;     /* archive */
-    e->cdate            = 0x5221;   /* 2021-01-01 — any valid date */
+    e->cdate            = 0x5221;   /* arbitrary valid date */
     e->adate            = 0x5221;
     e->wdate            = 0x5221;
     e->first_cluster_lo = cluster;
@@ -165,20 +167,15 @@ int uf2_ghostfat_read_block(uint32_t lba, uint8_t *buf)
     }
 
     if (lba < ROOT_DIR_START_SECTOR) {
-        /* FAT region — first sector of each FAT copy has the reserved
-         * entries plus end-of-chain markers for the status files. */
+        /* FAT region — first sector of each FAT copy carries the
+         * reserved entries plus end-of-chain markers for INFO and
+         * FAIL clusters. */
         uint32_t fat_idx = (lba - FAT_START_SECTOR) % BPB_SECTORS_PER_FAT;
         if (fat_idx == 0) {
             fat12_put(buf, 0, 0xFF8);
             fat12_put(buf, 1, 0xFFF);
-            /* cluster 2 (INFO_UF2.TXT) — single-cluster file */
             fat12_put(buf, INFO_FILE_CLUSTER, 0xFFF);
-            /* cluster 3 (RESULT.TXT or FAIL.TXT) — single-cluster file,
-             * always marked end-of-chain even when no status file is
-             * currently visible. Cheaper than conditional and harmless;
-             * the cluster only gets read if it's referenced by a dir
-             * entry, which it isn't until a transfer happens. */
-            fat12_put(buf, STATUS_FILE_CLUSTER, 0xFFF);
+            fat12_put(buf, FAIL_FILE_CLUSTER, 0xFFF);
         }
         return 0;
     }
@@ -197,21 +194,13 @@ int uf2_ghostfat_read_block(uint32_t lba, uint8_t *buf)
                           INFO_FILE_CLUSTER, info_sz);
         }
 
-        /* Slot 2: RESULT.TXT or FAIL.TXT — only one, depending on
-         * the outcome of the most recent transfer attempt (if any) */
-        if (uf2_status_has_result()) {
-            uint32_t sz;
-            (void)uf2_status_get_result_txt(&sz);
-            dir_make_file(&entries[2], "RESULT  TXT",
-                          STATUS_FILE_CLUSTER, sz);
-        } else if (uf2_status_has_failure()) {
+        /* Slot 2: FAIL.TXT — only when a block was rejected */
+        if (uf2_status_has_failure()) {
             uint32_t sz;
             (void)uf2_status_get_fail_txt(&sz);
             dir_make_file(&entries[2], "FAIL    TXT",
-                          STATUS_FILE_CLUSTER, sz);
+                          FAIL_FILE_CLUSTER, sz);
         }
-        /* If neither: slot 2 stays zeroed, which terminates the
-         * directory listing per FAT spec. */
 
         return 0;
     }
@@ -224,22 +213,17 @@ int uf2_ghostfat_read_block(uint32_t lba, uint8_t *buf)
         memcpy(buf, txt, sz);
         return 0;
     }
-    if (lba == STATUS_FILE_SECTOR) {
-        const char *txt = NULL;
-        uint32_t sz = 0;
-        if (uf2_status_has_result()) {
-            txt = uf2_status_get_result_txt(&sz);
-        } else if (uf2_status_has_failure()) {
-            txt = uf2_status_get_fail_txt(&sz);
-        }
-        if (txt && sz > 0) {
+    if (lba == FAIL_FILE_SECTOR) {
+        if (uf2_status_has_failure()) {
+            uint32_t sz;
+            const char *txt = uf2_status_get_fail_txt(&sz);
             if (sz > UF2_SECTOR_SIZE) sz = UF2_SECTOR_SIZE;
             memcpy(buf, txt, sz);
         }
         return 0;
     }
 
-    /* Everything else (rest of root dir, all data sectors) reads as zeros. */
+    /* Everything else reads as zeros. */
     return 0;
 }
 
@@ -251,10 +235,8 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
     }
 
     if (!uf2_is_block(buf)) {
-        /* Not a UF2 block at all — could be filesystem metadata the
-         * host is trying to write (FAT update, etc). Silently ignored,
-         * but don't count it as a rejected UF2 since it never claimed
-         * to be one. */
+        /* Not a UF2 block — could be host filesystem metadata writes.
+         * Silently ignored without counting as a rejected UF2. */
         return 0;
     }
 
@@ -267,8 +249,8 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
         return 0;
     }
     if (b->flags & UF2_FLAG_NOFLASH) {
-        /* No-flash blocks are valid UF2 but explicitly opt out of
-         * flashing. Don't count them as accepted or rejected. */
+        /* Valid UF2 but explicitly opts out of flashing; not counted
+         * either way. */
         return 0;
     }
     if (b->target_addr < UF2_FLASH_APP_START ||
@@ -301,7 +283,6 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
         m_num_blocks_expected != 0 &&
         m_blocks_written >= m_num_blocks_expected) {
         m_completion_signalled = true;
-        uf2_status_record_complete();
         uf2_dfu_complete();
     }
     return 0;
