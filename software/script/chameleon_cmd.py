@@ -1471,7 +1471,7 @@ class ChameleonCMD:
         Reboot into DFU mode (bootloader)
         :return:
         """
-        self.device.send_cmd_auto(Command.ENTER_BOOTLOADER, close=True)
+        self.device.send_cmd_auto(Command.ENTER_BOOTLOADER_UF2, close=True)
 
     def enter_bootloader_uf2(self):
         """
