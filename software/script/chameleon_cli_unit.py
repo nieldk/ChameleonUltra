@@ -7027,20 +7027,30 @@ class HWDFU(DeviceRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
         parser.description = "Restart application to bootloader/DFU mode"
+        parser.add_argument(
+            "-m", "--mode",
+            type=str,
+            required=False,
+            default="cdc",
+            choices=["cdc", "uf2"],
+            help="DFU mode: cdc = USB CDC-ACM (nrfutil), uf2 = UF2 mass-storage (default: cdc)",
+            metavar="MODE",
+        )
         return parser
 
     def on_exec(self, args: argparse.Namespace):
-        print("Application restarting...")
-        self.cmd.enter_bootloader()
-        # In theory, after the above command is executed, the dfu mode will enter, and then the USB will restart,
-        # To judge whether to enter the USB successfully, we only need to judge whether the USB becomes the VID and PID
-        # of the DFU device.
-        # At the same time, we remember to confirm the information of the device,
-        # it is the same device when it is consistent.
-        print(" - Enter success @.@~")
-        # let time for comm thread to send dfu cmd and close port
+        if args.mode == "uf2":
+            print("Restarting into UF2 mass-storage mode...")
+            try:
+                self.cmd.enter_bootloader_uf2()
+            except chameleon_com.CMDInvalidException:
+                print(color_string((CR, " - UF2 bootloader not supported by current firmware")))
+                return
+        else:
+            print("Restarting into CDC-ACM DFU mode...")
+            self.cmd.enter_bootloader()
+        print(" - Reboot command sent, device disconnecting...")
         time.sleep(0.1)
-
 
 @hw.command("uf2")
 class HWUF2(DeviceRequiredUnit):
