@@ -23,7 +23,7 @@
 #include "parity.h"
 #endif
 #include "nfc_14a.h"
-#include <malloc.h
+#include <malloc.h>
 /* Forward declarations for functions added to nfc_14a.c/h in this PR.
  * These are declared here to avoid build failure if nfc_14a.h is not yet
  * updated on the build system. */
