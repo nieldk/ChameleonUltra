@@ -23,7 +23,8 @@
 #include "parity.h"
 #endif
 #include "nfc_14a.h"
-#include <malloc.h>
+#include <unistd.h>   /* sbrk() */
+
 /* Forward declarations for functions added to nfc_14a.c/h in this PR.
  * These are declared here to avoid build failure if nfc_14a.h is not yet
  * updated on the build system. */
@@ -84,13 +85,23 @@ static data_frame_tx_t *cmd_processor_get_bootloader_version(uint16_t cmd, uint1
 }
 
 static data_frame_tx_t *cmd_processor_get_free_memory(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    struct mallinfo mi = mallinfo();
+    extern uint32_t __HeapBase;     /* start of heap  (nrf_common.ld) */
+    extern uint32_t __StackLimit;   /* bottom of stack (nrf_common.ld) */
+
+    uint32_t heap_start   = (uint32_t)&__HeapBase;
+    uint32_t heap_current = (uint32_t)sbrk(0);    /* current break - no allocation */
+    uint32_t stack_bottom = (uint32_t)&__StackLimit;
+
+    uint32_t used  = heap_current - heap_start;
+    uint32_t free_bytes  = stack_bottom - heap_current;
+    uint32_t total = stack_bottom - heap_start;
+
     struct {
         uint32_t free_bytes;
         uint32_t total_bytes;
     } PACKED payload;
-    payload.free_bytes  = U32HTONL((uint32_t)mi.fordblks);
-    payload.total_bytes = U32HTONL((uint32_t)(mi.fordblks + mi.uordblks));
+    payload.free_bytes  = U32HTONL(free_bytes);
+    payload.total_bytes = U32HTONL(total);
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(payload), (uint8_t *)&payload);
 }
 
