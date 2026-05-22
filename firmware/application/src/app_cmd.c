@@ -83,19 +83,17 @@ static data_frame_tx_t *cmd_processor_get_bootloader_version(uint16_t cmd, uint1
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(payload), (uint8_t *)&payload);
 }
 
-#include <unistd.h>   /* sbrk() */
-
 static data_frame_tx_t *cmd_processor_get_free_memory(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    extern uint32_t __HeapBase;     /* start of heap  (nrf_common.ld) */
-    extern uint32_t __StackLimit;   /* bottom of stack (nrf_common.ld) */
+    extern uint32_t __HeapBase;
+    extern uint32_t __StackLimit;
+    extern void    *_sbrk(int incr);   /* newlib syscall stub — no header needed */
 
     uint32_t heap_start   = (uint32_t)&__HeapBase;
-    uint32_t heap_current = (uint32_t)sbrk(0);    /* current break - no allocation */
+    uint32_t heap_current = (uint32_t)_sbrk(0);
     uint32_t stack_bottom = (uint32_t)&__StackLimit;
 
-    uint32_t used  = heap_current - heap_start;
-    uint32_t free_bytes  = stack_bottom - heap_current;
-    uint32_t total = stack_bottom - heap_start;
+    uint32_t free_bytes = stack_bottom - heap_current;
+    uint32_t total      = stack_bottom - heap_start;
 
     struct {
         uint32_t free_bytes;
