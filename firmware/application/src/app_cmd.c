@@ -23,6 +23,7 @@
 #include "parity.h"
 #endif
 #include "nfc_14a.h"
+#include <malloc.h
 /* Forward declarations for functions added to nfc_14a.c/h in this PR.
  * These are declared here to avoid build failure if nfc_14a.h is not yet
  * updated on the build system. */
@@ -61,6 +62,37 @@ static data_frame_tx_t *cmd_processor_get_git_version(uint16_t cmd, uint16_t sta
     return data_frame_make(cmd, STATUS_SUCCESS, strlen(GIT_VERSION), (uint8_t *)GIT_VERSION);
 }
 
+/* The nRF5 SDK DFU settings page sits one page below the top of flash.
+ * nrf_dfu_settings_t layout (nRF5 SDK ≥ 15.3):
+ *   offset  0 : uint32_t crc
+ *   offset  4 : uint32_t settings_version
+ *   offset  8 : uint32_t app_version
+ *   offset 12 : uint32_t bootloader_version   ← FW_VER_NUM = (major<<8)|minor
+ */
+#define BOOTLOADER_SETTINGS_ADDRESS             0xFE000UL
+#define DFU_SETTINGS_BL_VERSION_OFFSET          12U
+
+static data_frame_tx_t *cmd_processor_get_bootloader_version(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    uint32_t bl_ver_num = *((volatile uint32_t *)(BOOTLOADER_SETTINGS_ADDRESS + DFU_SETTINGS_BL_VERSION_OFFSET));
+    struct {
+        uint8_t major;
+        uint8_t minor;
+    } PACKED payload;
+    payload.major = (uint8_t)((bl_ver_num >> 8) & 0xFF);
+    payload.minor = (uint8_t)(bl_ver_num & 0xFF);
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(payload), (uint8_t *)&payload);
+}
+
+static data_frame_tx_t *cmd_processor_get_free_memory(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    struct mallinfo mi = mallinfo();
+    struct {
+        uint32_t free_bytes;
+        uint32_t total_bytes;
+    } PACKED payload;
+    payload.free_bytes  = U32HTONL((uint32_t)mi.fordblks);
+    payload.total_bytes = U32HTONL((uint32_t)(mi.fordblks + mi.uordblks));
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(payload), (uint8_t *)&payload);
+}
 
 static data_frame_tx_t *cmd_processor_get_device_model(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     uint8_t resp_data = hw_get_device_type();
@@ -3005,6 +3037,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_SET_ANIMATION_MODE,           NULL,                        cmd_processor_set_animation_mode,            NULL                   },
     {    DATA_CMD_GET_ANIMATION_MODE,           NULL,                        cmd_processor_get_animation_mode,            NULL                   },
     {    DATA_CMD_GET_GIT_VERSION,              NULL,                        cmd_processor_get_git_version,               NULL                   },
+    {    DATA_CMD_GET_BOOTLOADER_VERSION,       NULL,                        cmd_processor_get_bootloader_version,        NULL                   },
+    {    DATA_CMD_GET_FREE_MEMORY,              NULL,                        cmd_processor_get_free_memory,               NULL                   },
     {    DATA_CMD_GET_ACTIVE_SLOT,              NULL,                        cmd_processor_get_active_slot,               NULL                   },
     {    DATA_CMD_GET_SLOT_INFO,                NULL,                        cmd_processor_get_slot_info,                 NULL                   },
     {    DATA_CMD_WIPE_FDS,                     NULL,                        cmd_processor_wipe_fds,                      NULL                   },
