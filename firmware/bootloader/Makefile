@@ -69,6 +69,7 @@ SRC_FILES += \
   $(SDK_ROOT)/components/libraries/usbd/class/msc/app_usbd_msc.c \
   $(PROJ_DIR)/nrf_dfu_uf2.c \
   $(PROJ_DIR)/uf2_ghostfat.c \
+  $(PROJ_DIR)/uf2_status.c \
   $(PROJ_DIR)/uf2_blockdev.c \
   $(SDK_ROOT)/components/libraries/svc/nrf_svc_handler.c \
   $(SDK_ROOT)/components/ble/common/ble_srv_common.c \
