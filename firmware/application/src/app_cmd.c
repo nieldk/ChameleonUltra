@@ -23,7 +23,6 @@
 #include "parity.h"
 #endif
 #include "nfc_14a.h"
-#include <unistd.h>   /* sbrk() */
 
 /* Forward declarations for functions added to nfc_14a.c/h in this PR.
  * These are declared here to avoid build failure if nfc_14a.h is not yet
@@ -83,6 +82,8 @@ static data_frame_tx_t *cmd_processor_get_bootloader_version(uint16_t cmd, uint1
     payload.minor = (uint8_t)(bl_ver_num & 0xFF);
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(payload), (uint8_t *)&payload);
 }
+
+#include <unistd.h>   /* sbrk() */
 
 static data_frame_tx_t *cmd_processor_get_free_memory(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     extern uint32_t __HeapBase;     /* start of heap  (nrf_common.ld) */
