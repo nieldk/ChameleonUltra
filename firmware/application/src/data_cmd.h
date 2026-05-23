@@ -48,8 +48,8 @@
 #define DATA_CMD_GET_ALL_SLOT_NICKS             (1038)
 #define DATA_CMD_GET_SLEEP_TIMEOUT              (1039)
 #define DATA_CMD_SET_SLEEP_TIMEOUT              (1040)
-#define DATA_CMD_GET_BOOTLOADER_VERSION         (1043)
-#define DATA_CMD_GET_FREE_MEMORY                (1044)
+#define DATA_CMD_GET_BOOTLOADER_VERSION         (1041)
+#define DATA_CMD_GET_FREE_MEMORY                (1042)
 
 //
 // ******************************************************************
@@ -201,7 +201,7 @@
 #define DATA_CMD_EM4X05_SCAN                    (3030)
 #define DATA_CMD_EM4X05_READSNIFF               (3032)
 #define DATA_CMD_LF_SNIFF                       (3031)
-#define DATA_CMD_ENTER_BOOTLOADER_UF2           (1041)
-#define DATA_CMD_UPDATE_BL                      (1042)
+#define DATA_CMD_ENTER_BOOTLOADER_UF2           (1043)
+#define DATA_CMD_UPDATE_BL                      (1044)
 
 #endif
