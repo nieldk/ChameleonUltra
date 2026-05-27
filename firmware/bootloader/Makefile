@@ -66,6 +66,7 @@ SRC_FILES += \
   $(SDK_ROOT)/components/libraries/crypto/nrf_crypto_shared.c \
   $(SDK_ROOT)/components/libraries/bootloader/dfu/nrf_dfu_svci.c \
   $(SDK_ROOT)/components/libraries/bootloader/dfu/nrf_dfu_svci_handler.c \
+  $(SDK_ROOT)/components/libraries/bootloader/dfu/nrf_dfu_settings_svci.c \
   $(SDK_ROOT)/components/libraries/usbd/class/msc/app_usbd_msc.c \
   $(PROJ_DIR)/nrf_dfu_uf2.c \
   $(PROJ_DIR)/uf2_ghostfat.c \
