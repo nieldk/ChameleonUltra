@@ -270,7 +270,11 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
         return 0;
     }
 
-    uf2_flash_write(b->target_addr, b->data, b->payload_size);
+    if (!uf2_flash_write(b->target_addr, b->data, b->payload_size)) {
+        uf2_status_record_rejected(b->block_no, b->num_blocks,
+                                   b->target_addr, UF2_REJECT_WRITE);
+        return 0;
+    }
 
     uf2_status_record_accepted(b->block_no, b->num_blocks, b->target_addr);
 
