@@ -8,9 +8,9 @@
 #define FW_VER_NUM VER_CODE_TO_NUM(BOOT_FW_VER_MAJOR, BOOT_FW_VER_MINOR)
 
 #ifndef NRF_DFU_TRANSPORT_BLE
-#define NRF_DFU_TRANSPORT_BLE    0   // optional: disable BLE DFU too
+#define NRF_DFU_TRANSPORT_BLE    1   // optional: disable BLE DFU too
 #endif
 
 #ifndef NRF_DFU_TRANSPORT_USB
-#define NRF_DFU_TRANSPORT_USB 0
+#define NRF_DFU_TRANSPORT_USB 1
 #endif
