@@ -51,9 +51,9 @@ NRF_LOG_MODULE_REGISTER();
  * CDC has been dropped from the bootloader build, so we own the entire
  * USBD device and use the conventional MSC-on-EP1 layout.
  * ----------------------- */
-#define MSC_INTERFACE        2
-#define MSC_EPIN             NRF_DRV_USBD_EPIN2
-#define MSC_EPOUT            NRF_DRV_USBD_EPOUT2
+#define MSC_INTERFACE        0
+#define MSC_EPIN             NRF_DRV_USBD_EPIN1
+#define MSC_EPOUT            NRF_DRV_USBD_EPOUT1
 #define MSC_WORKBUFFER_SIZE  512
 
 static nrf_dfu_observer_t m_observer;
