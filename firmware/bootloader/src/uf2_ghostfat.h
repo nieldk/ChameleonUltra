@@ -12,7 +12,7 @@
 
 /* Virtual disk geometry */
 #define UF2_SECTOR_SIZE        512u
-#define UF2_TOTAL_SECTORS      8192u     /* 4 MB virtual disk — plenty */
+#define UF2_TOTAL_SECTORS      4026u     /* 4 MB virtual disk — plenty */
 
 /* Flash window this bootloader will accept writes to (app region).
  * Matches application.ld. */
