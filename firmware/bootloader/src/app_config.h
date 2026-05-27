@@ -8,3 +8,4 @@
 #define FW_VER_NUM VER_CODE_TO_NUM(BOOT_FW_VER_MAJOR, BOOT_FW_VER_MINOR)
 
 #define NRF_DFU_TRANSPORT_USB    0   // disable CDC serial DFU USB
+#define NRF_DFU_TRANSPORT_BLE    0   // optional: disable BLE DFU too
