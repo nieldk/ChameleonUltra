@@ -98,21 +98,26 @@ void uf2_flash_read(uint32_t addr, void *buf, uint32_t len)
     }
 }
 
-void uf2_flash_write(uint32_t addr, const void *data, uint32_t len)
+bool uf2_flash_write(uint32_t addr, const void *data, uint32_t len)
 {
-    /* Belt and braces — ghostfat already guards this. */
     if (addr < UF2_FLASH_APP_START || addr + len > UF2_FLASH_APP_END) {
-        NRF_LOG_WARNING("UF2 write outside app region 0x%08x (%u)", addr, len);
-        return;
+        NRF_LOG_WARNING("UF2 write outside app region 0x%08x", addr);
+        return false;
     }
 
-    const uint32_t page = NRF_FICR->CODEPAGESIZE;  /* 4096 on nRF52840 */
+    const uint32_t page = NRF_FICR->CODEPAGESIZE;
     if ((addr & (page - 1)) == 0) {
         nrf_nvmc_page_erase(addr);
+        // verify erase — if flash is stuck low it won't clear
+        const uint32_t *p = (const uint32_t *)addr;
+        for (uint32_t i = 0; i < page / 4; i++) {
+            if (p[i] != 0xFFFFFFFF) return false;
+        }
     }
     nrf_nvmc_write_bytes(addr, (const uint8_t *)data, len);
 
     if (m_observer) m_observer(NRF_DFU_EVT_OBJECT_RECEIVED);
+    return true;
 }
 
 void uf2_dfu_complete(void)
