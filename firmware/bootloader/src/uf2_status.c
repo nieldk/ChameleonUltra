@@ -174,37 +174,34 @@ void uf2_status_record_rejected(uint32_t block_no,
         m_session.first_fail_block  = block_no;
         m_session.first_fail_addr   = target_addr;
         m_session.first_fail_reason = reason;
+
+        char *p = m_fail_txt;
+        p = put_str(p, "UF2 transfer FAILED\r\n");
+        p = put_str(p, "===================\r\n");
+        p = put_str(p, "Reason  : ");
+        p = put_str(p, reason_label(reason));
+        p = put_str(p, "\r\n");
+        p = put_str(p, "Block   : ");
+        p = put_dec32(p, block_no);
+        p = put_str(p, " / ");
+        p = put_dec32(p, num_blocks);
+        p = put_str(p, "\r\n");
+        p = put_str(p, "Address : ");
+        p = put_hex32(p, target_addr);
+        p = put_str(p, "\r\n");
+        p = put_str(p, "Accepted: ");
+        p = put_dec32(p, m_session.blocks_accepted);
+        p = put_str(p, "\r\n\r\n");
+        p = put_str(p, reason_hint(reason));
+        p = put_str(p, "\r\n");
+
+        m_fail_len = (uint32_t)(p - m_fail_txt);
+        if (m_fail_len > UF2_STATUS_FAIL_TXT_MAX) {
+            m_fail_len = UF2_STATUS_FAIL_TXT_MAX;
+        }
     }
     m_session.blocks_rejected++;
     m_session.has_failure = true;
-
-    char *p = m_fail_txt;
-    p = put_str(p, "UF2 transfer FAILED\r\n");
-    p = put_str(p, "===================\r\n");
-    p = put_str(p, "Reason  : ");
-    p = put_str(p, reason_label(reason));
-    p = put_str(p, "\r\n");
-    p = put_str(p, "Block   : ");
-    p = put_dec32(p, m_session.first_fail_block);
-    p = put_str(p, " / ");
-    p = put_dec32(p, m_session.num_blocks_expected);
-    p = put_str(p, "\r\n");
-    p = put_str(p, "Address : ");
-    p = put_hex32(p, m_session.first_fail_addr);
-    p = put_str(p, "\r\n");
-    p = put_str(p, "Accepted: ");
-    p = put_dec32(p, m_session.blocks_accepted);
-    p = put_str(p, "\r\n");
-    p = put_str(p, "Rejected: ");
-    p = put_dec32(p, m_session.blocks_rejected);
-    p = put_str(p, "\r\n\r\n");
-    p = put_str(p, reason_hint(reason));
-    p = put_str(p, "\r\n");
-
-    m_fail_len = (uint32_t)(p - m_fail_txt);
-    if (m_fail_len > UF2_STATUS_FAIL_TXT_MAX) {
-        m_fail_len = UF2_STATUS_FAIL_TXT_MAX;
-    }
 }
 
 bool uf2_status_has_failure(void) { return m_session.has_failure; }
