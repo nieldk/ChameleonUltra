@@ -39,9 +39,9 @@
 #define BPB_RESERVED_SECTORS    1
 #define BPB_NUM_FATS            2
 #define BPB_ROOT_ENTRIES        16     /* 16 * 32 = 512 B = 1 sector — minimal */
-#define BPB_TOTAL_SECTORS       UF2_TOTAL_SECTORS
+#define BPB_TOTAL_SECTORS       4026u
 #define BPB_MEDIA_DESCRIPTOR    0xF8
-#define BPB_SECTORS_PER_FAT     24
+#define BPB_SECTORS_PER_FAT     12      // ceil(4000 * 1.5 / 512) = 12
 
 #define FAT_START_SECTOR        BPB_RESERVED_SECTORS
 #define ROOT_DIR_START_SECTOR   (FAT_START_SECTOR + BPB_NUM_FATS * BPB_SECTORS_PER_FAT)
