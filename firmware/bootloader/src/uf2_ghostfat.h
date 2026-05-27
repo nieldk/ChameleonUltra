@@ -33,7 +33,7 @@ uint32_t uf2_ghostfat_blocks_written(void);
 bool     uf2_ghostfat_is_complete(void);
 
 /* Implemented by the integrator (nrf_dfu_uf2.c) — actually write to flash. */
-extern void uf2_flash_write(uint32_t addr, const void *data, uint32_t len);
+extern bool uf2_flash_write(uint32_t addr, const void *data, uint32_t len);
 extern void uf2_flash_read (uint32_t addr,       void *data, uint32_t len);
 
 /* Called by ghostfat exactly once when the last UF2 block has been written.
