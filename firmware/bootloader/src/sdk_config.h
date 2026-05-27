@@ -1166,11 +1166,11 @@
 // <e> NRF_DFU_TRANSPORT_BLE - BLE transport settings
 //==========================================================
 #ifndef NRF_DFU_TRANSPORT_BLE
-#define NRF_DFU_TRANSPORT_BLE 0
+#define NRF_DFU_TRANSPORT_BLE 1
 #endif
 
 #ifndef NRF_DFU_TRANSPORT_USB
-#define NRF_DFU_TRANSPORT_USB 0
+#define NRF_DFU_TRANSPORT_USB 1
 #endif
     
 // <q> NRF_DFU_BLE_SKIP_SD_INIT  - Skip the SoftDevice and interrupt vector table initialization.
