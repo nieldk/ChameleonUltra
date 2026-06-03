@@ -50,7 +50,7 @@ updates.
 
 ## Documentation specific to this fork
 
-- **[Installation guide](UF2_INSTALL.md)** — clone, build, flash to a
+- **[Installation guide](firmware/tools/UF2_INSTALL.md)** — clone, build, flash to a
   stock device, and verify the UF2 bootloader is working.
 - **[Recovery / revert-to-stock](firmware/tools/RECOVERY_BUILD.md)** —
   building and using the revert-to-stock UF2 for users who want to
