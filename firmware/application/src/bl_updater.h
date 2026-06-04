@@ -13,6 +13,8 @@ typedef enum {
     BL_UPDATER_ERR_TOO_LARGE  = 2,
     BL_UPDATER_ERR_CRC        = 3,
     BL_UPDATER_ERR_SD_DISABLE = 4,
+    BL_UPDATER_ERR_VERIFY     = 5,  /* write landed but readback mismatch —
+                                       ACL or other protection still active */
 } bl_updater_status_t;
 
 /* Validate the embedded BL data (size + CRC32) without touching flash. */
