@@ -43,7 +43,7 @@
 #include "nrf_log.h"
 NRF_LOG_MODULE_REGISTER();
 
-#include "uf2.h"
+#include "crc32.h"
 #include "uf2_ghostfat.h"
 #include "uf2_blockdev.h"
 
@@ -55,8 +55,6 @@ NRF_LOG_MODULE_REGISTER();
 #define MSC_EPIN             NRF_DRV_USBD_EPIN1
 #define MSC_EPOUT            NRF_DRV_USBD_EPOUT1
 #define MSC_WORKBUFFER_SIZE  512
-
-#define UF2_DATA_PAYLOAD_SIZE   256u   /* fixed by UF2 spec */
 
 static nrf_dfu_observer_t m_observer;
 
@@ -124,31 +122,41 @@ bool uf2_flash_write(uint32_t addr, const void *data, uint32_t len)
 
 /* ---- DFU completion ---- */
 
-static void uf2_reset_after_settings(void * p_context)
-{
-    (void)p_context;
-    NVIC_SystemReset();
-}
-
-static void uf2_dfu_complete(void)
+void uf2_dfu_complete(void)
 {
     NRF_LOG_INFO("UF2 transfer complete (%u blocks)",
                  uf2_ghostfat_blocks_written());
 
+    /* Mark application bank valid so the bootloader will boot it on the
+     * next reset.  image_size reflects actual bytes written; image_crc = 0
+     * skips the CRC check on next boot. */
     s_dfu_settings.bank_0.bank_code  = NRF_DFU_BANK_VALID_APP;
     s_dfu_settings.bank_0.image_size = uf2_ghostfat_blocks_written() * 256u;
     s_dfu_settings.bank_0.image_crc  = 0;
-    s_dfu_settings.crc               = nrf_dfu_settings_crc_get();
 
-    /* Write settings directly via NVMC — synchronous, no scheduler,
-     * no callbacks, no race with NVIC_SystemReset(). */
+    /* Compute settings CRC exactly as the SDK does in settings_crc_get():
+     * CRC32 over bytes [4 .. offsetof(init_command)) of the settings struct.
+     * Using sizeof() instead would include the init_command blob and produce
+     * a different value, causing the bootloader to reject the settings. */
+    s_dfu_settings.crc = crc32_compute(
+        (uint8_t const *)&s_dfu_settings + 4,
+        offsetof(nrf_dfu_settings_t, init_command) - 4,
+        NULL);
+
+    /* Write settings synchronously via NVMC — no scheduler, no callbacks,
+     * no race with NVIC_SystemReset(). The old settings written by
+     * nrfutil settings generate contain a non-zero image_crc for the
+     * previous app; if those survive the UF2 flash the bootloader's CRC
+     * check will fail and it will re-enter DFU instead of booting the
+     * new app. Direct NVMC writes guarantee the new settings are on flash
+     * before the reset fires. */
     nrf_nvmc_page_erase(BOOTLOADER_SETTINGS_ADDRESS);
     nrf_nvmc_write_bytes(BOOTLOADER_SETTINGS_ADDRESS,
                          (const uint8_t *)&s_dfu_settings,
                          sizeof(nrf_dfu_settings_t));
 
-    nrf_nvmc_page_erase(NRF_DFU_SETTINGS_BACKUP_ADDRESS);
-    nrf_nvmc_write_bytes(NRF_DFU_SETTINGS_BACKUP_ADDRESS,
+    nrf_nvmc_page_erase(BOOTLOADER_SETTINGS_BACKUP_ADDRESS);
+    nrf_nvmc_write_bytes(BOOTLOADER_SETTINGS_BACKUP_ADDRESS,
                          (const uint8_t *)&s_dfu_settings,
                          sizeof(nrf_dfu_settings_t));
 
