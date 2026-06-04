@@ -56,6 +56,8 @@ NRF_LOG_MODULE_REGISTER();
 #define MSC_EPOUT            NRF_DRV_USBD_EPOUT1
 #define MSC_WORKBUFFER_SIZE  512
 
+#define UF2_DATA_PAYLOAD_SIZE   256u   /* fixed by UF2 spec */
+
 static nrf_dfu_observer_t m_observer;
 
 /* Forward decls for transport registration. Marked non-static + used so
