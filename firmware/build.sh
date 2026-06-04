@@ -125,12 +125,22 @@ fi
       --sd-req ${softdevice_id} \
       ${device_type}-dfu-app.zip
 
+    # Add after the existing full zip generation in build.sh
+    nrfutil nrf5sdk-tools pkg generate \
+      --hw-version $hw_version \
+      --bootloader  bootloader.hex  --bootloader-version $bootloader_version \
+      --softdevice  softdevice.hex \
+      --sd-req ${softdevice_id} --sd-id ${softdevice_id} \
+      --key-file ../../resource/dfu_key/chameleon.pem \
+      ${device_type}-dfu-sdbl.zip
+
     nrfutil nrf5sdk-tools settings generate \
       --family NRF52840 \
       --application application.hex --application-version $application_version \
       --softdevice softdevice.hex \
       --bootloader-version $bootloader_version --bl-settings-version 2 \
       settings.hex
+      
     mergehex \
       --merge \
       settings.hex \
