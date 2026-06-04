@@ -195,8 +195,9 @@ bl_updater_status_t bl_updater_stage_and_reset_force(void)
         nvmc_page_erase(BL_STAGED_BASE + i * BL_STAGED_PAGE_SZ);
 
     /* Write header: size first so a torn write of the magic is detectable. */
+    const uint32_t bl_size = EMBEDDED_BOOTLOADER_BIN_SIZE;
     nvmc_write_bytes(BL_STAGED_SIZE_ADDR,
-                     (const uint8_t *)&EMBEDDED_BOOTLOADER_BIN_SIZE,
+                     (const uint8_t *)&bl_size,
                      sizeof(uint32_t));
     nvmc_write_bytes(BL_STAGED_DATA_ADDR,
                      EMBEDDED_BOOTLOADER_BIN,
