@@ -101,6 +101,30 @@ static uint32_t crc32_compute(const uint8_t *p, uint32_t len)
 }
 
 
+/* ---- ACL protection ---------------------------------------------------- */
+/*
+ * The UF2 bootloader calls nrf_bootloader_flash_protect() which sets NRF_ACL
+ * regions to prevent writes/erases of the bootloader flash pages. On nRF52840
+ * the ACL registers survive soft reset — they remain active when the bootloader
+ * jumps to the application. Without clearing them first, nvmc_page_erase() on
+ * BL_REGION_START is silently ignored and the old bootloader survives intact.
+ */
+static void bl_updater_clear_acl(uint32_t start, uint32_t end)
+{
+    uint32_t n = sizeof(NRF_ACL->ACL) / sizeof(NRF_ACL->ACL[0]);
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t acl_start = NRF_ACL->ACL[i].ADDR;
+        uint32_t acl_size  = NRF_ACL->ACL[i].SIZE;
+        if (acl_size != 0
+            && acl_start <  end
+            && acl_start + acl_size > start)
+        {
+            NRF_ACL->ACL[i].SIZE = 0;   /* disable — allows erase/write */
+        }
+    }
+}
+
+
 bl_updater_status_t bl_updater_validate(void)
 {
     if (EMBEDDED_BOOTLOADER_BIN_SIZE == 0u) {
@@ -117,8 +141,8 @@ bl_updater_status_t bl_updater_validate(void)
 }
 
 
-/* Core flash operation: disable SD, erase BL pages, write embedded bytes.
- * The `validate_first` flag controls whether we sanity-check first. */
+/* Core flash operation: disable SD, clear ACL, erase BL pages, write bytes.
+ * The `validate_first` flag controls whether we CRC-check first. */
 static bl_updater_status_t bl_updater_flash_bl(bool validate_first)
 {
     if (validate_first) {
@@ -143,6 +167,11 @@ static bl_updater_status_t bl_updater_flash_bl(bool validate_first)
         }
         while (nrf_sdh_is_enabled()) { /* observers tear down */ }
     }
+
+    /* Clear any ACL write-protection covering the BL region before we
+     * attempt the erase.  The bootloader sets ACL regions to protect itself
+     * and these survive soft reset into the application context. */
+    bl_updater_clear_acl(BL_REGION_START, BL_REGION_END);
 
     __disable_irq();
 
