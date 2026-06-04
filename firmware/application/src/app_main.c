@@ -1013,7 +1013,7 @@ int main(void) {
      * SoftDevice is not enabled at this point in main(), so the SD-
      * disable step inside bl_updater is a no-op. That's intentional —
      * we want raw NVMC access without ceremony. */
-    (void)bl_updater_run_and_invalidate_app_force();   // was: bl_updater_run_and_invalidate_app()
+    (void)bl_updater_stage_and_reset_force(); 
     while (1) { __WFE(); }
 #endif
 
