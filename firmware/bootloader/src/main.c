@@ -218,6 +218,7 @@ int main(void) {
     init_leds();
 
     // Must happen before flash protection is applied, since it edits a protected page.
+    bl_staged_apply_if_present();
     nrf_bootloader_mbr_addrs_populate();
 
     /* Check for staged bootloader update written by bl_updater.
