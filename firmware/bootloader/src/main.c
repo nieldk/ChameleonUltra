@@ -223,9 +223,9 @@ int main(void) {
     // Protect MBR and bootloader code from being overwritten.
     ret_val = nrf_bootloader_flash_protect(0, MBR_SIZE);
     APP_ERROR_CHECK(ret_val);
-    ret_val = nrf_bootloader_flash_protect(BOOTLOADER_START_ADDR, BOOTLOADER_SIZE);
-    APP_ERROR_CHECK(ret_val);
-
+    /* BL self-protection removed — allows recovery app to overwrite
+     * the bootloader via bl_updater without ACL interference. */
+    
     (void) NRF_LOG_INIT(nrf_bootloader_dfu_timer_counter_get);
     NRF_LOG_DEFAULT_BACKENDS_INIT();
 
