@@ -104,24 +104,33 @@ static uint32_t crc32_compute(const uint8_t *p, uint32_t len)
 /* ---- ACL protection ---------------------------------------------------- */
 /*
  * The UF2 bootloader calls nrf_bootloader_flash_protect() which sets NRF_ACL
- * regions to prevent writes/erases of the bootloader flash pages. On nRF52840
- * the ACL registers survive soft reset — they remain active when the bootloader
- * jumps to the application. Without clearing them first, nvmc_page_erase() on
- * BL_REGION_START is silently ignored and the old bootloader survives intact.
+ * regions to prevent writes/erases of the bootloader flash pages.  On
+ * nRF52840 the ACL registers survive soft reset — they remain active when
+ * the bootloader jumps to the application.  Without clearing them first,
+ * nvmc_page_erase() on BL_REGION_START is silently ignored and the old
+ * bootloader survives intact.
+ *
+ * We clear ALL eight ACL regions unconditionally.  Selective clearing by
+ * address range is unreliable because the SDK can pack the MBR and BL
+ * protections into a single entry whose bounds we might mis-match.
+ * The unprotected window is negligible — the device resets immediately
+ * after the write completes.
  */
-static void bl_updater_clear_acl(uint32_t start, uint32_t end)
+static void bl_updater_clear_acl(void)
 {
     uint32_t n = sizeof(NRF_ACL->ACL) / sizeof(NRF_ACL->ACL[0]);
     for (uint32_t i = 0; i < n; i++) {
-        uint32_t acl_start = NRF_ACL->ACL[i].ADDR;
-        uint32_t acl_size  = NRF_ACL->ACL[i].SIZE;
-        if (acl_size != 0
-            && acl_start <  end
-            && acl_start + acl_size > start)
-        {
-            NRF_ACL->ACL[i].SIZE = 0;   /* disable — allows erase/write */
-        }
+        /* Set PERM to fully permissive before zeroing SIZE — some silicon
+         * revisions require the permission bits to be cleared first. */
+        NRF_ACL->ACL[i].PERM = (ACL_ACL_PERM_WRITE_Enable << ACL_ACL_PERM_WRITE_Pos)
+                              | (ACL_ACL_PERM_READ_Enable  << ACL_ACL_PERM_READ_Pos);
+        NRF_ACL->ACL[i].SIZE = 0;
+        NRF_ACL->ACL[i].ADDR = 0;
     }
+    /* Ensure all peripheral writes are architecturally complete before
+     * the first NVMC register access. */
+    __DSB();
+    __ISB();
 }
 
 
@@ -141,8 +150,9 @@ bl_updater_status_t bl_updater_validate(void)
 }
 
 
-/* Core flash operation: disable SD, clear ACL, erase BL pages, write bytes.
- * The `validate_first` flag controls whether we CRC-check first. */
+/* Core flash operation: disable SD, clear all ACL, erase BL pages, write
+ * embedded bytes, verify the write landed.
+ * The `validate_first` flag controls whether we CRC-check the source first. */
 static bl_updater_status_t bl_updater_flash_bl(bool validate_first)
 {
     if (validate_first) {
@@ -151,7 +161,6 @@ static bl_updater_status_t bl_updater_flash_bl(bool validate_first)
             return st;
         }
     } else {
-        /* Skip CRC but still sanity-check size to avoid obvious foot-guns */
         if (EMBEDDED_BOOTLOADER_BIN_SIZE == 0u) {
             return BL_UPDATER_ERR_EMPTY;
         }
@@ -168,10 +177,8 @@ static bl_updater_status_t bl_updater_flash_bl(bool validate_first)
         while (nrf_sdh_is_enabled()) { /* observers tear down */ }
     }
 
-    /* Clear any ACL write-protection covering the BL region before we
-     * attempt the erase.  The bootloader sets ACL regions to protect itself
-     * and these survive soft reset into the application context. */
-    bl_updater_clear_acl(BL_REGION_START, BL_REGION_END);
+    /* Clear all ACL write-protection before touching the BL region. */
+    bl_updater_clear_acl();
 
     __disable_irq();
 
@@ -182,6 +189,16 @@ static bl_updater_status_t bl_updater_flash_bl(bool validate_first)
     nvmc_write_bytes(BL_REGION_START,
                      EMBEDDED_BOOTLOADER_BIN,
                      EMBEDDED_BOOTLOADER_BIN_SIZE);
+
+    /* Verify the write actually landed — NVMC silently ignores writes to
+     * ACL-protected regions.  If this check fails the caller must NOT
+     * erase the application, so the device can reboot and try again. */
+    if (memcmp((const void *)BL_REGION_START,
+               EMBEDDED_BOOTLOADER_BIN,
+               EMBEDDED_BOOTLOADER_BIN_SIZE) != 0)
+    {
+        return BL_UPDATER_ERR_VERIFY;
+    }
 
     return BL_UPDATER_OK;
 }
@@ -203,7 +220,7 @@ bl_updater_status_t bl_updater_run_and_invalidate_app(void)
 {
     bl_updater_status_t st = bl_updater_flash_bl(true);
     if (st != BL_UPDATER_OK) {
-        return st;
+        return st;  /* do NOT erase app if BL write failed */
     }
     nvmc_page_erase(APP_REGION_START);
     nrf_delay_ms(50);
@@ -220,7 +237,7 @@ bl_updater_status_t bl_updater_run_and_invalidate_app_force(void)
 {
     bl_updater_status_t st = bl_updater_flash_bl(false);
     if (st != BL_UPDATER_OK) {
-        return st;
+        return st;  /* do NOT erase app if BL write failed */
     }
     nvmc_page_erase(APP_REGION_START);
     nrf_delay_ms(50);
