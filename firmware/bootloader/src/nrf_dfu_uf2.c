@@ -108,7 +108,7 @@ bool uf2_flash_write(uint32_t addr, const void *data, uint32_t len)
     const uint32_t page = NRF_FICR->CODEPAGESIZE;
     if ((addr & (page - 1)) == 0) {
         nrf_nvmc_page_erase(addr);
-        // verify erase — if flash is stuck low it won't clear
+        /* Verify erase — if flash is stuck low it won't clear. */
         const uint32_t *p = (const uint32_t *)addr;
         for (uint32_t i = 0; i < page / 4; i++) {
             if (p[i] != 0xFFFFFFFF) return false;
@@ -120,22 +120,47 @@ bool uf2_flash_write(uint32_t addr, const void *data, uint32_t len)
     return true;
 }
 
+/* ---- DFU completion ---- */
+
+static void uf2_reset_after_settings(void * p_context)
+{
+    (void)p_context;
+    NVIC_SystemReset();
+}
+
 void uf2_dfu_complete(void)
 {
+    ret_code_t ret;
+
     NRF_LOG_INFO("UF2 transfer complete (%u blocks)",
                  uf2_ghostfat_blocks_written());
 
-    /* Mark application bank valid so the bootloader will boot it. */
+    /* Mark application bank valid so the bootloader will boot it on the
+     * next reset.  image_size reflects actual bytes written rather than
+     * the full region; image_crc = 0 skips the CRC check. */
     s_dfu_settings.bank_0.bank_code  = NRF_DFU_BANK_VALID_APP;
-    s_dfu_settings.bank_0.image_size = UF2_FLASH_APP_SIZE;
-    s_dfu_settings.bank_0.image_crc  = 0;  /* 0 = skip CRC check */
-    (void)nrf_dfu_settings_write_and_backup(NULL);
+    s_dfu_settings.bank_0.image_size = uf2_ghostfat_blocks_written()
+                                       * UF2_DATA_PAYLOAD_SIZE;
+    s_dfu_settings.bank_0.image_crc  = 0;
 
+    /* Reset from the write-complete callback so the flash commit finishes
+     * before NVIC_SystemReset() fires.  Calling SystemReset() with a
+     * queued-but-not-committed settings write leaves bank_code unset,
+     * causing the bootloader to stay in DFU on the next boot instead of
+     * jumping to the freshly-written app. */
+    ret = nrf_dfu_settings_write_and_backup(uf2_reset_after_settings);
+    if (ret != NRF_SUCCESS)
+    {
+        NRF_LOG_ERROR("Settings write failed (%u) — forcing immediate reset", ret);
+        nrf_delay_ms(150);
+        NVIC_SystemReset();
+    }
+
+    /* Execution continues here only if the write was queued successfully.
+     * uf2_reset_after_settings() will fire once the flash op completes.
+     * The 150 ms delay that was here before has been removed — it is no
+     * longer needed because the reset now happens after the commit. */
     if (m_observer) m_observer(NRF_DFU_EVT_DFU_COMPLETED);
-
-    /* Let the SCSI response drain before we reset. */
-    nrf_delay_ms(150);
-    NVIC_SystemReset();
 }
 
 /* ---- USBD wiring ---- */
