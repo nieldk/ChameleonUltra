@@ -166,69 +166,29 @@ void uf2_dfu_complete(void)
     NVIC_SystemReset();
 }
 
-/* ---- USBD wiring ---- */
-
-static void usbd_event_handler(app_usbd_event_type_t event)
-{
-    switch (event) {
-        case APP_USBD_EVT_DRV_SUSPEND:    app_usbd_suspend_req();  break;
-        case APP_USBD_EVT_DRV_RESUME:                              break;
-        case APP_USBD_EVT_STARTED:                                 break;
-        case APP_USBD_EVT_STOPPED:        app_usbd_disable();      break;
-        case APP_USBD_EVT_POWER_DETECTED:
-            if (!nrf_drv_usbd_is_enabled()) app_usbd_enable();
-            break;
-        case APP_USBD_EVT_POWER_REMOVED:  app_usbd_stop();         break;
-        case APP_USBD_EVT_POWER_READY:    app_usbd_start();        break;
-        default: break;
-    }
-}
+/* ---- USBD wiring ----
+ *
+ * MSC must be in the class list before app_usbd_init() is called, because
+ * app_usbd_class_append() fails once the stack is running (APP_USBD_POWER_READY
+ * has fired and app_usbd_start() has been called by nrf_dfu_serial_usb.c).
+ *
+ * APP_USBD_MSC_GLOBAL_DEF places the MSC instance in the .usbd_class_inst linker
+ * section. app_usbd_init() walks that section and registers every instance it
+ * finds — so MSC is enumerated automatically as interface 2 alongside CDC
+ * interfaces 0+1, without any runtime class_append() call.
+ *
+ * uf2_transport_init() therefore has nothing USBD-related to do: CDC owns the
+ * stack lifecycle entirely.
+ * ----------------------- */
 
 uint32_t uf2_transport_init(nrf_dfu_observer_t observer)
 {
-    ret_code_t err;
-
     m_observer = observer;
     uf2_ghostfat_init();
 
-    /* nrf_dfu_serial_usb.c will normally have run first and already
-     * initialised these subsystems. Tolerate "already initialised". */
-    static const app_usbd_config_t usbd_config = {
-        .ev_state_proc = usbd_event_handler,
-    };
-
-    err = nrf_drv_clock_init();
-    if (err != NRF_SUCCESS && err != NRF_ERROR_MODULE_ALREADY_INITIALIZED) {
-        return err;
-    }
-
-    err = nrf_drv_power_init(NULL);
-    if (err != NRF_SUCCESS && err != NRF_ERROR_MODULE_ALREADY_INITIALIZED) {
-        return err;
-    }
-
-    app_usbd_serial_num_generate();
-
-    err = app_usbd_init(&usbd_config);
-    if (err != NRF_SUCCESS && err != NRF_ERROR_INVALID_STATE) {
-        /* INVALID_STATE = serial-USB DFU transport already brought USBD up.
-         * Anything else is fatal. */
-        return err;
-    }
-
-    err = app_usbd_class_append(app_usbd_msc_class_inst_get(&m_app_msc));
-    if (err != NRF_SUCCESS) {
-        NRF_LOG_ERROR("MSC class append failed: 0x%08x", err);
-        return err;
-    }
-
-    /* If we initialised USBD ourselves, also kick power-event handling.
-     * If serial-USB already did, this returns INVALID_STATE which we ignore. */
-    err = app_usbd_power_events_enable();
-    if (err != NRF_SUCCESS && err != NRF_ERROR_INVALID_STATE) {
-        return err;
-    }
-
+    /* USBD stack is owned by nrf_dfu_serial_usb.c. MSC was registered
+     * statically via APP_USBD_MSC_GLOBAL_DEF and will be enumerated as
+     * interface 2 alongside CDC interfaces 0+1. Nothing to do here. */
     NRF_LOG_INFO("UF2 transport ready. Mount the CHAMELEON drive and drop a .uf2.");
     return NRF_SUCCESS;
 }
@@ -236,6 +196,5 @@ uint32_t uf2_transport_init(nrf_dfu_observer_t observer)
 uint32_t uf2_transport_close(nrf_dfu_transport_t const *p_exception)
 {
     (void)p_exception;
-    /* MSC class stays appended — nothing to tear down explicitly. */
     return NRF_SUCCESS;
 }
