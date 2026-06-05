@@ -28,7 +28,7 @@
 #include "nrf_soc.h"
 #include "nrf_delay.h"
 
-#define BL_REGION_START    0x000F3000UL
+#define BL_REGION_START    0x000EF000UL
 #define BL_REGION_END      0x000FE000UL
 #define BL_PAGE_SIZE       0x1000UL
 #define BL_REGION_PAGES    ((BL_REGION_END - BL_REGION_START) / BL_PAGE_SIZE)

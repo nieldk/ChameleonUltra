@@ -14,8 +14,8 @@
  * Memory layout:
  *     0x00000 - 0x01000   MBR
  *     0x01000 - 0x27000   SoftDevice S140
- *     0x27000 - 0xF3000   Application      <— UF2 writes go here
- *     0xF3000 - 0xFE000   Bootloader       <— do not write
+ *     0x27000 - 0xEF000   Application      <— UF2 writes go here
+ *     0xEF000 - 0xFE000   Bootloader       <— do not write
  *     0xFE000 - 0xFF000   MBR params
  *     0xFF000 - 0x100000  Bootloader settings
  *
@@ -48,12 +48,12 @@ NRF_LOG_MODULE_REGISTER();
 #include "uf2_blockdev.h"
 
 /* ---- Endpoint plan ----
- * CDC has been dropped from the bootloader build, so we own the entire
- * USBD device and use the conventional MSC-on-EP1 layout.
+ * Composite CDC + MSC device. CDC (nrf_dfu_serial_usb.c) owns interfaces
+ * 0+1 and EP1/EP2. MSC gets interface 2 and EP3 to avoid conflicts.
  * ----------------------- */
-#define MSC_INTERFACE        0
-#define MSC_EPIN             NRF_DRV_USBD_EPIN1
-#define MSC_EPOUT            NRF_DRV_USBD_EPOUT1
+#define MSC_INTERFACE        2
+#define MSC_EPIN             NRF_DRV_USBD_EPIN3
+#define MSC_EPOUT            NRF_DRV_USBD_EPOUT3
 #define MSC_WORKBUFFER_SIZE  512
 
 static nrf_dfu_observer_t m_observer;

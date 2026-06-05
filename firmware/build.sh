@@ -11,7 +11,7 @@ softdevice_id=0x0100
 
 # TODO: find a way to manage this automatically, I don't want to rely on action build #.
 application_version=1
-bootloader_version=4
+bootloader_version=5
 
 device_type=${CURRENT_DEVICE_TYPE:-ultra}
 case $device_type in

@@ -68,6 +68,8 @@ SRC_FILES += \
   $(SDK_ROOT)/components/libraries/bootloader/dfu/nrf_dfu_svci_handler.c \
   $(SDK_ROOT)/components/libraries/bootloader/dfu/nrf_dfu_settings_svci.c \
   $(SDK_ROOT)/components/libraries/usbd/class/msc/app_usbd_msc.c \
+  $(SDK_ROOT)/components/libraries/bootloader/serial_dfu/nrf_dfu_serial.c \
+  $(SDK_ROOT)/components/libraries/bootloader/serial_dfu/nrf_dfu_serial_usb.c \
   $(PROJ_DIR)/nrf_dfu_uf2.c \
   $(PROJ_DIR)/uf2_ghostfat.c \
   $(PROJ_DIR)/uf2_status.c \
@@ -155,6 +157,7 @@ INC_FOLDERS += \
   $(SDK_ROOT)/components/libraries/atomic_fifo \
   $(SDK_ROOT)/components/libraries/crypto/backend/nrf_sw \
   $(SDK_ROOT)/modules/nrfx/mdk \
+  $(SDK_ROOT)/components/libraries/bootloader/serial_dfu \
   $(SDK_ROOT)/components/libraries/bootloader/ble_dfu \
   $(SDK_ROOT)/components/softdevice/common \
   $(SDK_ROOT)/external/nano-pb \

@@ -17,19 +17,15 @@ After installation:
 
 - **Drag-and-drop updates.** Boot into DFU mode, drag a `.uf2` file onto
   the `CHAMELEON` drive that appears, done.
+- **Serial DFU coexistence.** The bootloader presents a composite USB
+  device: a CDC ACM serial port for signed DFU (nrfutil / `flash-dfu-app.sh`)
+  alongside the MSC mass-storage drive for UF2. Both work simultaneously.
 - **No signing infrastructure for development builds.** Useful if you're
   iterating on firmware modifications.
-- **No CDC driver required.** USB Mass Storage is universal — works on
-  Linux, macOS, Windows, even bare ChromeOS.
-- **A path back.** A pre-built `chameleon-revert-to-stock.uf2` will
-  restore the stock bootloader and prepare the device for the upstream
-  signed DFU flow.
-
-The trade-off: this fork removes the signed-DFU CDC transport from the
-bootloader to fit MSC + GhostFAT into the bootloader region. After
-installation, signed `.zip` packages can no longer be pushed via
-`nrfutil pkg dfu`. Use UF2 for application updates, and the
-revert-to-stock UF2 if you ever need the stock DFU flow back.
+- **No CDC driver required for UF2.** USB Mass Storage is universal — works
+  on Linux, macOS, Windows, even bare ChromeOS.
+- **A path back.** Drop `fullimage.uf2` (built by `build.sh`) onto the
+  CHAMELEON drive to restore the complete firmware including the bootloader.
 
 -----
 
@@ -317,28 +313,19 @@ Common reasons and fixes:
 
 Step 8 — going back to stock (if you ever need to)
 
-This fork includes a recovery mechanism for users who want the stock
-firmware back. The UF2 transport writes to `0x1000`–`0xF3000`, which
-covers both the SoftDevice and application regions — so the
-revert-to-stock UF2 can restore the full stock firmware in a single
-drag-and-drop, with no follow-up `flash-dfu-app.sh` needed.
+To fully restore the original firmware including the stock bootloader,
+drop `fullimage.uf2` (built by `build.sh` from this fork) onto the
+CHAMELEON drive in UF2 DFU mode. This restores MBR, SoftDevice,
+bootloader, application, and settings in a single operation — no SWD
+required.
 
-The flow:
+To revert to the upstream stock bootloader specifically:
 
-1. Download `chameleon-revert-to-stock.uf2` from the
-   [releases page](https://github.com/nieldk/ChameleonUltra/releases)
-   of this fork (or build it yourself per
-   `firmware/tools/RECOVERY_BUILD.md`).
-1. Enter UF2 DFU mode (cold-boot + hold B + plug).
-1. Drag `chameleon-revert-to-stock.uf2` onto the CHAMELEON drive.
-1. **The drive will disappear after a few seconds.** This is the success
-   signal. The device resets twice: once into the recovery app (which
-   writes the stock bootloader), then again into the stock bootloader.
-1. Stock bootloader boots, finds no valid application, enters DFU mode.
-1. Push the stock application via the upstream release's `flash-dfu-app.sh`.
-
-After this, your device is on stock firmware with the stock bootloader,
-and the upstream signed-DFU flow works again.
+1. Build a recovery image per `firmware/tools/RECOVERY_BUILD.md`.
+2. Enter UF2 DFU mode (cold-boot + hold B + plug).
+3. Drag the recovery UF2 onto the CHAMELEON drive.
+4. The device resets into the stock bootloader.
+5. Push the stock application via the upstream `flash-dfu-app.sh`.
 
 -----
 
