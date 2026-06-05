@@ -343,6 +343,14 @@ static uint32_t usb_dfu_transport_init(nrf_dfu_observer_t observer)
 
     NRF_LOG_DEBUG("Starting USB");
 
+    /* Allow other transports to append USB classes before the stack starts.
+     * nrf_dfu_uf2.c implements this to register the MSC interface.
+     * Declared weak so it compiles to a no-op when UF2 transport is absent. */
+    void usb_dfu_transport_class_register(void) __attribute__((weak));
+    if (usb_dfu_transport_class_register) {
+        usb_dfu_transport_class_register();
+    }
+
     if (USBD_POWER_DETECTION)
     {
         err_code = app_usbd_power_events_enable();
