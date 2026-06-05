@@ -1,68 +1,147 @@
 # ================================================================
-FULL IMAGE RESTORE — reinstall or recover the UF2 bootloader
+FULL IMAGE RESTORE — reinstall or recover the complete firmware
 
-With ACL flash protection removed from this fork’s bootloader,
-the UF2 transport can write to the full flash range including
-the bootloader region. A single drag-and-drop of the full image
-UF2 restores everything: MBR, SoftDevice, bootloader, application,
-and settings.
+This document covers how to build and deploy a full image UF2
+that restores everything on the device: MBR, SoftDevice,
+bootloader, application, and settings — in a single drag-and-drop.
+
+Because ACL flash protection has been removed from this fork’s
+bootloader, the UF2 transport can write to the full flash range
+including the bootloader region. No SWD required.
 
 ================================================================
-QUICK START
+PREREQUISITES
 
-1. Build normally:
-   
-   cd firmware
-   ./build.sh
-   
-   Output: objects/ultra-fullimage.uf2  (or lite-fullimage.uf2)
-1. Enter UF2 DFU mode on the device:
-   Cold-boot, hold B, plug USB. The CHAMELEON drive appears.
-1. Drag objects/ultra-fullimage.uf2 onto the CHAMELEON drive.
-1. Wait ~2 seconds. The drive disappears and the device resets
-   into the restored firmware.
+You need a working build environment. If you haven’t set one up
+yet, follow the full instructions in firmware/tools/UF2_INSTALL.md
+first. In short:
 
-That’s it.
+- arm-none-eabi-gcc (10.x or newer)
+- nrfutil
+- mergehex (from Nordic nRF Command Line Tools)
+- Python 3
+
+You also need both repositories:
+
+1. This fork (the UF2 bootloader fork):
+   <https://github.com/nieldk/ChameleonUltra>  (branch: UF2)
+1. RfidResearchGroup’s upstream repo (for the full SDK and
+   nrf52_sdk tree that build.sh expects):
+   <https://github.com/RfidResearchGroup/ChameleonUltra>
+
+================================================================
+STEP 1 — set up the directory structure
+
+Clone both repositories and copy the required files from this
+fork into the upstream tree. The build system expects to run from
+within the RRG repo structure.
+
+# Clone upstream RRG repo
+
+git clone <https://github.com/RfidResearchGroup/ChameleonUltra.git>
+cd ChameleonUltra
+
+# Clone this fork alongside it (or use an existing checkout)
+
+git clone -b UF2 <https://github.com/nieldk/ChameleonUltra.git> ../ChameleonUltra-UF2
+
+# Copy the patched build script and uf2conv tool into place
+
+cp ../ChameleonUltra-UF2/firmware/build.sh         firmware/build.sh
+cp ../ChameleonUltra-UF2/firmware/tools/uf2conv.py firmware/tools/uf2conv.py
+
+The patched build.sh differs from upstream in two ways:
+
+- Generates ultra-fullimage.uf2 / lite-fullimage.uf2 in addition
+  to the standard artifacts.
+- Includes the gen_embedded_bl.py / bl_updater integration for
+  bootloader self-update from the application.
+
+================================================================
+STEP 2 — fetch upstream tags
+
+The build uses `git describe` to embed a version string. Tags only
+exist on the upstream remote:
+
+git remote add upstream <https://github.com/RfidResearchGroup/ChameleonUltra.git>
+git fetch upstream –tags
+
+Verify:
+
+git describe –tags
+
+# e.g. v2.0.0-15-gabc1234
+
+If you see “No names found”, run:
+
+git fetch upstream ‘refs/tags/*:refs/tags/*’
+
+================================================================
+STEP 3 — build
+
+cd firmware
+./build.sh
+
+A normal build takes 30–90 seconds. The relevant output artifact
+is in firmware/objects/:
+
+ultra-fullimage.uf2   (or lite-fullimage.uf2)
+
+This file contains the merged MBR + SoftDevice + UF2 bootloader
+(ACL removed) + application + settings, converted to UF2 format.
+
+================================================================
+STEP 4 — flash
+
+Enter UF2 DFU mode on the device:
+
+1. Unplug the device.
+1. Press and hold the B button.
+1. Plug in USB while still holding B.
+1. Release B after ~2 seconds.
+1. The CHAMELEON drive appears.
+
+Drag the full image UF2 onto the drive:
+
+# Linux
+
+cp objects/ultra-fullimage.uf2 /run/media/$USER/CHAMELEON/
+
+# macOS
+
+cp objects/ultra-fullimage.uf2 /Volumes/CHAMELEON/
+
+# Windows
+
+copy objects\ultra-fullimage.uf2 D:\
+
+The drive disappears and the device resets. Boot is complete in
+~2 seconds.
 
 ================================================================
 WHEN TO USE THIS
 
-- First-time install of this fork’s UF2 bootloader onto a device
-  running the stock bootloader (stock BL also presents a DFU
-  drive; the full image UF2 works there too).
-- Recovering a device after a bad firmware update.
-- Restoring a device that was reverted to stock with the upstream
-  flash-dfu-app.sh.
-- Replacing the bootloader without SWD.
+- Restoring a device after a bad firmware update.
+- Installing this fork’s UF2 bootloader onto a device already
+  running any UF2-capable bootloader (including stock DFU).
+- Recovering a device that was reverted to stock firmware.
+- Replacing the bootloader without SWD during development.
 
 ================================================================
-WHAT THE FULL IMAGE COVERS
+NOTE ON STOCK BOOTLOADER ENTRY POINT
 
-The fullimage.hex (and derived UF2) produced by build.sh is a
-merge of:
+If the device is currently running the stock RRG bootloader (not
+this fork’s), the stock bootloader enforces a write boundary at
+0xF3000 and will ignore writes to the bootloader region. In that
+case:
 
-softdevice.hex   — Nordic S140 SoftDevice
-bootloader.hex   — this fork’s UF2 bootloader (ACL removed)
-application.hex  — ChameleonUltra application
-settings.hex     — nrfutil DFU settings page
+- The SoftDevice and application portions of the full image
+  will be written correctly.
+- The bootloader region will not be updated.
 
-It covers the full flash range from 0x0000 (MBR) through the
-bootloader region at 0xF3000–0xFE000. Every region is restored
-in a single operation.
+To fully restore including the bootloader from a stock-bootloader
+device, use SWD for the first install (see UF2_INSTALL.md,
+Steps 3–4), then use the full image UF2 for all subsequent
+restores.
 
 ================================================================
-NOTES
-
-- The device running the full image UF2 must have a UF2-capable
-  bootloader already installed (either this fork’s, or the stock
-  bootloader which also presents a DFU MSC drive). If the
-  bootloader is completely gone, SWD is required to recover.
-- Power loss during the ~2 second write window could leave flash
-  in an inconsistent state. Keep the device powered until the
-  drive disappears.
-- The stock bootloader enforces a write boundary at 0xF3000 and
-  will ignore writes to the bootloader region. If you are using
-  the stock bootloader as the entry point, only the SoftDevice
-  and application portions of the full image will be written.
-  Install this fork’s bootloader first via SWD if you need the
-  full restore from stock.
