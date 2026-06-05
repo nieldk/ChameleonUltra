@@ -41,13 +41,10 @@ NRF_LOG_MODULE_REGISTER();
 #include "rgb_marquee.h"
 #include "tag_persistence.h"
 #include "settings.h"
+#include "app_standalone.h"
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
 #include "rc522.h"
-#endif
-
-#ifdef RECOVERY_MODE
-#include "bl_updater.h"
 #endif
 
 // Defining soft timers
@@ -62,6 +59,13 @@ static bool m_is_a_btn_press = false;
 
 static bool m_is_b_btn_release = false;
 static bool m_is_a_btn_release = false;
+
+/* Chord (both-buttons-pressed) detection - feeds the standalone subsystem.
+ * Set when both _btn_press flags are simultaneously true; cleared after the
+ * chord dispatches in button_press_process(). Single-button presses are
+ * unaffected. */
+static bool     m_chord_active = false;
+static uint32_t m_chord_start  = 0;
 
 static bool m_system_off_processing = false;
 
@@ -261,6 +265,60 @@ static void timer_button_event_handle(void *arg) {
                 m_is_btn_long_press = is_long_press;
             }
         }
+    }
+
+    /* Chord-detection rescue path.
+     *
+     * The GPIOTE driver shares a single debounce timer between both buttons,
+     * and every press/release event restarts it. When both buttons change
+     * state within the 50ms debounce window, the first event's pending timer
+     * is overwritten by the second, so only the second pin gets its press/
+     * release flag updated by the per-pin code above. That leaves the chord-
+     * detect condition (both press flags simultaneously true) impossible to
+     * reach for fast simultaneous chords.
+     *
+     * To recover, after the per-pin handling, sample the OTHER button's
+     * level directly. If it's currently held but our flag says released
+     * (or vice-versa), synthesize the missing transition so both flags
+     * always reflect actual hardware state. The button enable/disable
+     * settings are still respected.
+     *
+     * This path only kicks in when the two buttons race; single-button use
+     * is unaffected. */
+    nrf_drv_gpiote_pin_t other = (pin == BUTTON_1) ? BUTTON_2 : BUTTON_1;
+    bool other_high = (nrf_gpio_pin_read(other) == 1);
+
+    if (other == BUTTON_1) {
+        bool enabled = settings_get_button_press_config('b') != SettingsButtonDisable;
+        if (enabled) {
+            if (other_high && !m_is_b_btn_press) {
+                m_is_b_btn_press = true;
+                NRF_LOG_INFO("BUTTON_B_PRESS_SYNTH");
+            } else if (!other_high && m_is_b_btn_press) {
+                m_is_b_btn_release = true;
+                m_is_b_btn_press   = false;
+                NRF_LOG_INFO("BUTTON_B_RELEASE_SYNTH");
+            }
+        }
+    } else {  /* other == BUTTON_2 */
+        bool enabled = settings_get_button_press_config('a') != SettingsButtonDisable;
+        if (enabled) {
+            if (other_high && !m_is_a_btn_press) {
+                m_is_a_btn_press = true;
+                NRF_LOG_INFO("BUTTON_A_PRESS_SYNTH");
+            } else if (!other_high && m_is_a_btn_press) {
+                m_is_a_btn_release = true;
+                m_is_a_btn_press   = false;
+                NRF_LOG_INFO("BUTTON_A_RELEASE_SYNTH");
+            }
+        }
+    }
+
+    /* Chord detection: both buttons currently held -> arm a chord. */
+    if (m_is_a_btn_press && m_is_b_btn_press && !m_chord_active) {
+        m_chord_active = true;
+        m_chord_start  = app_timer_cnt_get();
+        NRF_LOG_INFO("CHORD_START");
     }
 }
 
@@ -913,10 +971,71 @@ static void run_button_function_by_settings(settings_button_function_t sbf) {
     }
 }
 
+/**@brief Classify and dispatch a completed chord to the standalone subsystem.
+ *
+ * Returns true if the event was consumed (caller should not run per-button
+ * SettingsButtonFunction dispatch); false to fall through to normal handling.
+ */
+static bool dispatch_chord_if_pending(void) {
+    if (!m_chord_active) return false;
+
+    /* Wait for BOTH releases before dispatching. Sit on any single release
+     * so its SettingsButtonFunction doesn't fire mid-chord. */
+    if (!(m_is_a_btn_release && m_is_b_btn_release)) {
+        /* Malformed chord (one button released long ago, other never
+         * triggered chord_active reset): abort. */
+        if ((m_is_a_btn_release && !m_is_b_btn_press) ||
+            (m_is_b_btn_release && !m_is_a_btn_press)) {
+            NRF_LOG_INFO("CHORD_ABORT");
+            m_chord_active = false;
+            return false;
+        }
+        return true;   /* still waiting */
+    }
+
+    uint32_t dur = app_timer_cnt_diff_compute(app_timer_cnt_get(),
+                                              m_chord_start);
+    standalone_button_evt_t evt;
+    if (dur >= APP_TIMER_TICKS(5000)) {
+        evt = STANDALONE_BTN_BOTH_VLONG;
+        NRF_LOG_INFO("CHORD_VLONG");
+    } else if (dur >= APP_TIMER_TICKS(1000)) {
+        evt = STANDALONE_BTN_BOTH_LONG;
+        NRF_LOG_INFO("CHORD_LONG");
+    } else {
+        evt = STANDALONE_BTN_BOTH_SHORT;
+        NRF_LOG_INFO("CHORD_SHORT");
+    }
+
+    bool consumed = app_standalone_on_button(evt);
+
+    /* A chord always consumes both release flags - the user clearly didn't
+     * intend two separate single-button actions. */
+    m_is_a_btn_release  = false;
+    m_is_b_btn_release  = false;
+    m_is_btn_long_press = false;
+    m_chord_active      = false;
+    return consumed;
+}
+
 /**@brief button press event process
  */
 extern bool g_usb_led_marquee_enable;
 static void button_press_process(void) {
+    /* Chord-first: if a both-press chord is in progress, sit on any pending
+     * single-button releases until both arrive, then dispatch the chord.
+     * Falls through to normal per-button handling only if the chord was
+     * aborted or the standalone subsystem didn't consume the event. */
+    if (dispatch_chord_if_pending()) {
+        if (!m_is_field_on) {
+            sleep_timer_start(SLEEP_DELAY_MS_BUTTON_CLICK);
+        }
+        return;
+    }
+    if (m_chord_active) {
+        /* Chord still pending the second release - don't dispatch singles. */
+        return;
+    }
     // Make sure that one of the AB buttons has a click event
     if (m_is_b_btn_release || m_is_a_btn_release) {
         if (m_is_a_btn_release) {
@@ -999,24 +1118,6 @@ static void ble_passkey_init(void) {
 /**@brief Application main function.
  */
 int main(void) {
-#ifdef RECOVERY_MODE
-    /* RECOVERY_MODE build — this is a one-shot revert-to-stock app.
-     * Skip all normal application initialisation and run the bootloader
-     * replacement immediately. bl_updater_run_and_invalidate_app()
-     * doesn't return on success: it writes the embedded (stock) BL
-     * into the BL region, erases our own vector table so the new BL
-     * won't try to boot us again, then NVIC_SystemReset()s.
-     *
-     * On validation failure we fall through to a halt — the user can
-     * power-cycle and re-push the recovery UF2.
-     *
-     * SoftDevice is not enabled at this point in main(), so the SD-
-     * disable step inside bl_updater is a no-op. That's intentional —
-     * we want raw NVMC access without ceremony. */
-    (void)bl_updater_stage_and_reset_force(); 
-    while (1) { __WFE(); }
-#endif
-
     hw_connect_init();        // Remember to initialize the pins first
 
     fds_util_init();          // Initialize fds tool
@@ -1037,6 +1138,7 @@ int main(void) {
     sleep_timer_init();       // Soft timer initialization for hibernation
     tag_emulation_init();     // Analog card initialization
     rgb_marquee_init();       // Light effect initialization
+    app_standalone_init();    // Standalone (host-less) mode subsystem
 
     ble_passkey_init();       // init ble connect key.
 
@@ -1057,6 +1159,8 @@ int main(void) {
         lesc_event_process();
         // Button event process
         button_press_process();
+        // Standalone subsystem tick (cheap; framework throttles internally)
+        app_standalone_tick(app_timer_cnt_get());
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
         // Field generator rainbow animation

@@ -48,8 +48,6 @@
 #define DATA_CMD_GET_ALL_SLOT_NICKS             (1038)
 #define DATA_CMD_GET_SLEEP_TIMEOUT              (1039)
 #define DATA_CMD_SET_SLEEP_TIMEOUT              (1040)
-#define DATA_CMD_GET_BOOTLOADER_VERSION         (1041)
-#define DATA_CMD_GET_FREE_MEMORY                (1042)
 
 //
 // ******************************************************************
@@ -185,6 +183,21 @@
 #define DATA_CMD_HF14A_4_READER_APDU            (6004)  /* select+RATS+send APDU, keep field   */
 #define DATA_CMD_HF14A_4_EMV_SCAN               (6005)  /* full EMV scan in one call            */
 
+//
+// ******************************************************************
+// Standalone (host-less) modes subsystem
+//
+#define DATA_CMD_STANDALONE_GET_MODE            (7000)
+#define DATA_CMD_STANDALONE_SET_MODE            (7001)
+#define DATA_CMD_STANDALONE_GET_CONFIG          (7002)
+#define DATA_CMD_STANDALONE_SET_CONFIG          (7003)
+#define DATA_CMD_STANDALONE_GET_RESULT          (7004)
+#define DATA_CMD_STANDALONE_CLEAR_RESULT        (7005)
+#define DATA_CMD_STANDALONE_TRIGGER             (7006)
+#define DATA_CMD_STANDALONE_DISARM              (7009)
+#define DATA_CMD_STANDALONE_GET_SIZES           (7007)
+#define DATA_CMD_STANDALONE_RELAY_DIAG          (7008)
+
 #define DATA_CMD_EM410X_SET_EMU_ID              (5000)
 #define DATA_CMD_EM410X_GET_EMU_ID              (5001)
 #define DATA_CMD_HIDPROX_SET_EMU_ID             (5002)
@@ -201,7 +214,5 @@
 #define DATA_CMD_EM4X05_SCAN                    (3030)
 #define DATA_CMD_EM4X05_READSNIFF               (3032)
 #define DATA_CMD_LF_SNIFF                       (3031)
-#define DATA_CMD_ENTER_BOOTLOADER_UF2           (1043)
-#define DATA_CMD_UPDATE_BL                      (1044)
 
 #endif

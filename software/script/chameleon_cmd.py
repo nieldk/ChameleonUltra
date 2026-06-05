@@ -68,23 +68,6 @@ class ChameleonCMD:
         return resp
 
     @expect_response(Status.SUCCESS)
-    def get_bootloader_version(self):
-        """Get bootloader version (read from DFU settings flash page)"""
-        resp = self.device.send_cmd_sync(Command.GET_BOOTLOADER_VERSION)
-        if resp.status == Status.SUCCESS:
-            resp.parsed = struct.unpack('!BB', resp.data)   # (major, minor)
-        return resp
-
-    @expect_response(Status.SUCCESS)
-    def get_free_memory(self):
-        """Get heap memory usage (free / total bytes)"""
-        resp = self.device.send_cmd_sync(Command.GET_FREE_MEMORY)
-        if resp.status == Status.SUCCESS:
-            free_bytes, total_bytes = struct.unpack('!II', resp.data)
-            resp.parsed = {'free': free_bytes, 'total': total_bytes}
-        return resp
-        
-    @expect_response(Status.SUCCESS)
     def get_device_mode(self):
         resp = self.device.send_cmd_sync(Command.GET_DEVICE_MODE)
         if resp.status == Status.SUCCESS:
@@ -1471,33 +1454,7 @@ class ChameleonCMD:
         Reboot into DFU mode (bootloader)
         :return:
         """
-        self.device.send_cmd_auto(Command.ENTER_BOOTLOADER_UF2, close=True)
-
-    def enter_bootloader_uf2(self):
-        """
-        Reboot into the bootloader in UF2 drag-and-drop mode.
-        Requires the UF2-capable bootloader to be installed.
-        :return:
-        """
-        self.device.send_cmd_auto(Command.ENTER_BOOTLOADER_UF2, close=True)
-
-    def update_bl(self):
-        """
-        One-shot self-update of the bootloader region.
-
-        Triggers the application's embedded bootloader-update routine:
-        it validates the embedded blob (CRC32), disables SoftDevice,
-        and rewrites the BL flash region from the embedded copy, then
-        resets. The USB CDC link goes down before any reply can be
-        sent, so this looks like a disconnect to the host. Reconnect
-        after the device reboots.
-
-        Make sure the device stays powered for several seconds after
-        invoking this — a power loss mid-write bricks the bootloader.
-        Recovery from that state requires SWD.
-        """
-        self.device.send_cmd_auto(Command.UPDATE_BL, close=True)
-
+        self.device.send_cmd_auto(Command.ENTER_BOOTLOADER, close=True)
 
     @expect_response(Status.SUCCESS)
     def get_animation_mode(self):
@@ -1818,6 +1775,182 @@ class ChameleonCMD:
     def mf1_set_field_off_do_reset(self, enabled: bool):
         data = struct.pack('!B', enabled)
         return self.device.send_cmd_sync(Command.MF1_SET_FIELD_OFF_DO_RESET, data)
+
+    # ===================================================================
+    # Standalone (host-less) modes subsystem
+    # ===================================================================
+
+    def standalone_get_mode(self):
+        """Read current standalone state, mode, flags, and FDS stats.
+
+        Response: {u8 state, u8 mode, u8 flags, u8 reserved,
+                   u16 words_used_le, u16 pages_available_le,
+                   u8 valid_records, u8 dirty_records}  (10 bytes).
+        Older firmware returns 4 bytes; fds field is None in that case.
+        Returns tuple (state, mode, flags, fds_or_None).
+        """
+        from chameleon_enum import StandaloneMode, StandaloneState, StandaloneFlag
+        resp = self.device.send_cmd_sync(Command.STANDALONE_GET_MODE, b'')
+        if resp.status != Status.SUCCESS or len(resp.data) < 4:
+            raise UnexpectedResponseError(
+                f"STANDALONE_GET_MODE failed: status={resp.status} "
+                f"data_len={len(resp.data) if resp.data else 0}"
+            )
+        state_v, mode_v, flags_v, _reserved = struct.unpack('<BBBB', resp.data[:4])
+        fds = None
+        if len(resp.data) >= 10:
+            wu, wa, vr, dr = struct.unpack('<HHBB', resp.data[4:10])
+            fds = {'words_used': wu, 'pages_available': wa,
+                   'valid_records': vr, 'dirty_records': dr}
+        return (StandaloneState(state_v),
+                StandaloneMode(mode_v),
+                StandaloneFlag(flags_v),
+                fds)
+
+    def standalone_set_mode(self, mode, flags=0):
+        """Select a standalone mode (persisted to FDS).
+
+        Modes with destructive capabilities (AUTOCLONE, READ_REPLAY) require
+        StandaloneFlag.HOST_OPTED_IN in `flags` or the firmware returns
+        STATUS_PAR_ERR.
+
+        On success returns the same tuple as standalone_get_mode().
+        On error returns the raw response object so the caller can inspect
+        resp.status.
+        """
+        from chameleon_enum import StandaloneMode, StandaloneState, StandaloneFlag
+        payload = struct.pack('<BB', int(mode), int(flags))
+        resp = self.device.send_cmd_sync(Command.STANDALONE_SET_MODE, payload)
+        if resp.status != Status.SUCCESS:
+            return resp
+        state_v, mode_v, flags_v, _reserved = struct.unpack('<BBBB', resp.data[:4])
+        return (StandaloneState(state_v),
+                StandaloneMode(mode_v),
+                StandaloneFlag(flags_v))
+
+    def standalone_get_config(self, mode) -> bytes:
+        """Read the persisted config blob for a given mode.
+
+        Returns raw bytes; each mode defines its own format.
+        Empty bytes if no config has ever been written for this mode.
+        """
+        payload = struct.pack('<B', int(mode))
+        resp = self.device.send_cmd_sync(Command.STANDALONE_GET_CONFIG, payload)
+        if resp.status != Status.SUCCESS:
+            raise UnexpectedResponseError(
+                f"STANDALONE_GET_CONFIG failed: status={resp.status}"
+            )
+        # Response: { u8 mode, u8 cfg_len, u8[cfg_len] cfg }
+        if len(resp.data) < 2:
+            return b''
+        cfg_len = resp.data[1]
+        return bytes(resp.data[2:2 + cfg_len])
+
+    def standalone_set_config(self, mode, cfg):
+        """Persist a mode-specific config blob (max 64 bytes).
+        cfg can be a hex string (e.g. 'D0070000') or bytes.
+        """
+        if isinstance(cfg, str):
+            cfg = bytes.fromhex(cfg)
+        payload = struct.pack('<B', int(mode)) + bytes(cfg)
+        return self.device.send_cmd_sync(Command.STANDALONE_SET_CONFIG, payload)
+
+    def standalone_get_result(self):
+        """Pull one chunk of the active mode's result buffer.
+
+        The firmware tracks an internal read cursor; call repeatedly until
+        the returned chunk is empty. Use standalone_clear_result() to
+        reset the cursor and discard the underlying buffer.
+
+        Returns tuple (total_size: int, chunk: bytes).
+        """
+        resp = self.device.send_cmd_sync(Command.STANDALONE_GET_RESULT, b'',
+                                         timeout=5)
+        if resp.status != Status.SUCCESS:
+            raise UnexpectedResponseError(
+                f"STANDALONE_GET_RESULT failed: status={resp.status}"
+            )
+        if len(resp.data) < 4:
+            return (0, b'')
+        total_size = struct.unpack('<I', resp.data[:4])[0]
+        chunk      = bytes(resp.data[4:])
+        return (total_size, chunk)
+
+    def standalone_drain_result(self) -> bytes:
+        """Loop GET_RESULT until the firmware returns an empty chunk.
+
+        The firmware advances an internal read cursor on each call and
+        sends 4 zero bytes (total=0, chunk empty) once all data has been
+        read.  Do NOT break on total_size == len(out) -- total_size only
+        reflects the current chunk size, not the full buffer size.
+        """
+        out = bytearray()
+        while True:
+            total_size, chunk = self.standalone_get_result()
+            if not chunk:
+                break
+            out.extend(chunk)
+        return bytes(out)
+
+    def standalone_clear_result(self):
+        """Discard the active mode's result buffer."""
+        return self.device.send_cmd_sync(Command.STANDALONE_CLEAR_RESULT, b'')
+
+    def standalone_trigger(self):
+        """Fire the active mode's primary action (equivalent to BOTH_SHORT).
+
+        If standalone is disarmed, this performs an implicit arm first.
+        Destructive modes still require HOST_OPTED_IN; otherwise returns
+        STATUS_PAR_ERR.
+        """
+        return self.device.send_cmd_sync(Command.STANDALONE_TRIGGER, b'',
+                                         timeout=10)
+
+    def standalone_disarm(self):
+        """Disarm the currently armed standalone mode, triggering on_exit
+        (saves result data to FDS)."""
+        return self.device.send_cmd_sync(Command.STANDALONE_DISARM, b'',
+                                         timeout=10)
+
+    def relay_get_diag(self) -> dict:
+        """Return relay diagnostic info: counters, BLE state, sub-state, UID."""
+        resp = self.device.send_cmd_sync(Command.STANDALONE_RELAY_DIAG, b'')
+        if resp.status != Status.SUCCESS or len(resp.data) < 8:
+            return {}
+        import struct
+        d = resp.data
+        result = {
+            'adv_reports':  struct.unpack_from('<I', d, 0)[0],
+            'relay_hits':   struct.unpack_from('<I', d, 4)[0],
+            'ble_state':    d[8]  if len(d) > 8  else 0,
+            'ble_role':     d[9]  if len(d) > 9  else 0,
+            'sub_state':    d[10] if len(d) > 10 else 0,
+            'card_found':   d[11] if len(d) > 11 else 0,
+            'identity_rx':  d[12] if len(d) > 12 else 0,
+            'uid_len':      d[13] if len(d) > 13 else 0,
+            'uid':          list(d[14:14+7]) if len(d) >= 21 else [],
+        }
+        return result
+
+    def relay_get_adv_reports(self) -> int:
+        return self.relay_get_diag().get('adv_reports', 0)
+
+    def relay_get_relay_hits(self) -> int:
+        return self.relay_get_diag().get('relay_hits', 0)
+
+    def standalone_get_sizes(self) -> list:
+        """Return stored byte count for each mode, indexed by mode_id.
+
+        Queries CMD 7007. Each element is bytes stored in the FDS result
+        record for that mode; 0 means no data stored.
+        """
+        resp = self.device.send_cmd_sync(Command.STANDALONE_GET_SIZES, b'')
+        if resp.status != Status.SUCCESS or not resp.data:
+            return []
+        n = len(resp.data) // 4
+        import struct
+        return [struct.unpack_from('<I', resp.data, i * 4)[0] for i in range(n)]
+
 
 
 def test_fn():

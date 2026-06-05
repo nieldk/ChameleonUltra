@@ -50,6 +50,7 @@ from chameleon_enum import (
     MfcValueBlockOperator,
 )
 from chameleon_enum import HIDFormat
+from chameleon_enum import StandaloneMode, StandaloneState, StandaloneFlag
 from crypto1 import Crypto1
 
 # NXP IDs based on https://www.nxp.com/docs/en/application-note/AN10833.pdf
@@ -867,6 +868,7 @@ lf_em = lf.subgroup("em", "EM commands")
 lf_em_4x05 = lf_em.subgroup("4x05", "EM4x05/EM4x69 commands")
 data = root.subgroup('data', 'Data analysis and visualization commands')
 emv = root.subgroup('emv', 'EMV contactless payment card commands')
+standalone = root.subgroup('standalone', 'Host-less standalone modes')
 
 
 lf_em_410x = lf_em.subgroup("410x", "EM410x commands")
@@ -1107,34 +1109,7 @@ class HWVersion(DeviceRequiredUnit):
         model = ["Ultra", "Lite"][self.cmd.get_device_model()]
         print(f" - Chameleon {model}, Version: {fw_version} ({git_version})")
 
-@hw.command("blver")
-class HWBootloaderVersion(DeviceRequiredUnit):
-    def args_parser(self) -> ArgumentParserNoExit:
-        parser = ArgumentParserNoExit()
-        parser.description = "Get bootloader version"
-        return parser
 
-    def on_exec(self, args: argparse.Namespace):
-        major, minor = self.cmd.get_bootloader_version()
-        print(f" - Bootloader Version: v{major}.{minor}")
-
-@hw.command("freemem")
-class HWFreeMemory(DeviceRequiredUnit):
-    def args_parser(self) -> ArgumentParserNoExit:
-        parser = ArgumentParserNoExit()
-        parser.description = "Get device heap memory usage"
-        return parser
-
-    def on_exec(self, args: argparse.Namespace):
-        mem = self.cmd.get_free_memory()
-        free  = mem['free']
-        total = mem['total']
-        used  = total - free
-        pct   = (used / total * 100.0) if total > 0 else 0.0
-        print(f" - Heap free  : {free:,} bytes")
-        print(f" - Heap used  : {used:,} bytes")
-        print(f" - Heap total : {total:,} bytes  ({pct:.1f}% used)")
-        
 @hf_14a.command("config")
 class HF14AConfig(DeviceRequiredUnit):
     class Config(Enum):
@@ -7027,90 +7002,18 @@ class HWDFU(DeviceRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
         parser.description = "Restart application to bootloader/DFU mode"
-        parser.add_argument(
-            "-m", "--mode",
-            type=str,
-            required=False,
-            default="cdc",
-            choices=["cdc", "uf2"],
-            help="DFU mode: cdc = USB CDC-ACM (nrfutil), uf2 = UF2 mass-storage (default: cdc)",
-            metavar="MODE",
-        )
         return parser
 
     def on_exec(self, args: argparse.Namespace):
-        if args.mode == "uf2":
-            print("Restarting into UF2 mass-storage mode...")
-            try:
-                self.cmd.enter_bootloader_uf2()
-            except chameleon_com.CMDInvalidException:
-                print(color_string((CR, " - UF2 bootloader not supported by current firmware")))
-                return
-        else:
-            print("Restarting into CDC-ACM DFU mode...")
-            self.cmd.enter_bootloader()
-        print(" - Reboot command sent, device disconnecting...")
-        time.sleep(0.1)
-
-@hw.command("uf2")
-class HWUF2(DeviceRequiredUnit):
-    def args_parser(self) -> ArgumentParserNoExit:
-        parser = ArgumentParserNoExit()
-        parser.description = (
-            "Restart into the bootloader in UF2 drag-and-drop mode. "
-            "A USB mass-storage drive labelled 'CHAMELEON' should mount; "
-            "drag a .uf2 onto it to flash. Requires the UF2 bootloader."
-        )
-        return parser
-
-    def on_exec(self, args: argparse.Namespace):
-        print("Rebooting into UF2 bootloader...")
-        self.cmd.enter_bootloader_uf2()
-        print(" - The CHAMELEON drive should appear momentarily.")
-        time.sleep(0.1)
-
-
-@hw.command("update_bl")
-class HWUpdateBL(DeviceRequiredUnit):
-    def args_parser(self) -> ArgumentParserNoExit:
-        parser = ArgumentParserNoExit()
-        parser.description = (
-            "Overwrite the device's bootloader region with a fresh copy "
-            "embedded in the application. One-shot operation; CDC will "
-            "drop when SoftDevice is disabled, then the device reboots "
-            "with the new bootloader. Power loss mid-write bricks the "
-            "device (recoverable only via SWD)."
-        )
-        parser.add_argument(
-            "--yes", "-y", action="store_true",
-            help="skip the interactive confirmation prompt",
-        )
-        return parser
-
-    def on_exec(self, args: argparse.Namespace):
-        if not args.yes:
-            print(color_string((CR,
-                "WARNING: this overwrites the bootloader region.")))
-            print("The USB connection will drop when SoftDevice goes down.")
-            print("Keep the device powered for several seconds after issuing.")
-            print("A power loss between erase and full write WILL brick the device.")
-            answer = input("Type 'yes' to proceed: ").strip().lower()
-            if answer != "yes":
-                print("Aborted.")
-                return
-        print("Issuing bootloader self-update...")
-        try:
-            self.cmd.update_bl()
-        except (chameleon_com.CMDInvalidException, TimeoutError):
-            # Expected — the device disables SoftDevice mid-handler and
-            # resets before any reply can be sent. The disconnect IS the
-            # success signal at the protocol level; visual confirmation
-            # comes from observing the new bootloader on reboot.
-            pass
-        print(" - Update issued. The device should reset within a second.")
-        print("   Replug and verify in DFU mode (cold-boot + hold B + plug).")
-        print("   Linux: 'sudo dmesg | tail -20' should show clean")
-        print("   usb-storage enumeration without descriptor warnings.")
+        print("Application restarting...")
+        self.cmd.enter_bootloader()
+        # In theory, after the above command is executed, the dfu mode will enter, and then the USB will restart,
+        # To judge whether to enter the USB successfully, we only need to judge whether the USB becomes the VID and PID
+        # of the DFU device.
+        # At the same time, we remember to confirm the information of the device,
+        # it is the same device when it is consistent.
+        print(" - Enter success @.@~")
+        # let time for comm thread to send dfu cmd and close port
         time.sleep(0.1)
 
 
@@ -8235,6 +8138,10 @@ def _decode_14a_frame_col(data: bytes, szBits: int):
             return 'WUPA', CG
         return f'short(0x{b0:02x})', CC
 
+    # Sub-byte noise frames (< 7 bits) — field activation artefacts
+    if szBits < 7:
+        return f'field noise ({szBits} bit)', CC
+
     # Anti-collision / Select
     if b0 == 0x93:
         if len(data) > 1 and data[1] == 0x70:
@@ -8275,9 +8182,9 @@ def _decode_14a_frame_col(data: bytes, szBits: int):
 
     # MIFARE Classic commands
     if b0 == 0x60:
-        return f'AUTH KeyA  block={data[1]}' if len(data) > 1 else 'AUTH KeyA', CR
+        return (f'AUTH KeyA  block=0x{data[1]:02X} ({data[1]})' if len(data) > 1 else 'AUTH KeyA'), CR
     if b0 == 0x61:
-        return f'AUTH KeyB  block={data[1]}' if len(data) > 1 else 'AUTH KeyB', CR
+        return (f'AUTH KeyB  block=0x{data[1]:02X} ({data[1]})' if len(data) > 1 else 'AUTH KeyB'), CR
     # Encrypted nonce / auth response (follows AUTH, first byte varies)
     if szBits == 72:
         return '(encrypted nonce — auth challenge/response)', CC
@@ -8416,6 +8323,18 @@ def _extract_sniff_nonces(frames):
             # bytes [2:6] = UID0..UID3; skip cascade byte 0x88 for multi-level UIDs
             if not (data[0] == 0x93 and data[2] == 0x88):
                 uid_hex = ''.join(f'{b:02X}' for b in data[2:6])
+
+        # Fallback: extract UID from anticollision response (card→reader, 40 bits).
+        # This fires when no SELECT frame is present (common in authtrace captures
+        # where hf14a_auth_trace_run synthesises the anticollision exchange).
+        if (is_tx
+                and szBits == 40
+                and len(data) == 5
+                and uid_hex is None):
+            # 5 bytes = UID[0..3] + BCC; verify BCC
+            bcc = data[0] ^ data[1] ^ data[2] ^ data[3]
+            if bcc == data[4]:
+                uid_hex = ''.join(f'{b:02X}' for b in data[0:4])
 
         # AUTH command: reader→card, 0x60 (KeyA) or 0x61 (KeyB)
         if not is_tx and data[0] in (0x60, 0x61) and len(data) >= 2:
@@ -10196,6 +10115,430 @@ _DESFIRE_PROTOCOL = {
 _DESFIRE_HW_MAJOR_TO_SW_MAJOR = {0x01: 1, 0x12: 2, 0x30: 3, 0x33: 3}
 
 
+# ---------------------------------------------------------------------------
+# hf des auth-trace — full host-side DESFire auth flow with on-wire frame
+# capture. Companion to `hf 14a auth-trace` (Crypto1/MFC) — for DESFire the
+# crypto is not time-sensitive so we drive the round-trip from the host using
+# hf14a_scan_keep + hf14a_raw and record every wire frame as we go.
+# ---------------------------------------------------------------------------
+
+def _crc14a(data: bytes) -> bytes:
+    """ISO 14443-A CRC-16 (CRC-A): poly 0x1021, reflected, init 0x6363.
+    Returns 2 bytes in transmission order (low byte first)."""
+    crc = 0x6363
+    for b in data:
+        b ^= crc & 0xFF
+        b = (b ^ (b << 4)) & 0xFF
+        crc = ((crc >> 8) ^ (b << 8) ^ (b << 3) ^ (b >> 4)) & 0xFFFF
+    return bytes([crc & 0xFF, (crc >> 8) & 0xFF])
+
+
+def _synth_14a_anticoll_frames(uid: bytes, atqa: bytes, sak: int, ats: bytes):
+    """
+    Reconstruct the on-wire anticoll/SELECT/SAK/RATS/ATS frame sequence from a
+    populated tag descriptor returned by hf14a_scan / hf14a_scan_keep. Returns
+    list of (szBits, data, is_tx, annot) tuples; is_tx=True means card→reader.
+
+    Mirrors firmware-side auth_trace_emit_anticoll() in app_cmd.c so the same
+    `_decode_14a_frame_col` decoder renders the prefix identically to the
+    firmware-captured MFC auth-trace.
+    """
+    frames = []
+    # REQA: 7-bit, reader→card
+    frames.append((7, bytes([0x26]), False, "REQA"))
+    # ATQA: 16-bit, card→reader (LSB-first on air — bytes already in air order)
+    frames.append((16, bytes(atqa), True, None))
+
+    cascade = 1 if len(uid) == 4 else (2 if len(uid) == 7 else 3)
+    cascade_sel = [0x93, 0x95, 0x97]
+    uid_pos = 0
+    for cl in range(cascade):
+        is_last = (cl == cascade - 1)
+        # Anticoll request: SEL 0x20 — 16 bits, reader→card
+        frames.append((16, bytes([cascade_sel[cl], 0x20]), False, None))
+        # Anticoll response: 4 UID bytes (CT+UID0..2 if cascading) + BCC — 40 bits
+        if is_last:
+            uid_seg = bytes(uid[uid_pos:uid_pos + 4])
+        else:
+            uid_seg = bytes([0x88]) + bytes(uid[uid_pos:uid_pos + 3])
+            uid_pos += 3
+        bcc = uid_seg[0] ^ uid_seg[1] ^ uid_seg[2] ^ uid_seg[3]
+        frames.append((40, uid_seg + bytes([bcc]), True, None))
+        # SELECT: SEL 0x70 || UID+BCC || CRC — 72 bits, reader→card
+        sel = bytes([cascade_sel[cl], 0x70]) + uid_seg + bytes([bcc])
+        sel_full = sel + _crc14a(sel)
+        frames.append((72, sel_full, False, None))
+        # SAK + CRC — 24 bits. Intermediate cascades return 0x04 (cascade bit);
+        # the captured `sak` is the final cascade's SAK only.
+        sak_byte = sak if is_last else 0x04
+        sak_full = bytes([sak_byte]) + _crc14a(bytes([sak_byte]))
+        frames.append((24, sak_full, True, None))
+
+    # RATS / ATS if the card answered RATS (ats_len > 0)
+    if ats:
+        # 0xE0 0x40 = RATS, FSDI=4 (FSD=48 bytes), CID=0
+        rats = bytes([0xE0, 0x40])
+        rats_full = rats + _crc14a(rats)
+        frames.append((32, rats_full, False, "RATS  FSDI=4 CID=0"))
+        ats_full = bytes(ats) + _crc14a(bytes(ats))
+        frames.append((len(ats_full) * 8, ats_full, True, f"ATS ({len(ats)} bytes payload)"))
+
+    return frames
+
+
+@hf_des.command("auth-trace")
+class HfDesAuthTrace(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.formatter_class = argparse.RawDescriptionHelpFormatter
+        parser.description = (
+            "Run a full DESFire authentication against a real card and print "
+            "every wire frame: REQA → ATQA → anticoll → SELECT → SAK → RATS → "
+            "ATS → (optional SELECT AID) → AUTHENTICATE → E(RndB) → "
+            "E(RndA||RndB') → E(RndA'), with host-side AES / 3DES / 3K3DES "
+            "decryption of the random nonces for verification.\n\n"
+            "Supports AuthenticateDES (0x0A, D40), AuthenticateAES (0xAA, "
+            "EV1+) and AuthenticateISO 3K3DES (0x1A). Requires the "
+            "'cryptography' Python package."
+        )
+        parser.add_argument("--keyno", type=int, default=0, metavar="<n>",
+                            help="DESFire key number (default 0 = master)")
+        parser.add_argument("-k", "--key", type=str, required=True, metavar="<hex>",
+                            help="Auth key in hex. 8 bytes = DES, 16 bytes = "
+                                 "AES or 2TDEA (use --type to disambiguate), "
+                                 "24 bytes = 3K3DES.")
+        parser.add_argument("--type", choices=["des", "aes", "3k3des"], default=None,
+                            help="Auth type. Auto-detected if omitted: 8=DES, "
+                                 "16=AES, 24=3K3DES.")
+        parser.add_argument("--aid", type=str, default=None, metavar="<hex>",
+                            help="Optional 3-byte AID to select before auth. "
+                                 "Pass in the same form `hf des info` displays "
+                                 "(e.g. --aid 808020 if info shows 'AID: 808020'). "
+                                 "Default: PICC level (no SelectApplication).")
+        parser.add_argument("-t", "--timeout", type=int, default=5000, metavar="<ms>",
+                            help="Tag-presence polling timeout in ms (default 5000). "
+                                 "Reader keeps the field on and polls for a card; "
+                                 "auth aborts if no card appears within this window.")
+        parser.epilog = """
+examples:
+  hf des auth-trace -k 00000000000000000000000000000000
+        # AES default key, PICC master
+  hf des auth-trace -k 0000000000000000 --type des
+        # legacy DES (D40)
+  hf des auth-trace --type 3k3des -k 000000000000000000000000000000000000000000000000
+        # 3K3DES (24-byte key)
+  hf des auth-trace --aid 010203 --keyno 1 -k <16-byte AES key>
+        # auth against key 1 of application 010203
+  hf des auth-trace -k 00000000000000000000000000000000 -t 15000
+        # wait up to 15s for a card to be placed on the antenna
+"""
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        # ---------- arg validation ------------------------------------------
+        key_hex = args.key.replace(" ", "")
+        if not re.fullmatch(r"[0-9a-fA-F]+", key_hex) or len(key_hex) % 2:
+            print(f"{CR}Key must be an even-length hex string{C0}")
+            return
+        key = bytes.fromhex(key_hex)
+
+        if args.type:
+            auth_type = args.type
+        elif len(key) == 8:
+            auth_type = "des"
+        elif len(key) == 16:
+            auth_type = "aes"      # default 16-byte interpretation
+        elif len(key) == 24:
+            auth_type = "3k3des"
+        else:
+            print(f"{CR}Key length {len(key)} invalid (need 8/16/24 bytes){C0}")
+            return
+
+        valid_lens = {"des": (8, 16), "aes": (16,), "3k3des": (24,)}
+        if len(key) not in valid_lens[auth_type]:
+            print(f"{CR}{auth_type.upper()} expects key length {valid_lens[auth_type]} "
+                  f"bytes, got {len(key)}{C0}")
+            return
+
+        aid_bytes = None
+        if args.aid:
+            aid_hex = args.aid.replace(" ", "")
+            if not re.fullmatch(r"[0-9a-fA-F]{6}", aid_hex):
+                print(f"{CR}AID must be 6 hex chars (3 bytes){C0}")
+                return
+            # AID is passed in the same wire-byte form `hf des info` displays
+            # — i.e. already in transmission order. No reversal needed.
+            aid_bytes = bytes.fromhex(aid_hex)
+
+        # ---------- crypto availability -------------------------------------
+        try:
+            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+            from cryptography.hazmat.backends import default_backend
+            import os as _os
+        except ImportError:
+            print(f"{CR}This command needs the 'cryptography' Python package.\n"
+                  f"  pip install cryptography{C0}")
+            return
+
+        # Cipher factory for the chosen auth type
+        def _cipher(iv: bytes, key_arg: bytes):
+            if auth_type == "aes":
+                return Cipher(algorithms.AES(key_arg), modes.CBC(iv), backend=default_backend())
+            elif auth_type == "des":
+                # D40: legacy DES uses 8-byte key, or 2TDEA with 16-byte key.
+                # 'cryptography' TripleDES accepts both 16-byte (k1+k2) and
+                # 24-byte forms; for 8-byte we triple by replication.
+                if len(key_arg) == 8:
+                    k = key_arg + key_arg + key_arg
+                elif len(key_arg) == 16:
+                    k = key_arg + key_arg[:8]
+                else:
+                    k = key_arg
+                return Cipher(algorithms.TripleDES(k), modes.CBC(iv), backend=default_backend())
+            elif auth_type == "3k3des":
+                return Cipher(algorithms.TripleDES(key_arg), modes.CBC(iv), backend=default_backend())
+            raise RuntimeError(f"Unsupported auth_type {auth_type}")
+
+        block_sz   = 16 if auth_type == "aes" else 8
+        rnd_len    = 16 if auth_type == "aes" else (16 if auth_type == "3k3des" else 8)
+        auth_cmd   = {"des": 0x0A, "aes": 0xAA, "3k3des": 0x1A}[auth_type]
+
+        # ---------- scan + keep field, poll until present or timeout ---------
+        print(f" Running DESFire {auth_type.upper()} auth-trace: "
+              f"keyno={args.keyno} key={key_hex.upper()}"
+              + (f" aid={aid_bytes.hex().upper()}" if aid_bytes else " (PICC)"))
+        timeout_ms = max(1, min(60000, int(args.timeout)))
+        print(f" Waiting up to {timeout_ms} ms for a 14443-4 tag... "
+              f"({CY}place CU on a card now{C0})")
+        print()
+        deadline = time.monotonic() + (timeout_ms / 1000.0)
+        tags = None
+        last_err = None
+        while time.monotonic() < deadline:
+            try:
+                tags = self.cmd.hf14a_scan_keep()
+                if tags:
+                    break
+            except UnexpectedResponseError as e:
+                last_err = e  # HF_TAG_NO etc. — keep polling
+            except Exception as e:
+                # Unexpected error (USB/BLE issue) — abort immediately
+                print(f"{CR}Scan aborted: {e}{C0}")
+                return
+            time.sleep(0.05)
+        if not tags:
+            msg = f": {last_err}" if last_err else ""
+            print(f"{CR}No 14443A tag detected within {timeout_ms} ms{msg}{C0}")
+            return
+        tag = tags[0]
+        uid, atqa, sak, ats = tag["uid"], tag["atqa"], tag["sak"][0], tag["ats"]
+        if not ats:
+            print(f"{CR}Tag did not respond to RATS — not a 14443-4 card (DESFire requires RATS){C0}")
+            return
+
+        # ---------- trace accumulator ---------------------------------------
+        # Each entry: (szBits, bytes, is_tx (True=card→reader), annot_or_None)
+        frames = _synth_14a_anticoll_frames(uid, atqa, sak, ats)
+        block_num = 0  # T=CL I-block sequence bit (PCB low bit)
+
+        def _exchange_iblock(payload: bytes, annot_tx: str, annot_rx_prefix: str) -> bytes:
+            """Send one T=CL I-block, return inner card payload (no PCB, no CRC).
+               Records the full wire frames (PCB + payload + CRC) in `frames`."""
+            nonlocal block_num
+            pcb = 0x02 | block_num
+            tx_inner = bytes([pcb]) + payload
+            tx_wire  = tx_inner + _crc14a(tx_inner)
+            options = {
+                'activate_rf_field':  0,
+                'wait_response':      1,
+                'append_crc':         0,    # we already appended
+                'auto_select':        0,
+                'keep_rf_field':      1,
+                'check_response_crc': 0,
+            }
+            rx_wire = self.cmd.hf14a_raw(options=options,
+                                         resp_timeout_ms=2000,
+                                         data=list(tx_wire))
+            frames.append((len(tx_wire) * 8, tx_wire, False, annot_tx))
+            if not rx_wire or len(rx_wire) < 3:
+                frames.append((0, b'', True, f"{CR}<no response>{C0}"))
+                raise RuntimeError(f"Empty response to I-block PCB=0x{pcb:02X} "
+                                   f"(got {len(rx_wire) if rx_wire else 0} bytes)")
+            rx_wire = bytes(rx_wire)
+            frames.append((len(rx_wire) * 8, rx_wire, True, annot_rx_prefix))
+            block_num ^= 1
+            # Strip PCB byte and 2-byte CRC; caller doesn't see T=CL framing
+            if (rx_wire[0] & 0xC0) != 0x00:
+                raise RuntimeError(f"Expected I-block, got PCB=0x{rx_wire[0]:02X}")
+            return rx_wire[1:-2]
+
+        # ---------- optional SelectApplication (AID) ------------------------
+        try:
+            if aid_bytes:
+                # ISO-wrapped SelectApplication: 90 5A 00 00 03 <aid_le> 00
+                sel_apdu = bytes([0x90, 0x5A, 0x00, 0x00, 0x03]) + aid_bytes + bytes([0x00])
+                resp = _exchange_iblock(
+                    sel_apdu,
+                    annot_tx=f"I-block: SelectApplication AID={aid_bytes.hex().upper()}",
+                    annot_rx_prefix=None,
+                )
+                # ISO response: [...payload...] 91 SW2
+                if len(resp) < 2 or resp[-2] != 0x91 or resp[-1] != 0x00:
+                    print(f"{CR}SelectApplication failed: response={resp.hex().upper()}{C0}")
+                    self._render_trace(frames, "select-failed", None)
+                    return
+                # Update last RX annotation
+                frames[-1] = (frames[-1][0], frames[-1][1], frames[-1][2],
+                              f"I-block resp: 91 00 (SelectApplication OK)")
+
+            # ---------- AUTHENTICATE round 1 --------------------------------
+            auth_apdu1 = bytes([0x90, auth_cmd, 0x00, 0x00, 0x01, args.keyno & 0xFF, 0x00])
+            cmdname = {"des": "AuthenticateDES (0x0A)",
+                       "aes": "AuthenticateAES (0xAA)",
+                       "3k3des": "AuthenticateISO 3K3DES (0x1A)"}[auth_type]
+            resp1 = _exchange_iblock(
+                auth_apdu1,
+                annot_tx=f"I-block: {cmdname} keyno={args.keyno}",
+                annot_rx_prefix=None,
+            )
+            if len(resp1) < 2 or resp1[-2] != 0x91 or resp1[-1] != 0xAF:
+                # 0x91 0xAE = authentication error; 0x91 0xAF = additional frame
+                sw = resp1[-2:].hex().upper() if len(resp1) >= 2 else "??"
+                print(f"{CR}Auth round 1 failed: SW={sw}, payload={resp1[:-2].hex().upper()}{C0}")
+                self._render_trace(frames, "auth-round-1-failed", None)
+                return
+            enc_rndb = resp1[:-2]
+            if len(enc_rndb) != rnd_len:
+                print(f"{CR}Expected {rnd_len}-byte E(RndB), got {len(enc_rndb)}{C0}")
+                self._render_trace(frames, "bad-rndb-length", None)
+                return
+            frames[-1] = (frames[-1][0], frames[-1][1], frames[-1][2],
+                          f"I-block resp: 91 AF + E(RndB) [{rnd_len} bytes]")
+
+            # Decrypt RndB (IV=0)
+            iv0 = bytes(block_sz)
+            dec = _cipher(iv0, key).decryptor()
+            rndb = dec.update(enc_rndb) + dec.finalize()
+
+            # Generate RndA, rotate RndB left by 1 byte, encrypt CBC IV=E(RndB)
+            rnda = _os.urandom(rnd_len)
+            rndb_rot = rndb[1:] + rndb[:1]
+            enc2 = _cipher(enc_rndb, key).encryptor()
+            enc_token = enc2.update(rnda + rndb_rot) + enc2.finalize()
+
+            # ---------- AUTHENTICATE round 2 --------------------------------
+            auth_apdu2 = bytes([0x90, 0xAF, 0x00, 0x00, len(enc_token)]) + enc_token + bytes([0x00])
+            resp2 = _exchange_iblock(
+                auth_apdu2,
+                annot_tx=f"I-block: 90 AF (continue) + E(RndA||RndB')",
+                annot_rx_prefix=None,
+            )
+            if len(resp2) < 2 or resp2[-2] != 0x91 or resp2[-1] != 0x00:
+                sw = resp2[-2:].hex().upper() if len(resp2) >= 2 else "??"
+                # Try to render the trace before giving up
+                frames[-1] = (frames[-1][0], frames[-1][1], frames[-1][2],
+                              f"I-block resp: SW={sw}  (auth rejected)")
+                print(f"{CR}Auth round 2 failed: SW={sw} — wrong key or replay{C0}")
+                self._render_trace(frames, "auth-rejected", None)
+                return
+            enc_rnda_card = resp2[:-2]
+            if len(enc_rnda_card) != rnd_len:
+                print(f"{CR}Expected {rnd_len}-byte E(RndA'), got {len(enc_rnda_card)}{C0}")
+                self._render_trace(frames, "bad-rnda-length", None)
+                return
+            frames[-1] = (frames[-1][0], frames[-1][1], frames[-1][2],
+                          f"I-block resp: 91 00 + E(RndA') [{rnd_len} bytes]")
+
+            # Decrypt + verify RndA' == rotL1(RndA)
+            iv3 = enc_token[-block_sz:]
+            dec3 = _cipher(iv3, key).decryptor()
+            rnda_card = dec3.update(enc_rnda_card) + dec3.finalize()
+            rnda_rot = rnda[1:] + rnda[:1]
+            verified = (rnda_card == rnda_rot)
+
+        except Exception as e:
+            print(f"{CR}Auth aborted: {e}{C0}")
+            self._render_trace(frames, "error", None)
+            return
+
+        # ---------- session key derivation (for the report) -----------------
+        # DESFire EV1 session keys: take parts of RndA + RndB depending on
+        # auth_type. This is just for the report — we don't use it further.
+        if auth_type == "des":
+            # D40: K_SES = RndA[0..3] || RndB[0..3] (8 bytes)
+            ses_key = rnda[:4] + rndb[:4]
+        elif auth_type == "aes":
+            # EV1 AES: K_SES = RndA[0..3] || RndB[0..3] || RndA[12..15] || RndB[12..15]
+            ses_key = rnda[:4] + rndb[:4] + rnda[12:16] + rndb[12:16]
+        elif auth_type == "3k3des":
+            # EV1 3K3DES: 24-byte key
+            ses_key = (rnda[:4]   + rndb[:4]   +
+                       rnda[6:10] + rndb[6:10] +
+                       rnda[12:16] + rndb[12:16])
+        else:
+            ses_key = b""
+
+        # ---------- render the trace ----------------------------------------
+        status_label = (f"{CG}auth verified ✓{C0}" if verified
+                        else f"{CR}auth FAILED — RndA' mismatch{C0}")
+        self._render_trace(frames, status_label, {
+            "auth_type": auth_type,
+            "uid":       uid,
+            "rndb":      rndb,
+            "enc_rndb":  enc_rndb,
+            "rnda":      rnda,
+            "rnda_card": rnda_card,
+            "rnda_rot":  rnda_rot,
+            "enc_token": enc_token,
+            "enc_rnda_card": enc_rnda_card,
+            "ses_key":   ses_key,
+            "verified":  verified,
+        })
+
+    @staticmethod
+    def _render_trace(frames, status_label, crypto_info):
+        rx_count = sum(1 for _, _, tx, _ in frames if tx)
+        tx_count = sum(1 for _, _, tx, _ in frames if not tx)
+        print(f" Captured : {CG}{len(frames)}{C0} frame(s)  "
+              f"({CY}{tx_count}{C0} reader→card  {CG}{rx_count}{C0} card→reader)  "
+              f"{status_label}")
+        print()
+        print(f"  {'#':>3}  {'dir':<3}  {'bits':>4}  {'hex data':<42}  decoded")
+        print(f"  {'---':>3}  {'---':<3}  {'----':>4}  {'-' * 42}  {'-' * 35}")
+
+        for n, (szBits, data, is_tx, annot) in enumerate(frames):
+            hex_str = ' '.join(f'{b:02x}' for b in data)
+            if len(hex_str) > 42:
+                hex_str = hex_str[:39] + "..."
+            if annot is not None:
+                decoded, col = annot, CG
+            else:
+                try:
+                    decoded, col = _decode_14a_frame_col(data, szBits)
+                except Exception:
+                    decoded, col = "(undecoded)", CC
+            dir_str = f'{CG}<<<{C0}' if is_tx else f'{CY}>>>{C0}'
+            print(f"  {CY}{n + 1:>3}{C0}  {dir_str}  {szBits:>4}  {hex_str:<42}  {col}{decoded}{C0}")
+
+        # Crypto info block
+        if crypto_info:
+            print()
+            print(f" {CC}Crypto analysis ({crypto_info['auth_type'].upper()}):{C0}")
+            print(f"   UID            : {crypto_info['uid'].hex().upper()}")
+            print(f"   E(RndB) [wire] : {crypto_info['enc_rndb'].hex().upper()}")
+            print(f"   RndB (decrypt) : {crypto_info['rndb'].hex().upper()}")
+            print(f"   RndA (reader)  : {crypto_info['rnda'].hex().upper()}")
+            print(f"   E(RndA||RndB') : {crypto_info['enc_token'].hex().upper()}")
+            print(f"   E(RndA') [wire]: {crypto_info['enc_rnda_card'].hex().upper()}")
+            print(f"   RndA' expected : {crypto_info['rnda_rot'].hex().upper()}  (= rotL1(RndA))")
+            mark = "✓ MATCH" if crypto_info['verified'] else "✗ MISMATCH"
+            colour = CG if crypto_info['verified'] else CR
+            print(f"   RndA' from card: {colour}{crypto_info['rnda_card'].hex().upper()}{C0}  {colour}{mark}{C0}")
+            if crypto_info['verified'] and crypto_info['ses_key']:
+                print(f"   Session key    : {CG}{crypto_info['ses_key'].hex().upper()}{C0}  "
+                      f"({len(crypto_info['ses_key'])} bytes)")
+
+
 @hf_des.command("info")
 class HfDesInfo(ReaderRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
@@ -10565,3 +10908,852 @@ class HfDesChk(ReaderRequiredUnit):
                 print(f"\n   {CG}{algo:8s}  AID {aid}  key#{kno}  {key_hex}{C0}")
         else:
             print(f"\n {CR}No keys found{C0}")
+
+# =============================================================================
+# Standalone (host-less) modes subsystem
+# =============================================================================
+
+
+# --- AuthTrace wire format ---------------------------------------------------
+# Result buffer is a stream of sessions:
+#   For each session:
+#     u8  session_num
+#     u8  status       (STATUS_HF_* from hf14a_auth_trace_run)
+#     u16 trace_len_le
+#     u8[trace_len] trace_bytes
+#
+# Inside trace_bytes, each frame is:
+#   u16 hdr_be        (bit 15 = direction: 1=card->reader, 0=reader->card,
+#                      bits 14..0 = frame length in BITS)
+#   u8[ceil(szBits/8)] frame_bytes
+# -----------------------------------------------------------------------------
+
+AUTHTRACE_STATUS_NAMES = {
+    0x00: "ok",
+    0x01: "no_tag",
+    0x02: "err_stat",
+    0x06: "auth_fail",
+    0x60: "par_err",
+    0x68: "success",
+}
+
+
+def _strip_parity(raw: bytes, sz_bits: int):
+    """Strip ISO14443-A parity bits (one per byte) from a frame.
+
+    Returns (stripped_bytes, data_bits).
+    Short frames (<8 bits) and frames whose bit count is not a multiple of 9
+    are returned as-is — they have no parity.
+    """
+    if sz_bits >= 8 and sz_bits % 9 == 0:
+        n_bytes = sz_bits // 9
+        all_bits = []
+        for byte in raw:
+            for b in range(8):
+                all_bits.append((byte >> b) & 1)
+        stripped = []
+        for nb in range(n_bytes):
+            val = 0
+            for b in range(8):
+                val |= all_bits[nb * 9 + b] << b
+            stripped.append(val)
+        return bytes(stripped), n_bytes * 8
+    return raw, sz_bits
+
+
+def parse_authtrace_frames(trace: bytes):
+    """Decode inner frame stream; strip parity; return list of (szBits, data, is_tx)."""
+    frames = []
+    off = 0
+    while off + 2 <= len(trace):
+        hdr      = (trace[off] << 8) | trace[off + 1]
+        is_tx    = bool(hdr & 0x8000)
+        sz_bits  = hdr & 0x7FFF
+        sz_bytes = (sz_bits + 7) // 8
+        off += 2
+        if off + sz_bytes > len(trace):
+            break
+        raw = trace[off:off + sz_bytes]
+        data, sz_bits = _strip_parity(raw, sz_bits)
+        frames.append((sz_bits, bytes(data), is_tx))
+        off += sz_bytes
+    return frames
+
+
+def parse_authtrace_buffer(raw: bytes):
+    """Walk the session stream; return list of session dicts."""
+    sessions = []
+    off = 0
+    while off + 4 <= len(raw):
+        session_num = raw[off]
+        status      = raw[off + 1]
+        trace_len   = raw[off + 2] | (raw[off + 3] << 8)
+        off += 4
+        if off + trace_len > len(raw):
+            break
+        trace_bytes = raw[off:off + trace_len]
+        off += trace_len
+        sessions.append({
+            "session_num": session_num,
+            "status_code": status,
+            "status_name": AUTHTRACE_STATUS_NAMES.get(status, f"0x{status:02x}"),
+            "trace_len":   trace_len,
+            "frames":      parse_authtrace_frames(trace_bytes),
+        })
+    return sessions
+
+
+def authtrace_summarise(sessions):
+    out = []
+    for s in sessions:
+        frames = s["frames"]
+        tx  = sum(1 for _, _, is_tx in frames if is_tx)
+        rx  = len(frames) - tx
+        nonces = _extract_sniff_nonces(frames)
+        nonce_info = f"  {CG}{len(nonces)} nonce pair(s){C0}" if nonces else ""
+        out.append(
+            f"  #{s['session_num']:<3} {s['status_name']:<10} "
+            f"{len(frames):>2} frames  ({rx} reader\u2192card, "
+            f"{tx} card\u2192reader){nonce_info}"
+        )
+    return "\n".join(out)
+
+
+def authtrace_pretty_dump(sessions):
+    """Full decoded per-frame dump matching hf 14a sniff/trace output style."""
+    out = []
+    for s in sessions:
+        frames = s["frames"]
+        tx_count = sum(1 for _, _, is_tx in frames if is_tx)
+        rx_count = len(frames) - tx_count
+        out.append(
+            f"\n{CG}=== session #{s['session_num']}  "
+            f"status={s['status_name']}  "
+            f"{len(frames)} frames  "
+            f"({rx_count} reader\u2192card  {tx_count} card\u2192reader) ==={C0}"
+        )
+        out.append(
+            f"  {'#':>3}  {'dir':<3}  {'bits':>4}  {'hex data':<42}  decoded"
+        )
+        out.append(
+            f"  {'---':>3}  {'---':<3}  {'----':>4}  {'-'*42}  {'-'*35}"
+        )
+        expect_nt     = False
+        expect_nr_ar  = False
+        expect_at     = False
+        last_keytype  = None
+        last_block    = None
+        for n, (sz_bits, data, is_tx) in enumerate(frames):
+            hex_str = ' '.join(f'{b:02x}' for b in data)
+            decoded_ctx = None
+            col_ctx     = None
+
+            if not is_tx and sz_bits == 32 and len(data) == 4 and data[0] in (0x60, 0x61):
+                last_keytype = 'A' if data[0] == 0x60 else 'B'
+                last_block   = data[1]
+                expect_nt    = True
+                expect_nr_ar = False
+                decoded_ctx  = f"MIFARE AUTH Key{last_keytype} block=0x{last_block:02X} ({last_block})"
+                col_ctx      = CG
+            elif is_tx and expect_nt and sz_bits == 32 and len(data) == 4:
+                decoded_ctx  = f"NT (card nonce) = {data.hex().upper()}"
+                col_ctx      = CG
+                expect_nt    = False
+                expect_nr_ar = True
+            elif not is_tx and expect_nr_ar and sz_bits == 64 and len(data) == 8:
+                nr = data[:4].hex().upper()
+                ar = data[4:].hex().upper()
+                decoded_ctx  = f"NR={nr}  AR={ar}  (mfkey32 input)"
+                col_ctx      = CG
+                expect_nr_ar = False
+                expect_at    = True
+
+            elif is_tx and expect_at and sz_bits == 32 and len(data) == 4:
+                decoded_ctx  = f"AT (auth ack, encrypted) = {data.hex().upper()}"
+                col_ctx      = CG
+                expect_at    = False
+
+            if decoded_ctx is None:
+                decoded, col = _decode_14a_frame_col(data, sz_bits)
+            else:
+                decoded, col = decoded_ctx, col_ctx
+
+            dir_str = f'{CG}<<<{C0}' if is_tx else f'{CY}>>>{C0}'
+            out.append(
+                f"  {CY}{n+1:>3}{C0}  {dir_str}  {sz_bits:>4}  "
+                f"{hex_str:<42}  {col}{decoded}{C0}"
+            )
+
+        # Nonce summary + mfkey32v2 invocations
+        nonces = _extract_sniff_nonces(frames)
+        if nonces:
+            out.append(f"\n  {CG}Auth nonces captured:{C0}")
+            pairs_by_key = {}
+            for nc in nonces:
+                k = (nc['uid'], nc['block'], nc['key_type'])
+                pairs_by_key.setdefault(k, []).append(nc)
+            for (uid, block, kt), pair_list in pairs_by_key.items():
+                out.append(
+                    f"    UID={uid}  block=0x{block:02X}  Key{kt}  "
+                    f"{len(pair_list)} pair(s)"
+                )
+                if len(pair_list) >= 2:
+                    n0, n1 = pair_list[0], pair_list[1]
+                    cmd = (
+                        f"mfkey32v2 {uid} "
+                        f"{n0['nt']} {n0['nr']} {n0['ar']} "
+                        f"{n1['nt']} {n1['nr']} {n1['ar']}"
+                    )
+                    out.append(f"    {CG}mfkey32v2: {cmd}{C0}")
+    return "\n".join(out)
+
+
+def parse_relay_result_buffer(raw: bytes) -> list:
+    """Parse a relay FDS result buffer into a list of session dicts.
+
+    Variable-length session records (16-byte header + trace):
+      [0]      role  (0=CARD, 1=READER)
+      [1]      status (0=OK, 1=TIMEOUT, 2=DISCONNECT)
+      [2]      uid_len
+      [3..6]   uid (4 bytes)
+      [7..8]   atqa
+      [9]      sak
+      [10..11] frame_count u16 LE
+      [12..13] trace_len u16 LE
+      [14..15] reserved
+      [16..]   trace frames (AuthTrace wire format: u16 hdr + raw bytes)
+    """
+    import struct
+    HEADER = 16
+    STATUS = {0: 'OK', 1: 'TIMEOUT', 2: 'DISCONNECT'}
+    sessions = []
+    off = 0
+    idx = 0
+    while off + HEADER <= len(raw):
+        h = raw[off:off + HEADER]
+        role        = h[0]
+        status      = h[1]
+        uid_len     = h[2]
+        uid         = raw[off+3:off+3+min(uid_len,4)].hex().upper() if uid_len else '-'
+        atqa        = raw[off+7:off+9].hex().upper()
+        sak         = f'{h[9]:02X}'
+        frame_count = struct.unpack_from('<H', h, 10)[0]
+        trace_len   = struct.unpack_from('<H', h, 12)[0]
+        protocol    = h[14]  # 0=HF, 1=LF
+
+        trace_off   = off + HEADER
+        trace_end   = trace_off + trace_len
+        if trace_end > len(raw):
+            break  # truncated
+
+        trace_bytes = raw[trace_off:trace_end]
+        frames      = parse_relay_frames(trace_bytes)
+
+        sessions.append({
+            'session_num':  idx,
+            'role':         'CARD' if role == 0 else 'READER',
+            'protocol':     'LF' if protocol == 1 else 'HF',
+            'uid_len':      uid_len,
+            'uid':          uid,
+            'atqa':         atqa if protocol == 0 else '-',
+            'sak':          sak  if protocol == 0 else '-',
+            'frame_count':  frame_count,
+            'trace_len':    trace_len,
+            'status':       status,
+            'status_name':  STATUS.get(status, f'UNKNOWN({status})'),
+            'frames':       frames,
+        })
+        off = trace_end
+        idx += 1
+    return sessions
+
+
+def parse_relay_frames(trace: bytes) -> list:
+    """Decode a raw trace buffer into frame dicts (same format as AuthTrace)."""
+    frames = []
+    off = 0
+    while off + 2 <= len(trace):
+        hdr       = (trace[off] << 8) | trace[off + 1]
+        tag_to_rd = bool(hdr & 0x8000)
+        bits      = hdr & 0x7FFF
+        byte_cnt  = (bits + 7) // 8
+        off += 2
+        if off + byte_cnt > len(trace):
+            break
+        raw = trace[off:off + byte_cnt]
+        decoded, col = _decode_14a_frame_col(raw, bits)
+        frames.append({
+            'dir':     'tag→reader' if tag_to_rd else 'reader→tag',
+            'bits':    bits,
+            'hex':     raw.hex().upper(),
+            'decoded': decoded,
+            'col':     col,
+        })
+        off += byte_cnt
+    return frames
+
+
+def relay_result_summary(sessions) -> str:
+    """Human-readable session table for --dump."""
+    if not sessions:
+        return color_string((CY, '  (no sessions)'))
+    lines = []
+    for s in sessions:
+        role_col = CG if s['role'] == 'CARD' else CC
+        st_col   = CG if s['status'] == 0 else CY
+        lines.append(
+            f"  {CY}#{s['session_num']}{C0}  "
+            f"{role_col}{s['role']:<6}{C0}  "
+            f"{CC}{s.get('protocol','HF')}{C0}  "
+            f"UID={s['uid']}  "
+            + (f"ATQA={s['atqa']} SAK={s['sak']}  " if s.get('protocol','HF') == 'HF' else "")
+            + f"frames={s['frame_count']}  "
+            f"{st_col}{s['status_name']}{C0}"
+        )
+        frames = s.get('frames', [])
+        if frames:
+            lines.append(f"    {'#':>3}  {'dir':<12} {'bits':>4}  {'hex':<44}  decoded")
+            lines.append(f"    {'---':>3}  {'---':<12} {'----':>4}  {'---':<44}  -------")
+            for i, f in enumerate(frames):
+                arrow = f"{CG}←{C0}" if f['dir'] == 'tag→reader' else f"{CC}→{C0}"
+                decoded_str = color_string((f['col'], f['decoded'])) if f.get('decoded') else ''
+                lines.append(
+                    f"    {i+1:>3}  {arrow} {f['dir']:<11} {f['bits']:>4}  "
+                    f"{f['hex']:<44}  {decoded_str}"
+                )
+    return '\n'.join(lines)
+
+
+# --- Commands ----------------------------------------------------------------
+
+@standalone.command('status')
+class StandaloneStatus(DeviceRequiredUnit):
+    """
+    Show the current standalone state, mode, and flags.
+
+    Usage:
+        standalone status
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Show standalone subsystem state'
+        return parser
+
+    def on_exec(self, args):
+        state, mode, flags, fds = self.cmd.standalone_get_mode()
+        state_col = CG if state != StandaloneState.DISARMED else CY
+        print(f" state: {color_string((state_col, state.name))}")
+        print(f"  mode: {color_string((CC, mode.name))}")
+        flag_str = ", ".join(f.name for f in StandaloneFlag
+                             if f != StandaloneFlag.NONE and (flags & f)) \
+                   or "(none)"
+        print(f" flags: {flag_str}")
+        if fds is not None:
+            used  = fds['words_used']
+            pages = fds['pages_available']
+            dirty = fds['dirty_records']
+            valid = fds['valid_records']
+            gc_hint = f"  {CY}(GC recommended){C0}" if dirty > 4 else ""
+            print(f" flash: {used} words used  {pages} pages free  "
+                  f"valid={valid} dirty={dirty}{gc_hint}")
+        if mode == StandaloneMode.RELAY:
+            try:
+                d = self.cmd.relay_get_diag()
+                if not d:
+                    pass
+                else:
+                    reports = d['adv_reports']
+                    hits    = d['relay_hits']
+                    state   = d.get('ble_state', 0)
+                    role    = d.get('ble_role', 0)
+                    state_names = {0:'IDLE',1:'STARTING',2:'CONNECTING',
+                                   3:'DISCOVERING',4:'NEGOTIATING',5:'READY',
+                                   6:'ACTIVE',7:'ERROR'}
+                    role_names  = {0:'RELAY_CARD (faces reader)',
+                                   1:'RELAY_READER (faces real card)'}
+                    sub        = d.get('sub_state', 0)
+                    card_found  = d.get('card_found', 0)
+                    identity_rx = d.get('identity_rx', 0)
+                    uid_len     = d.get('uid_len', 0)
+                    uid_bytes   = d.get('uid', [])
+                    uid_str = ''.join(f'{b:02X}' for b in uid_bytes[:uid_len]) if uid_len else '-'
+                    sub_names = {0:'INIT',1:'LINKING',2:'CARD_AWAIT_IDENTITY',
+                                 3:'CARD_READY',4:'CARD_AWAIT_RESPONSE',5:'READER_SCAN',
+                                 6:'READER_READY',7:'READER_RELAY',8:'ERROR'}
+                    state_str = state_names.get(state, f'UNKNOWN({state})')
+                    role_str  = role_names.get(role, f'UNKNOWN({role})')
+                    sub_str   = sub_names.get(sub, f'UNKNOWN({sub})')
+                    print(f"   ble: {reports} scan reports  {hits} relay hits")
+                    print(f"        state={CG if state==5 else CY}{state_str}{C0}  "
+                          f"role={CC}{role_str}{C0}")
+                    print(f"        sub={CG if sub in (3,6) else CY}{sub_str}{C0}")
+                    relay_armed = (state != StandaloneState.DISARMED)
+                    if relay_armed and reports == 0:
+                        print(f"        {CR}WARNING: scanning not working{C0}")
+                    elif relay_armed and hits == 0:
+                        print(f"        {CY}no relay HELLO seen yet{C0}")
+                    elif relay_armed and state < 5:
+                        print(f"        {CY}HELLO seen but not connected — check both CUs armed{C0}")
+                    else:
+                        if role == 0:   # RELAY_CARD
+                            if identity_rx:
+                                print(f"        {CG}card identity received  UID={uid_str}{C0}")
+                            else:
+                                print(f"        {CY}waiting for card identity from RELAY_READER{C0}")
+                        else:           # RELAY_READER
+                            if card_found:
+                                print(f"        {CG}real card found  UID={uid_str}{C0}")
+                            else:
+                                print(f"        {CY}scanning for real card — place card near CU{C0}")
+            except Exception:
+                pass
+
+
+@standalone.command('set-mode')
+class StandaloneSetMode(DeviceRequiredUnit):
+    """
+    Select the active standalone mode.
+
+    Examples:
+        standalone set-mode authtrace
+        standalone set-mode slot-cycle
+        standalone set-mode autoclone --opt-in
+        standalone set-mode disabled       (returns to normal button config)
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Set standalone mode'
+        parser.add_argument('mode', help='mode name (authtrace, emul-trace, relay, slot-cycle, '
+                                         'autoclone, read-replay, dict-check, '
+                                         'disabled)')
+        parser.add_argument('--opt-in', action='store_true',
+                            help='set HOST_OPTED_IN flag (required for '
+                                 'autoclone and read-replay)')
+        parser.add_argument('--quiet-buzzer', action='store_true')
+        parser.add_argument('--quiet-led',    action='store_true')
+        return parser
+
+    def on_exec(self, args):
+        try:
+            mode = StandaloneMode.from_name(args.mode)
+        except ValueError as e:
+            print(color_string((CR, str(e))))
+            return
+
+        flags = StandaloneFlag.NONE
+        if args.opt_in:        flags |= StandaloneFlag.HOST_OPTED_IN
+        if args.quiet_buzzer:  flags |= StandaloneFlag.BUZZER_QUIET
+        if args.quiet_led:     flags |= StandaloneFlag.LED_QUIET
+
+        result = self.cmd.standalone_set_mode(mode, flags)
+        if not isinstance(result, tuple):
+            if result.status == Status.PAR_ERR:
+                print(color_string((CR,
+                    f"refused: mode '{mode.name}' requires --opt-in")))
+            else:
+                print(color_string((CR,
+                    f"set-mode failed: status={result.status}")))
+            return
+
+        state, mode_now, flags_now = result
+        print(color_string((CG,
+            f"ok: state={state.name} mode={mode_now.name} "
+            f"flags={int(flags_now):#04x}")))
+
+
+@standalone.command('trigger')
+class StandaloneTrigger(DeviceRequiredUnit):
+    """
+    Fire the active mode's primary action (equivalent to pressing both
+    buttons briefly on the device).
+
+    For authtrace, this runs one scan session against whatever tag is in
+    the field right now.
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Trigger active standalone mode'
+        return parser
+
+    def on_exec(self, args):
+        resp = self.cmd.standalone_trigger()
+        if resp.status == Status.SUCCESS:
+            print(color_string((CG, "triggered")))
+        elif resp.status == Status.HF_TAG_NO:
+            print(color_string((CY, "no tag in field")))
+        elif resp.status == Status.DEVICE_MODE_ERROR:
+            print(color_string((CR, "mode not armed or invalid state")))
+        elif resp.status == Status.PAR_ERR:
+            print(color_string((CR, "refused (likely missing opt-in)")))
+        else:
+            print(color_string((CR, f"trigger failed: status={resp.status}")))
+
+
+@standalone.command('disarm')
+class StandaloneDisarm(DeviceRequiredUnit):
+    """
+    Disarm the active standalone mode via USB, triggering on_exit.
+
+    Equivalent to the both-button long chord on the device. Saves result
+    data to FDS so it can be retrieved with get-result.
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Disarm standalone mode and save results'
+        return parser
+
+    def on_exec(self, args):
+        try:
+            resp = self.cmd.standalone_disarm()
+            if resp.status == Status.SUCCESS:
+                print(color_string((CG, "disarmed — results saved")))
+            else:
+                print(color_string((CY, f"already disarmed or error: status={resp.status}")))
+        except Exception as e:
+            print(color_string((CR, f"disarm failed (old firmware?): {e}")))
+            print(color_string((CY, "Use the both-button chord on the device to disarm manually.")))
+
+
+@standalone.command('get-result')
+class StandaloneGetResult(DeviceRequiredUnit):
+    """
+    Pull the active mode's result buffer.
+
+    For authtrace, decodes session-tagged wire traces. Default output is
+    a one-line summary per session; --dump prints every captured frame
+    in Proxmark3 style; --json emits structured data; --raw dumps the
+    binary blob (use with -f to save for external decoders).
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Read standalone result buffer'
+        parser.add_argument('-f', '--file', default=None, metavar='<path>',
+                            help='write output to file instead of stdout')
+        group = parser.add_mutually_exclusive_group()
+        group.add_argument('--raw',  action='store_true',
+                           help='dump raw bytes (no parsing)')
+        group.add_argument('--json', action='store_true',
+                           help='emit parsed sessions as JSON')
+        group.add_argument('--dump', action='store_true',
+                           help='dump every frame in each session')
+        return parser
+
+    def on_exec(self, args):
+        import json as jsonlib
+        from pathlib import Path
+
+        _state, mode, _flags, _fds = self.cmd.standalone_get_mode()
+        raw = self.cmd.standalone_drain_result()
+        if not raw:
+            print(color_string((CY, "no result data")))
+            return
+
+        if args.raw or (args.file and not (args.json or args.dump)):
+            if args.file:
+                Path(args.file).write_bytes(raw)
+                print(color_string((CG, f"{len(raw)} bytes -> {args.file}")))
+            else:
+                print(color_string((CY,
+                    f"{len(raw)} raw bytes (use -f to save, or --json/--dump "
+                    f"to format)")))
+            return
+
+        if mode not in (StandaloneMode.AUTHTRACE, StandaloneMode.EMUL_TRACE,
+                        StandaloneMode.RELAY):
+            print(color_string((CY,
+                f"got {len(raw)} bytes; mode={mode.name} has no parser. "
+                f"use --raw -f <path> to dump.")))
+            return
+
+        if mode == StandaloneMode.RELAY:
+            sessions = parse_relay_result_buffer(raw)
+            print(color_string((CG, f"{len(sessions)} relay session(s)")))
+            if args.json:
+                import json as _json
+                # Strip display-only fields (col, decoded) from JSON output
+                def _clean(s):
+                    c = dict(s)
+                    c['frames'] = [
+                        {k: v for k, v in f.items() if k not in ('col', 'decoded')}
+                        for f in c.get('frames', [])
+                    ]
+                    return c
+                out = _json.dumps([_clean(s) for s in sessions], indent=2)
+                if args.file:
+                    Path(args.file).write_text(out)
+                    print(color_string((CG, f"-> {args.file}")))
+                else:
+                    print(out)
+            else:
+                print(relay_result_summary(sessions))
+            return
+
+        sessions = parse_authtrace_buffer(raw)
+        mode_label = mode.name.lower().replace('_', '-')
+        print(color_string((CG, f"{len(sessions)} {mode_label} session(s)")))
+
+        if args.json:
+            # Convert frames tuples to JSON-serializable dicts
+            json_sessions = []
+            for s in sessions:
+                json_sessions.append({
+                    "session_num": s["session_num"],
+                    "status_name": s["status_name"],
+                    "status_code": s["status_code"],
+                    "frames": [
+                        {"bits": bits, "data": data.hex(), "is_tx": is_tx}
+                        for bits, data, is_tx in s["frames"]
+                    ],
+                })
+            out = jsonlib.dumps(json_sessions, indent=2)
+            if args.file:
+                Path(args.file).write_text(out)
+                print(color_string((CG, f"-> {args.file}")))
+            else:
+                print(out)
+            return
+
+        if args.dump:
+            out = authtrace_pretty_dump(sessions)
+            if args.file:
+                Path(args.file).write_text(out + "\n")
+                print(color_string((CG, f"-> {args.file}")))
+            else:
+                print(out)
+            return
+
+        # default summary
+        print(authtrace_summarise(sessions))
+
+
+@standalone.command('ls')
+class StandaloneLs(DeviceRequiredUnit):
+    """
+    List stored result data for all standalone modes.
+
+    Shows which modes have data in flash and how many bytes are stored.
+
+    Usage:
+        standalone ls
+    """
+
+    MODE_NAMES = {
+        0: 'disabled',
+        1: 'autoclone',
+        2: 'read_replay',
+        3: 'authtrace',
+        4: 'slot_cycle',
+        5: 'dict_check',
+        6: 'emul_trace',
+        7: 'relay',
+    }
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'List stored standalone result data'
+        return parser
+
+    def on_exec(self, args):
+        sizes = self.cmd.standalone_get_sizes()
+        if not sizes:
+            print(color_string((CR, "failed to read sizes from device")))
+            return
+
+        has_data = [(i, sz) for i, sz in enumerate(sizes) if sz > 0]
+        if not has_data:
+            print(color_string((CY, "no stored result data on device")))
+            return
+
+        print(f"  {'mode':<14}  {'stored':>8}  {'est. sessions':>14}")
+        print(f"  {'-'*14}  {'-'*8}  {'-'*14}")
+        for mode_id, sz in enumerate(sizes):
+            if sz == 0:
+                continue
+            name = self.MODE_NAMES.get(mode_id, f"mode_{mode_id}")
+            # Rough session estimate: minimum session = 4 hdr + 20 trace = 24 bytes
+            est = f"~{max(1, sz // 64)}" if sz > 0 else "-"
+            print(f"  {CG}{name:<14}{C0}  {sz:>7}B  {est:>14}")
+
+
+@standalone.command('clear-result')
+class StandaloneClearResult(DeviceRequiredUnit):
+    """Discard the active mode's result buffer."""
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Clear standalone result buffer'
+        return parser
+
+    def on_exec(self, args):
+        resp = self.cmd.standalone_clear_result()
+        if resp.status == Status.SUCCESS:
+            print(color_string((CG, "cleared")))
+        else:
+            print(color_string((CR, f"clear failed: status={resp.status}")))
+
+
+@standalone.command('config')
+class StandaloneConfig(DeviceRequiredUnit):
+    """
+    View or set the per-mode config blob.
+
+    AuthTrace config format (16 bytes):
+        u8  version=1
+        u8  type        (0x60=KEY_A, 0x61=KEY_B)
+        u8  block       (target block number)
+        u8  reserved0
+        u16 timeout_ms  (100..30000)
+        u8  key[6]      (candidate sector key)
+        u8  reserved1[4]
+
+    Examples:
+        standalone config authtrace                       (read current)
+        standalone config authtrace --block 4 --key-type A
+        standalone config authtrace --key FFFFFFFFFFFF --timeout 5000
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Read or write mode-specific config'
+        parser.add_argument('mode', help='target mode name')
+        parser.add_argument('--block',    type=int, default=None,
+                            help='[authtrace] target block (0-255)')
+        parser.add_argument('--key-type', choices=['A', 'B'], default=None,
+                            help='[authtrace] MIFARE key type')
+        parser.add_argument('--key',      default=None,
+                            help='[authtrace] 12-hex-char sector key '
+                                 '(e.g. FFFFFFFFFFFF)')
+        parser.add_argument('--timeout',  type=int, default=None,
+                            help='[authtrace] tag-poll timeout in ms '
+                                 '(100-30000)')
+        return parser
+
+    def on_exec(self, args):
+        try:
+            mode = StandaloneMode.from_name(args.mode)
+        except ValueError as e:
+            print(color_string((CR, str(e))))
+            return
+
+        any_setter = any(v is not None for v in
+                         (args.block, args.key_type, args.key, args.timeout))
+
+        if mode == StandaloneMode.RELAY:
+            if any(v is not None for v in (args.block, args.key_type, args.key)):
+                print(color_string((CR,
+                    "relay config does not use --block/--key-type/--key")))
+                return
+            if args.timeout is not None:
+                # --timeout reused as WTX ms for relay mode
+                wtx_ms = int(args.timeout)
+                if wtx_ms < 500 or wtx_ms > 10000:
+                    print(color_string((CR,
+                        "relay --wtx must be 500-10000 ms")))
+                    return
+                cfg_hex = '{:02X}{:02X}{:02X}{:02X}'.format(
+                    wtx_ms & 0xFF, (wtx_ms >> 8) & 0xFF,
+                    (wtx_ms >> 16) & 0xFF, (wtx_ms >> 24) & 0xFF)
+                resp = self.cmd.standalone_set_config(
+                    StandaloneMode.RELAY.value, cfg_hex)
+                if resp.status == Status.SUCCESS:
+                    print(color_string((CG,
+                        f"relay WTX set to {wtx_ms} ms")))
+                return
+            # No setter args — read and display current config
+            raw = self.cmd.standalone_get_config(StandaloneMode.RELAY.value)
+            if raw and len(raw) >= 4:
+                wtx_ms = raw[0] | (raw[1] << 8) | (raw[2] << 16) | (raw[3] << 24)
+            else:
+                wtx_ms = 2000  # firmware default
+            print(color_string((CG, f"relay config:")))
+            print(f"  wtx  {wtx_ms} ms  (time to request from reader via WTX "
+                  f"while BLE round-trip completes)"
+                  + (color_string((CY, "  [default]")) if not raw or len(raw) < 4 else ""))
+            print(f"  link auto-pair nearest available CU in relay mode")
+            print(f"  role lower MAC = RELAY_CARD (reader side), "
+                  f"higher MAC = RELAY_READER (card side)")
+            print(color_string((CY, "Ultra only. Arm both units with both-button chord.")))
+            return
+
+        if mode == StandaloneMode.EMUL_TRACE:
+            print(color_string((CY,
+                "emul_trace has no config — it uses the active emulation slot as-is.\n"
+                "Set up your slot normally, then arm the mode.")))
+            return
+
+        if not any_setter:
+            blob = self.cmd.standalone_get_config(mode)
+            if not blob:
+                print(color_string((CY, f"no persisted config for {mode.name}")))
+                return
+            if mode == StandaloneMode.AUTHTRACE and len(blob) >= 16:
+                ver, typ, block, _r0, timeout = struct.unpack(
+                    '<BBBBH', blob[:6])
+                key = blob[6:12].hex()
+                kname = {0x60: 'A', 0x61: 'B'}.get(typ, f'?(0x{typ:02x})')
+                print(f"  version:  {ver}")
+                print(f"  type:     {kname} (0x{typ:02x})")
+                print(f"  block:    {block}")
+                print(f"  timeout:  {timeout} ms")
+                print(f"  key:      {key}")
+            else:
+                print(f"  raw ({len(blob)} bytes): {blob.hex()}")
+            return
+
+        if mode != StandaloneMode.AUTHTRACE:
+            print(color_string((CR,
+                f"config writes only implemented for authtrace; "
+                f"raw set-config required for {mode.name}")))
+            return
+
+        existing = self.cmd.standalone_get_config(mode)
+        if len(existing) >= 16:
+            ver     = existing[0]
+            typ     = existing[1]
+            block   = existing[2]
+            timeout = existing[4] | (existing[5] << 8)
+            key     = bytes(existing[6:12])
+        else:
+            ver, typ, block, timeout = 1, 0x60, 4, 3000
+            key = b'\xff' * 6
+
+        if args.block    is not None: block   = args.block
+        if args.timeout  is not None: timeout = args.timeout
+        if args.key_type is not None:
+            typ = 0x60 if args.key_type == 'A' else 0x61
+        if args.key is not None:
+            try:
+                key = bytes.fromhex(args.key)
+            except ValueError:
+                print(color_string((CR, "key must be hex")))
+                return
+            if len(key) != 6:
+                print(color_string((CR,
+                    f"key must be 6 bytes; got {len(key)}")))
+                return
+
+        if not (100 <= timeout <= 30000):
+            print(color_string((CR, "timeout must be 100..30000 ms")))
+            return
+        if not (0 <= block <= 255):
+            print(color_string((CR, "block must be 0..255")))
+            return
+
+        cfg = struct.pack('<BBBBH', ver, typ, block, 0, timeout) \
+              + key + b'\x00' * 4
+        assert len(cfg) == 16
+
+        resp = self.cmd.standalone_set_config(mode, cfg)
+        if resp.status == Status.SUCCESS:
+            kname = {0x60: 'A', 0x61: 'B'}[typ]
+            print(color_string((CG,
+                f"ok: type={kname} block={block} timeout={timeout}ms "
+                f"key={key.hex()}")))
+        else:
+            print(color_string((CR,
+                f"set-config failed: status={resp.status}")))
