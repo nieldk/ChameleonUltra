@@ -168,27 +168,29 @@ void uf2_dfu_complete(void)
 
 /* ---- USBD wiring ----
  *
- * MSC must be in the class list before app_usbd_init() is called, because
- * app_usbd_class_append() fails once the stack is running (APP_USBD_POWER_READY
- * has fired and app_usbd_start() has been called by nrf_dfu_serial_usb.c).
- *
- * APP_USBD_MSC_GLOBAL_DEF places the MSC instance in the .usbd_class_inst linker
- * section. app_usbd_init() walks that section and registers every instance it
- * finds — so MSC is enumerated automatically as interface 2 alongside CDC
- * interfaces 0+1, without any runtime class_append() call.
- *
- * uf2_transport_init() therefore has nothing USBD-related to do: CDC owns the
- * stack lifecycle entirely.
+ * nrf_dfu_serial_usb.c owns the USBD stack lifecycle. It calls the weak
+ * usb_dfu_transport_class_register() hook after app_usbd_init() but before
+ * app_usbd_power_events_enable() — the only safe window to append a class.
+ * We implement that hook here to register MSC as interface 2.
  * ----------------------- */
+
+void usb_dfu_transport_class_register(void)
+{
+    ret_code_t err = app_usbd_class_append(app_usbd_msc_class_inst_get(&m_app_msc));
+    if (err != NRF_SUCCESS) {
+        NRF_LOG_ERROR("MSC class append failed: 0x%08x", err);
+    } else {
+        NRF_LOG_INFO("MSC class registered as interface 2.");
+    }
+}
 
 uint32_t uf2_transport_init(nrf_dfu_observer_t observer)
 {
     m_observer = observer;
     uf2_ghostfat_init();
 
-    /* USBD stack is owned by nrf_dfu_serial_usb.c. MSC was registered
-     * statically via APP_USBD_MSC_GLOBAL_DEF and will be enumerated as
-     * interface 2 alongside CDC interfaces 0+1. Nothing to do here. */
+    /* USBD stack and MSC registration are handled via the weak hook above.
+     * CDC (nrf_dfu_serial_usb.c) owns the stack lifecycle. */
     NRF_LOG_INFO("UF2 transport ready. Mount the CHAMELEON drive and drop a .uf2.");
     return NRF_SUCCESS;
 }
