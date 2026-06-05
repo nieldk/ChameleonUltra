@@ -217,17 +217,12 @@ int main(void) {
     }
     init_leds();
 
-    // Must happen before flash protection is applied, since it edits a protected page.
-    bl_staged_apply_if_present();
     nrf_bootloader_mbr_addrs_populate();
 
-    /* Check for staged bootloader update written by bl_updater.
-    * Must run BEFORE nrf_bootloader_flash_protect() sets ACL. */
-    bl_updater_apply_staged_update();
-
     // ACL flash protection removed for open-source development.
-    // Without this, the bootloader region can be updated directly via
-    // bl_updater_run() without needing SWD or the staged update path.
+    // The staged update path (bl_staged_apply_if_present / bl_updater_apply_staged_update)
+    // is also removed — it existed solely to bypass ACL. With ACL gone,
+    // bl_updater_run() works directly from the application without staging.
     
     (void) NRF_LOG_INIT(nrf_bootloader_dfu_timer_counter_get);
     NRF_LOG_DEFAULT_BACKENDS_INIT();
