@@ -149,9 +149,9 @@ void flash_led(void *p_event_data, uint16_t event_size) {
         (void)app_usbd_cdc_acm_write(uf2_get_debug_cdc(),
                                      (const uint8_t *)msg,
                                      sizeof(msg) - 1);
+        NRF_LOG_INFO("BL heartbeat tick=%u", (unsigned)tick);
     }
-
-    NRF_LOG_PROCESS();
+    NRF_LOG_FLUSH();
 }
 
 /**
