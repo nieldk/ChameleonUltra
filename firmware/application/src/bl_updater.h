@@ -18,14 +18,14 @@
  * above the largest application binary (~0x6C000).
  *
  * Layout:
- *   0xE3000  BL_STAGED_MAGIC  (4 bytes)  = 0xBEEFCAFE
- *   0xE3004  BL size          (4 bytes)
- *   0xE3008  BL binary data   (up to 64KB, ends ~0xEEFFF)
+ *   0xDF000  BL_STAGED_MAGIC  (4 bytes)  = 0xBEEFCAFE
+ *   0xDF004  BL size          (4 bytes)
+ *   0xDF008  BL binary data   (up to 80KB, ends ~0xEAFFF)
  *
- * 12 pages (0xE3000–0xEEFFF) are reserved.  Keep in sync with the
+ * 12 pages (0xDF000–0xEAFFF) are reserved.  Keep in sync with the
  * matching constants in bootloader/src/main.c.
  * ----------------------------------------------------------------------- */
-#define BL_STAGED_BASE       0x000E3000UL
+#define BL_STAGED_BASE       0x000DF000UL
 #define BL_STAGED_MAGIC_ADDR (BL_STAGED_BASE + 0u)
 #define BL_STAGED_SIZE_ADDR  (BL_STAGED_BASE + 4u)
 #define BL_STAGED_DATA_ADDR  (BL_STAGED_BASE + 8u)

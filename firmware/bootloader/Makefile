@@ -69,6 +69,8 @@ SRC_FILES += \
   $(SDK_ROOT)/components/libraries/bootloader/dfu/nrf_dfu_settings_svci.c \
   $(SDK_ROOT)/components/libraries/usbd/class/msc/app_usbd_msc.c \
   $(SDK_ROOT)/components/libraries/bootloader/serial_dfu/nrf_dfu_serial.c \
+  $(SDK_ROOT)/components/libraries/log/src/nrf_log_backend_serial.c \
+  $(PROJ_DIR)/nrf_log_backend_cdc.c \
   $(SDK_ROOT)/components/libraries/bootloader/serial_dfu/nrf_dfu_serial_usb.c \
   $(PROJ_DIR)/nrf_dfu_uf2.c \
   $(PROJ_DIR)/uf2_ghostfat.c \
@@ -194,6 +196,8 @@ OPT = -Os -g3
 # C flags common to all targets
 CFLAGS += $(OPT)
 CFLAGS += -DBLE_STACK_SUPPORT_REQD
+CFLAGS += -DNRF_LOG_ENABLED=1
+CFLAGS += -DNRF_LOG_DEFAULT_LEVEL=4
 # CFLAGS += -DCONFIG_GPIO_AS_PINRESET
 CFLAGS += -DFLOAT_ABI_HARD
 CFLAGS += -DNRF52840_XXAA

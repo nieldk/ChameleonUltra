@@ -1,9 +1,10 @@
 /*
  * nrf_dfu_uf2.c — Nordic SDK DFU transport for UF2 drag-and-drop updates.
  *
- * Coexists with nrf_dfu_serial_usb.c (CDC) by piggy-backing on whichever
- * transport initialises the USBD stack first. The MSC interface gets
- * appended as a second USB class, producing a composite CDC + MSC device.
+ * Composite USB device: CDC ACM (DFU serial) + MSC (UF2) + CDC ACM (debug log).
+ *   Interface 0+1  EP1/EP2  — CDC ACM DFU serial (nrf_dfu_serial_usb.c)
+ *   Interface 2    EP3      — MSC UF2 drag-and-drop
+ *   Interface 3+4  EP4/EP5  — CDC ACM debug log output (TX only)
  *
  * Writes to flash from the bootloader context are safe because the
  * bootloader is not executing from the app region. We bypass
@@ -14,8 +15,8 @@
  * Memory layout:
  *     0x00000 - 0x01000   MBR
  *     0x01000 - 0x27000   SoftDevice S140
- *     0x27000 - 0xEF000   Application      <— UF2 writes go here
- *     0xEF000 - 0xFE000   Bootloader       <— do not write
+ *     0x27000 - 0xEB000   Application      <— UF2 writes go here
+ *     0xEB000 - 0xFE000   Bootloader       <— do not write
  *     0xFE000 - 0xFF000   MBR params
  *     0xFF000 - 0x100000  Bootloader settings
  *
@@ -33,11 +34,14 @@
 #include "app_usbd.h"
 #include "app_usbd_core.h"
 #include "app_usbd_msc.h"
+#include "app_usbd_cdc_acm.h"
 #include "app_usbd_string_desc.h"
 #include "app_usbd_serial_num.h"
 #include "app_scheduler.h"
 #include "nrf_drv_clock.h"
 #include "nrf_drv_power.h"
+#include "nrf_log_backend_cdc.h"
+#include "nrf_log_ctrl.h"
 
 #define NRF_LOG_MODULE_NAME nrf_dfu_uf2
 #include "nrf_log.h"
@@ -48,13 +52,21 @@ NRF_LOG_MODULE_REGISTER();
 #include "uf2_blockdev.h"
 
 /* ---- Endpoint plan ----
- * Composite CDC + MSC device. CDC (nrf_dfu_serial_usb.c) owns interfaces
- * 0+1 and EP1/EP2. MSC gets interface 2 and EP3 to avoid conflicts.
+ * Composite CDC(DFU) + MSC(UF2) + CDC(debug) device:
+ *   CDC DFU  : interfaces 0+1, EP1/EP2  — owned by nrf_dfu_serial_usb.c
+ *   MSC      : interface  2,   EP3      — UF2 drag-and-drop
+ *   CDC debug: interfaces 3+4, EP4/EP5  — TX-only log output
  * ----------------------- */
 #define MSC_INTERFACE        2
 #define MSC_EPIN             NRF_DRV_USBD_EPIN3
 #define MSC_EPOUT            NRF_DRV_USBD_EPOUT3
 #define MSC_WORKBUFFER_SIZE  512
+
+#define DBG_CDC_COMM_INTERFACE   3
+#define DBG_CDC_COMM_EPIN        NRF_DRV_USBD_EPIN5
+#define DBG_CDC_DATA_INTERFACE   4
+#define DBG_CDC_DATA_EPIN        NRF_DRV_USBD_EPIN4
+#define DBG_CDC_DATA_EPOUT       NRF_DRV_USBD_EPOUT4
 
 static nrf_dfu_observer_t m_observer;
 
@@ -86,6 +98,36 @@ APP_USBD_MSC_GLOBAL_DEF(m_app_msc,
                         (MSC_EPIN, MSC_EPOUT),
                         (&uf2_blockdev),
                         MSC_WORKBUFFER_SIZE);
+
+/* ---- Debug CDC ACM (TX only, log output) ---- */
+
+static void debug_cdc_user_ev_handler(app_usbd_class_inst_t const *p_inst,
+                                      app_usbd_cdc_acm_user_event_t event)
+{
+    switch (event)
+    {
+        case APP_USBD_CDC_ACM_USER_EVT_PORT_OPEN:
+            nrf_log_backend_cdc_port_opened();
+            break;
+        case APP_USBD_CDC_ACM_USER_EVT_PORT_CLOSE:
+            nrf_log_backend_cdc_port_closed();
+            break;
+        default:
+            break;
+    }
+}
+
+APP_USBD_CDC_ACM_GLOBAL_DEF(m_app_cdc_debug,
+                            debug_cdc_user_ev_handler,
+                            DBG_CDC_COMM_INTERFACE,
+                            DBG_CDC_DATA_INTERFACE,
+                            DBG_CDC_COMM_EPIN,
+                            DBG_CDC_DATA_EPIN,
+                            DBG_CDC_DATA_EPOUT,
+                            APP_USBD_CDC_COMM_PROTOCOL_NONE);
+
+/* Log backend instance — registered with NRF_LOG at init time. */
+NRF_LOG_BACKEND_DEF(m_cdc_log_backend, nrf_log_backend_cdc_api, NULL);
 
 /* ---- ghostfat -> flash glue ---- */
 
@@ -174,14 +216,45 @@ void uf2_dfu_complete(void)
  * We implement that hook here to register MSC as interface 2.
  * ----------------------- */
 
+static int32_t m_backend_id = -99;
+
 void usb_dfu_transport_class_register(void)
 {
-    ret_code_t err = app_usbd_class_append(app_usbd_msc_class_inst_get(&m_app_msc));
+    ret_code_t err;
+
+    err = app_usbd_class_append(app_usbd_msc_class_inst_get(&m_app_msc));
     if (err != NRF_SUCCESS) {
         NRF_LOG_ERROR("MSC class append failed: 0x%08x", err);
     } else {
         NRF_LOG_INFO("MSC class registered as interface 2.");
     }
+
+    err = app_usbd_class_append(app_usbd_cdc_acm_class_inst_get(&m_app_cdc_debug));
+    if (err != NRF_SUCCESS) {
+        NRF_LOG_ERROR("Debug CDC class append failed: 0x%08x", err);
+    } else {
+        NRF_LOG_INFO("Debug CDC registered as interfaces 3+4.");
+    }
+
+    /* Register and enable the CDC log backend. */
+    nrf_log_backend_cdc_init();
+    m_backend_id = nrf_log_backend_add(&m_cdc_log_backend, NRF_LOG_SEVERITY_DEBUG);
+    if (m_backend_id >= 0) {
+        nrf_log_backend_enable(&m_cdc_log_backend);
+    }
+}
+
+/* Accessor for the debug CDC instance — used by main.c for direct writes.
+ * Needed because APP_USBD_CDC_ACM_GLOBAL_DEF uses static storage, so the
+ * instance cannot be extern'd directly across translation units. */
+app_usbd_cdc_acm_t const *uf2_get_debug_cdc(void)
+{
+    return &m_app_cdc_debug;
+}
+
+int32_t uf2_get_backend_id(void)
+{
+    return m_backend_id;
 }
 
 uint32_t uf2_transport_init(nrf_dfu_observer_t observer)

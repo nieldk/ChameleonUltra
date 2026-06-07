@@ -356,6 +356,15 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
     $(PROJ_DIR)/rfid/reader/lf/lf_pac_data.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_ioprox_data.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_viking_data.c \
+  $(PROJ_DIR)/app_standalone.c \
+  $(PROJ_DIR)/app_cmd_standalone.c \
+  $(PROJ_DIR)/standalone_led.c \
+  $(PROJ_DIR)/standalone_modes/mode_authtrace.c \
+  $(PROJ_DIR)/standalone_modes/mode_slot_cycle.c \
+  $(PROJ_DIR)/standalone_modes/mode_emultrace.c \
+  $(PROJ_DIR)/standalone_modes/mode_relay.c \
+  $(PROJ_DIR)/ble_relay.c \
+  $(PROJ_DIR)/rfid/nfctag/hf/nfc_relay_tag.c \
 
   INC_FOLDERS +=\
     ${PROJ_DIR}/rfid/reader/ \

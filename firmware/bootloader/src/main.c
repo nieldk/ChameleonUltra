@@ -54,7 +54,7 @@
 #include "nrf_dfu.h"
 #include "nrf_log.h"
 #include "nrf_log_ctrl.h"
-#include "nrf_log_default_backends.h"
+// nrf_log_default_backends.h removed — using custom CDC ACM log backend instead.
 #include "app_error.h"
 #include "app_error_weak.h"
 #include "nrf_bootloader_info.h"
@@ -63,6 +63,11 @@
 #include "nrfx_systick.h"
 #include "nrf_gpio.h"
 #include "hw_connect.h"
+#include "app_usbd_cdc_acm.h"
+
+/* Access debug CDC via getter — direct extern doesn't work because
+ * APP_USBD_CDC_ACM_GLOBAL_DEF uses static storage. */
+extern app_usbd_cdc_acm_t const *uf2_get_debug_cdc(void);
 
 
 static void on_error(void) {
@@ -136,6 +141,17 @@ void flash_led(void *p_event_data, uint16_t event_size) {
 
     // restart led flash task.
     app_sched_event_put(NULL, 0, flash_led);
+
+    static uint32_t tick = 0;
+    tick++;
+    if ((tick % 10) == 0) {
+        static const char msg[] = "BL tick\r\n";
+        (void)app_usbd_cdc_acm_write(uf2_get_debug_cdc(),
+                                     (const uint8_t *)msg,
+                                     sizeof(msg) - 1);
+    }
+
+    NRF_LOG_PROCESS();
 }
 
 /**
@@ -224,8 +240,13 @@ int main(void) {
     // is also removed — it existed solely to bypass ACL. With ACL gone,
     // bl_updater_run() works directly from the application without staging.
     
-    (void) NRF_LOG_INIT(nrf_bootloader_dfu_timer_counter_get);
-    NRF_LOG_DEFAULT_BACKENDS_INIT();
+    // Custom CDC log backend — do NOT call NRF_LOG_INIT (which would call
+    // nrf_log_default_backends_init and pull in RTT/UART backends we don't want).
+    // Instead initialise the frontend only; the backend is registered later in
+    // usb_dfu_transport_class_register() once the USBD stack is running.
+    (void) nrf_log_init(nrf_bootloader_dfu_timer_counter_get, 32768);
+    // NRF_LOG_DEFAULT_BACKENDS_INIT() removed — CDC ACM backend registered later
+    // in usb_dfu_transport_class_register() once the USBD stack is running.
 
     NRF_LOG_INFO("Inside main");
 
