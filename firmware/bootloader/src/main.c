@@ -137,11 +137,6 @@ void flash_led(void *p_event_data, uint16_t event_size) {
     // restart led flash task.
     app_sched_event_put(NULL, 0, flash_led);
 
-    static uint32_t tick = 0;
-    tick++;
-    if ((tick % 100) == 0) {
-        NRF_LOG_DEBUG("BL heartbeat tick=%u", (unsigned)tick);
-    }
     NRF_LOG_FLUSH();
 }
 
