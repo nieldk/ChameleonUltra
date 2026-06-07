@@ -158,6 +158,7 @@ static void dfu_observer(nrf_dfu_evt_type_t evt_type) {
             m_led_flash_state = 0;
             break;
         case NRF_DFU_EVT_TRANSPORT_ACTIVATED:
+            NRF_LOG_INFO("DFU transport activated");
             m_led_flash_state = 1;
             break;
         case NRF_DFU_EVT_DFU_STARTED:
