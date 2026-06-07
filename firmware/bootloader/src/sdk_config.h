@@ -2440,7 +2440,7 @@
 // <16384=> 16384
 
 #ifndef NRF_LOG_BUFSIZE
-#define NRF_LOG_BUFSIZE 128
+#define NRF_LOG_BUFSIZE 512
 #endif
 
 // <q> NRF_LOG_CLI_CMDS  - Enable CLI commands for the module.

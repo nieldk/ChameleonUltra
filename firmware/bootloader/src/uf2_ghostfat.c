@@ -5,10 +5,6 @@
  *   - INFO_UF2.TXT: always present, device info + dd recommendations
  *   - FAIL.TXT:     appears after a UF2 block was rejected
  *
- * Successful transfers don't produce a status file — the device boots
- * the new app, which is signal enough. FAIL.TXT exists because silent
- * failures ("dd succeeded but nothing happened") are otherwise invisible.
- *
  * MIT License.
  */
 #include "uf2_ghostfat.h"
@@ -16,22 +12,24 @@
 #include "uf2_status.h"
 #include <string.h>
 
+#define NRF_LOG_MODULE_NAME uf2_ghostfat
+#include "nrf_log.h"
+NRF_LOG_MODULE_REGISTER();
+
 #define BPB_BYTES_PER_SECTOR    UF2_SECTOR_SIZE
 #define BPB_SECTORS_PER_CLUSTER 1
 #define BPB_RESERVED_SECTORS    1
 #define BPB_NUM_FATS            2
-#define BPB_ROOT_ENTRIES        16     /* 16 * 32 = 512 B = 1 sector — minimal */
+#define BPB_ROOT_ENTRIES        16
 #define BPB_TOTAL_SECTORS       UF2_TOTAL_SECTORS
 #define BPB_MEDIA_DESCRIPTOR    0xF8
-#define BPB_SECTORS_PER_FAT     12     /* enough for FAT12 with this many clusters */
+#define BPB_SECTORS_PER_FAT     12
 
 #define FAT_START_SECTOR        BPB_RESERVED_SECTORS
 #define ROOT_DIR_START_SECTOR   (FAT_START_SECTOR + BPB_NUM_FATS * BPB_SECTORS_PER_FAT)
 #define ROOT_DIR_SECTORS        ((BPB_ROOT_ENTRIES * 32 + UF2_SECTOR_SIZE - 1) / UF2_SECTOR_SIZE)
 #define DATA_START_SECTOR       (ROOT_DIR_START_SECTOR + ROOT_DIR_SECTORS)
 
-/* Status files occupy the first two data clusters. With 1 sector per
- * cluster, cluster 2 = DATA_START_SECTOR, cluster 3 = DATA_START_SECTOR+1. */
 #define INFO_FILE_CLUSTER       2
 #define FAIL_FILE_CLUSTER       3
 
@@ -124,16 +122,13 @@ static void fat12_put(uint8_t *fat, uint32_t entry, uint16_t value)
     }
 }
 
-/* Populate a directory entry for a regular file at `cluster` with
- * `size` bytes. name11 is the 8.3 short form, space-padded (e.g.,
- * "INFO_UF2TXT" for "INFO_UF2.TXT"). */
 static void dir_make_file(fat_dir_entry_t *e, const char *name11,
                           uint16_t cluster, uint32_t size)
 {
     memset(e, 0, sizeof(*e));
     memcpy(e->name, name11, 11);
-    e->attr             = 0x20;     /* archive */
-    e->cdate            = 0x5221;   /* arbitrary valid date */
+    e->attr             = 0x20;
+    e->cdate            = 0x5221;
     e->adate            = 0x5221;
     e->wdate            = 0x5221;
     e->first_cluster_lo = cluster;
@@ -146,6 +141,7 @@ void uf2_ghostfat_init(void)
     m_num_blocks_expected = 0;
     m_completion_signalled = false;
     uf2_status_init();
+    NRF_LOG_INFO("GhostFAT init. DATA_START=%u TOTAL=%u", DATA_START_SECTOR, BPB_TOTAL_SECTORS);
 }
 
 uint32_t uf2_ghostfat_blocks_written(void) { return m_blocks_written; }
@@ -155,9 +151,7 @@ int uf2_ghostfat_read_block(uint32_t lba, uint8_t *buf)
 {
     memset(buf, 0, UF2_SECTOR_SIZE);
 
-    if (lba >= BPB_TOTAL_SECTORS) {
-        return 0;
-    }
+    if (lba >= BPB_TOTAL_SECTORS) return 0;
 
     if (lba == 0) {
         memcpy(buf, &k_bpb, sizeof(k_bpb));
@@ -167,9 +161,6 @@ int uf2_ghostfat_read_block(uint32_t lba, uint8_t *buf)
     }
 
     if (lba < ROOT_DIR_START_SECTOR) {
-        /* FAT region — first sector of each FAT copy carries the
-         * reserved entries plus end-of-chain markers for INFO and
-         * FAIL clusters. */
         uint32_t fat_idx = (lba - FAT_START_SECTOR) % BPB_SECTORS_PER_FAT;
         if (fat_idx == 0) {
             fat12_put(buf, 0, 0xFF8);
@@ -182,30 +173,21 @@ int uf2_ghostfat_read_block(uint32_t lba, uint8_t *buf)
 
     if (lba == ROOT_DIR_START_SECTOR) {
         fat_dir_entry_t *entries = (fat_dir_entry_t *)buf;
-
-        /* Slot 0: volume label */
         memcpy(&entries[0], &k_vol_label, sizeof(k_vol_label));
-
-        /* Slot 1: INFO_UF2.TXT — always present */
         {
             uint32_t info_sz;
             (void)uf2_status_get_info_txt(&info_sz);
-            dir_make_file(&entries[1], "INFO_UF2TXT",
-                          INFO_FILE_CLUSTER, info_sz);
+            dir_make_file(&entries[1], "INFO_UF2TXT", INFO_FILE_CLUSTER, info_sz);
         }
-
-        /* Slot 2: FAIL.TXT — only when a block was rejected */
         if (uf2_status_has_failure()) {
             uint32_t sz;
             (void)uf2_status_get_fail_txt(&sz);
-            dir_make_file(&entries[2], "FAIL    TXT",
-                          FAIL_FILE_CLUSTER, sz);
+            dir_make_file(&entries[2], "FAIL    TXT", FAIL_FILE_CLUSTER, sz);
+            NRF_LOG_WARNING("FAIL.TXT present in root dir");
         }
-
         return 0;
     }
 
-    /* Data area: serve status file contents from clusters 2 and 3. */
     if (lba == INFO_FILE_SECTOR) {
         uint32_t sz;
         const char *txt = uf2_status_get_info_txt(&sz);
@@ -219,58 +201,62 @@ int uf2_ghostfat_read_block(uint32_t lba, uint8_t *buf)
             const char *txt = uf2_status_get_fail_txt(&sz);
             if (sz > UF2_SECTOR_SIZE) sz = UF2_SECTOR_SIZE;
             memcpy(buf, txt, sz);
+            NRF_LOG_WARNING("FAIL.TXT content read by host");
         }
         return 0;
     }
 
-    /* Everything else reads as zeros. */
     return 0;
 }
 
 int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
 {
-    /* Swallow writes to system area (boot/FAT/root). */
-    if (lba < DATA_START_SECTOR) {
-        return 0;
-    }
+    if (lba < DATA_START_SECTOR) return 0;
 
-    if (!uf2_is_block(buf)) {
-        /* Not a UF2 block — could be host filesystem metadata writes.
-         * Silently ignored without counting as a rejected UF2. */
-        return 0;
-    }
+    if (!uf2_is_block(buf)) return 0;
 
     const uf2_block_t *b = (const uf2_block_t *)buf;
 
     if ((b->flags & UF2_FLAG_FAMILYID) &&
         b->file_size_or_family_id != UF2_FAMILY_ID_NRF52840) {
+        NRF_LOG_WARNING("Block %u rejected: wrong family ID 0x%08x",
+                        b->block_no, b->file_size_or_family_id);
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_FAMILY);
         return 0;
     }
-    if (b->flags & UF2_FLAG_NOFLASH) {
-        /* Valid UF2 but explicitly opts out of flashing; not counted
-         * either way. */
-        return 0;
-    }
+    if (b->flags & UF2_FLAG_NOFLASH) return 0;
+
     if (b->target_addr < UF2_FLASH_APP_START ||
         b->target_addr + b->payload_size > UF2_FLASH_APP_END) {
+        NRF_LOG_WARNING("Block %u rejected: addr 0x%08x out of bounds [0x%08x..0x%08x]",
+                        b->block_no, b->target_addr,
+                        UF2_FLASH_APP_START, UF2_FLASH_APP_END);
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_BOUNDS);
         return 0;
     }
     if (b->payload_size == 0 || b->payload_size > sizeof(b->data)) {
+        NRF_LOG_WARNING("Block %u rejected: bad payload_size %u",
+                        b->block_no, b->payload_size);
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_SEQ);
         return 0;
     }
     if (b->num_blocks != 0 && b->block_no >= b->num_blocks) {
+        NRF_LOG_WARNING("Block %u rejected: block_no >= num_blocks %u",
+                        b->block_no, b->num_blocks);
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_SEQ);
         return 0;
     }
 
+    NRF_LOG_DEBUG("Block %u/%u addr 0x%08x",
+                  b->block_no, b->num_blocks, b->target_addr);
+
     if (!uf2_flash_write(b->target_addr, b->data, b->payload_size)) {
+        NRF_LOG_ERROR("Block %u flash write FAILED at 0x%08x",
+                      b->block_no, b->target_addr);
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_WRITE);
         return 0;
@@ -280,13 +266,19 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
 
     if (m_num_blocks_expected == 0 && b->num_blocks != 0) {
         m_num_blocks_expected = b->num_blocks;
+        NRF_LOG_INFO("Transfer started: expecting %u blocks", m_num_blocks_expected);
     }
     m_blocks_written++;
+
+    if ((m_blocks_written % 100) == 0) {
+        NRF_LOG_INFO("Progress: %u/%u blocks", m_blocks_written, m_num_blocks_expected);
+    }
 
     if (!m_completion_signalled &&
         m_num_blocks_expected != 0 &&
         m_blocks_written >= m_num_blocks_expected) {
         m_completion_signalled = true;
+        NRF_LOG_INFO("Transfer complete: %u blocks written", m_blocks_written);
         uf2_dfu_complete();
     }
     return 0;
