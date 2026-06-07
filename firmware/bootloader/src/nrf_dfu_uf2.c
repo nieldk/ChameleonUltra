@@ -225,6 +225,24 @@ void uf2_dfu_complete(void)
  * ----------------------- */
 
 static int32_t m_backend_id = -99;
+static bool    m_usb_reconnect_pending = false;
+
+/* Called by ghostfat after a block rejection to trigger a USB
+ * reconnect so the host remounts with FAIL.TXT visible. */
+void uf2_request_usb_reconnect(void)
+{
+    m_usb_reconnect_pending = true;
+}
+
+bool uf2_usb_reconnect_pending(void)
+{
+    return m_usb_reconnect_pending;
+}
+
+void uf2_usb_reconnect_clear(void)
+{
+    m_usb_reconnect_pending = false;
+}
 
 void usb_dfu_transport_class_register(void)
 {

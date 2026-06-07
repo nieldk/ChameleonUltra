@@ -20,6 +20,9 @@ NRF_LOG_MODULE_REGISTER();
  * doesn't reboot before the host can read FAIL.TXT. */
 extern void uf2_ping_observer(void);
 
+/* Triggers a USB reconnect so the host remounts with FAIL.TXT visible. */
+extern void uf2_request_usb_reconnect(void);
+
 #define BPB_BYTES_PER_SECTOR    UF2_SECTOR_SIZE
 #define BPB_SECTORS_PER_CLUSTER 1
 #define BPB_RESERVED_SECTORS    1
@@ -168,6 +171,13 @@ int uf2_ghostfat_read_block(uint32_t lba, uint8_t *buf)
 
     if (lba == 0) {
         memcpy(buf, &k_bpb, sizeof(k_bpb));
+        /* Change volume ID when failure is present so the kernel
+         * invalidates its FAT cache and re-reads the root directory,
+         * making FAIL.TXT visible without requiring a manual remount. */
+        if (uf2_status_has_failure()) {
+            fat_bpb_t *bpb = (fat_bpb_t *)buf;
+            bpb->volume_id = 0x00420043;
+        }
         buf[510] = 0x55;
         buf[511] = 0xAA;
         return 0;
@@ -237,6 +247,7 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_FAMILY);
         uf2_ping_observer();
+        uf2_request_usb_reconnect();
         return 0;
     }
     if (b->flags & UF2_FLAG_NOFLASH) return 0;
@@ -249,6 +260,7 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_BOUNDS);
         uf2_ping_observer();
+        uf2_request_usb_reconnect();
         return 0;
     }
     if (b->payload_size == 0 || b->payload_size > sizeof(b->data)) {
@@ -257,6 +269,7 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_SEQ);
         uf2_ping_observer();
+        uf2_request_usb_reconnect();
         return 0;
     }
     if (b->num_blocks != 0 && b->block_no >= b->num_blocks) {
@@ -265,6 +278,7 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_SEQ);
         uf2_ping_observer();
+        uf2_request_usb_reconnect();
         return 0;
     }
 
@@ -277,6 +291,7 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_WRITE);
         uf2_ping_observer();
+        uf2_request_usb_reconnect();
         return 0;
     }
 
