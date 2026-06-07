@@ -63,11 +63,6 @@
 #include "nrfx_systick.h"
 #include "nrf_gpio.h"
 #include "hw_connect.h"
-#include "app_usbd_cdc_acm.h"
-
-/* Access debug CDC via getter — direct extern doesn't work because
- * APP_USBD_CDC_ACM_GLOBAL_DEF uses static storage. */
-extern app_usbd_cdc_acm_t const *uf2_get_debug_cdc(void);
 
 
 static void on_error(void) {
@@ -144,12 +139,8 @@ void flash_led(void *p_event_data, uint16_t event_size) {
 
     static uint32_t tick = 0;
     tick++;
-    if ((tick % 10) == 0) {
-        static const char msg[] = "BL tick\r\n";
-        (void)app_usbd_cdc_acm_write(uf2_get_debug_cdc(),
-                                     (const uint8_t *)msg,
-                                     sizeof(msg) - 1);
-        NRF_LOG_INFO("BL heartbeat tick=%u", (unsigned)tick);
+    if ((tick % 100) == 0) {
+        NRF_LOG_DEBUG("BL heartbeat tick=%u", (unsigned)tick);
     }
     NRF_LOG_FLUSH();
 }

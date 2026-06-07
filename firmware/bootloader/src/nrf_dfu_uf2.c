@@ -252,11 +252,6 @@ app_usbd_cdc_acm_t const *uf2_get_debug_cdc(void)
     return &m_app_cdc_debug;
 }
 
-int32_t uf2_get_backend_id(void)
-{
-    return m_backend_id;
-}
-
 uint32_t uf2_transport_init(nrf_dfu_observer_t observer)
 {
     m_observer = observer;
