@@ -31,6 +31,7 @@ int  uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf);
 /* Progress / completion. */
 uint32_t uf2_ghostfat_blocks_written(void);
 bool     uf2_ghostfat_is_complete(void);
+bool     uf2_ghostfat_has_failure(void);
 
 /* Implemented by the integrator (nrf_dfu_uf2.c) — actually write to flash. */
 extern bool uf2_flash_write(uint32_t addr, const void *data, uint32_t len);

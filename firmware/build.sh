@@ -158,11 +158,11 @@ fi
     # UF2 bootloader installed. Requires the type-02 patch in
     # tools/uf2conv.py (handles Nordic SDK's Extended Segment Address
     # records — without it, all target addresses come out as 0).
-    ../tools/uf2conv.py application.hex -o ${device_type}-application.uf2
+    ../tools/uf2conv.py application.hex --family 0x1B57745F -o ${device_type}-application.uf2
 
     # Full image UF2: MBR + SoftDevice + bootloader + app + settings.
     # Restores everything including the bootloader on devices with ACL removed.
-    ../tools/uf2conv.py fullimage.hex -o ${device_type}-fullimage.uf2
+    ../tools/uf2conv.py fullimage.hex --family 0x1B57745F -o ${device_type}-fullimage.uf2
 
     tmp_dir=$(mktemp -d -t cu_binaries_XXXXXXXXXX)
     cp *.hex "$tmp_dir"

@@ -131,6 +131,14 @@ NRF_LOG_BACKEND_DEF(m_cdc_log_backend, nrf_log_backend_cdc_api, NULL);
 
 /* ---- ghostfat -> flash glue ---- */
 
+/* Called by ghostfat on block rejection to reset the inactivity timer.
+ * Without this, a single rejected block causes the bootloader to reboot
+ * after the inactivity timeout before the host can read FAIL.TXT. */
+void uf2_ping_observer(void)
+{
+    if (m_observer) m_observer(NRF_DFU_EVT_OBJECT_RECEIVED);
+}
+
 void uf2_flash_read(uint32_t addr, void *buf, uint32_t len)
 {
     if (addr >= UF2_FLASH_APP_START && addr + len <= UF2_FLASH_APP_END) {

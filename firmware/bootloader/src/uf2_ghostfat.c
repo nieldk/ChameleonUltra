@@ -16,6 +16,10 @@
 #include "nrf_log.h"
 NRF_LOG_MODULE_REGISTER();
 
+/* Resets the DFU inactivity timer — called on rejection so the bootloader
+ * doesn't reboot before the host can read FAIL.TXT. */
+extern void uf2_ping_observer(void);
+
 #define BPB_BYTES_PER_SECTOR    UF2_SECTOR_SIZE
 #define BPB_SECTORS_PER_CLUSTER 1
 #define BPB_RESERVED_SECTORS    1
@@ -137,15 +141,24 @@ static void dir_make_file(fat_dir_entry_t *e, const char *name11,
 
 void uf2_ghostfat_init(void)
 {
-    m_blocks_written = 0;
-    m_num_blocks_expected = 0;
-    m_completion_signalled = false;
-    uf2_status_init();
-    NRF_LOG_INFO("GhostFAT init. DATA_START=%u TOTAL=%u", DATA_START_SECTOR, BPB_TOTAL_SECTORS);
+    /* Preserve failure state across re-init (host remounts the MSC device
+     * after writing, which triggers op_init -> ghostfat_init before the
+     * host can read FAIL.TXT. Clearing here would make FAIL.TXT disappear
+     * before the host ever sees it). */
+    if (!uf2_status_has_failure()) {
+        m_blocks_written = 0;
+        m_num_blocks_expected = 0;
+        m_completion_signalled = false;
+        uf2_status_init();
+    }
+    NRF_LOG_INFO("GhostFAT init. DATA_START=%u TOTAL=%u failure=%d",
+                 DATA_START_SECTOR, BPB_TOTAL_SECTORS,
+                 (int)uf2_status_has_failure());
 }
 
 uint32_t uf2_ghostfat_blocks_written(void) { return m_blocks_written; }
 bool     uf2_ghostfat_is_complete(void)    { return m_completion_signalled; }
+bool     uf2_ghostfat_has_failure(void)    { return uf2_status_has_failure(); }
 
 int uf2_ghostfat_read_block(uint32_t lba, uint8_t *buf)
 {
@@ -223,6 +236,7 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
                         b->block_no, b->file_size_or_family_id);
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_FAMILY);
+        uf2_ping_observer();
         return 0;
     }
     if (b->flags & UF2_FLAG_NOFLASH) return 0;
@@ -234,6 +248,7 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
                         UF2_FLASH_APP_START, UF2_FLASH_APP_END);
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_BOUNDS);
+        uf2_ping_observer();
         return 0;
     }
     if (b->payload_size == 0 || b->payload_size > sizeof(b->data)) {
@@ -241,6 +256,7 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
                         b->block_no, b->payload_size);
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_SEQ);
+        uf2_ping_observer();
         return 0;
     }
     if (b->num_blocks != 0 && b->block_no >= b->num_blocks) {
@@ -248,6 +264,7 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
                         b->block_no, b->num_blocks);
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_SEQ);
+        uf2_ping_observer();
         return 0;
     }
 
@@ -259,6 +276,7 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
                       b->block_no, b->target_addr);
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_WRITE);
+        uf2_ping_observer();
         return 0;
     }
 

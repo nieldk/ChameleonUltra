@@ -168,8 +168,18 @@ static void bootloader_reset(bool do_backup)
 }
 
 
+#include "uf2_ghostfat.h"
+
 static void inactivity_timeout(void)
 {
+    /* If a UF2 transfer failed, keep the drive mounted so the user can
+     * read FAIL.TXT. Restart the timer instead of rebooting. */
+    if (uf2_ghostfat_has_failure()) {
+        nrf_bootloader_dfu_inactivity_timer_restart(
+            NRF_BOOTLOADER_MS_TO_TICKS(NRF_BL_DFU_INACTIVITY_TIMEOUT_MS),
+            inactivity_timeout);
+        return;
+    }
     NRF_LOG_INFO("Inactivity timeout.");
     bootloader_reset(true);
 }
