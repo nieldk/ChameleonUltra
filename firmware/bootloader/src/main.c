@@ -54,7 +54,7 @@
 #include "nrf_dfu.h"
 #include "nrf_log.h"
 #include "nrf_log_ctrl.h"
-// nrf_log_default_backends.h removed — using custom CDC ACM log backend instead.
+#include "nrf_log_default_backends.h"
 #include "app_error.h"
 #include "app_error_weak.h"
 #include "nrf_bootloader_info.h"
@@ -136,8 +136,6 @@ void flash_led(void *p_event_data, uint16_t event_size) {
 
     // restart led flash task.
     app_sched_event_put(NULL, 0, flash_led);
-
-    NRF_LOG_FLUSH();
 }
 
 /**
@@ -158,7 +156,6 @@ static void dfu_observer(nrf_dfu_evt_type_t evt_type) {
             m_led_flash_state = 0;
             break;
         case NRF_DFU_EVT_TRANSPORT_ACTIVATED:
-            NRF_LOG_INFO("DFU transport activated");
             m_led_flash_state = 1;
             break;
         case NRF_DFU_EVT_DFU_STARTED:
@@ -220,20 +217,18 @@ int main(void) {
     }
     init_leds();
 
+    // Must happen before flash protection is applied, since it edits a protected page.
+    // bl_staged_apply_if_present(); // removed
     nrf_bootloader_mbr_addrs_populate();
 
+    /* Check for staged bootloader update written by bl_updater.
+    * Must run BEFORE nrf_bootloader_flash_protect() sets ACL. */
+    // bl_updater_apply_staged_update(); // removed
+
     // ACL flash protection removed for open-source development.
-    // The staged update path (bl_staged_apply_if_present / bl_updater_apply_staged_update)
-    // is also removed — it existed solely to bypass ACL. With ACL gone,
-    // bl_updater_run() works directly from the application without staging.
     
-    // Custom CDC log backend — do NOT call NRF_LOG_INIT (which would call
-    // nrf_log_default_backends_init and pull in RTT/UART backends we don't want).
-    // Instead initialise the frontend only; the backend is registered later in
-    // usb_dfu_transport_class_register() once the USBD stack is running.
-    (void) nrf_log_init(nrf_bootloader_dfu_timer_counter_get, 32768);
-    // NRF_LOG_DEFAULT_BACKENDS_INIT() removed — CDC ACM backend registered later
-    // in usb_dfu_transport_class_register() once the USBD stack is running.
+    (void) NRF_LOG_INIT(nrf_bootloader_dfu_timer_counter_get);
+    NRF_LOG_DEFAULT_BACKENDS_INIT();
 
     NRF_LOG_INFO("Inside main");
 

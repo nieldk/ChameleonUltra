@@ -59,12 +59,6 @@
 #include "nrf_log.h"
 NRF_LOG_MODULE_REGISTER();
 
-/* Forward declaration of the class registration hook implemented by
- * nrf_dfu_uf2.c. Declared weak at file scope so the linker replaces it
- * with the real implementation when the UF2 transport is present, and
- * leaves it as NULL when it is absent. */
-void usb_dfu_transport_class_register(void) __attribute__((weak));
-
 /**@file
  *
  * @defgroup nrf_dfu_serial_usb DFU Serial USB CDC ACM transport
@@ -336,30 +330,18 @@ static uint32_t usb_dfu_transport_init(nrf_dfu_observer_t observer)
     }
 
     err_code = nrf_drv_power_init(NULL);
-    if (err_code != NRF_ERROR_MODULE_ALREADY_INITIALIZED)
-    {
-        VERIFY_SUCCESS(err_code);
-    }
+    VERIFY_SUCCESS(err_code);
 
     app_usbd_serial_num_generate();
 
     err_code = app_usbd_init(&usbd_config);
-    if (err_code != NRF_ERROR_INVALID_STATE)
-    {
-        VERIFY_SUCCESS(err_code);
-    }
+    VERIFY_SUCCESS(err_code);
 
     app_usbd_class_inst_t const * class_cdc_acm = app_usbd_cdc_acm_class_inst_get(&m_app_cdc_acm);
     err_code                                    = app_usbd_class_append(class_cdc_acm);
     VERIFY_SUCCESS(err_code);
 
     NRF_LOG_DEBUG("Starting USB");
-
-    /* Call the class registration hook — implemented by nrf_dfu_uf2.c
-     * to append MSC and debug CDC before the stack starts. */
-    if (usb_dfu_transport_class_register) {
-        usb_dfu_transport_class_register();
-    }
 
     if (USBD_POWER_DETECTION)
     {

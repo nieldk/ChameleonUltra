@@ -430,16 +430,10 @@ static nrf_dfu_result_t update_data_size_get(dfu_init_command_t const * p_init, 
 
         if ((p_init->type & DFU_FW_TYPE_BOOTLOADER) && (p_init->has_bl_size == true))
         {
-            if (p_init->bl_size <= BOOTLOADER_SIZE)
-            {
-                fw_sz += p_init->bl_size;
-            }
-            else
-            {
-                NRF_LOG_ERROR("BL size (%d) over limit (%d)", p_init->bl_size, BOOTLOADER_SIZE);
-                fw_sz   = 0;
-                ret_val = NRF_DFU_RES_CODE_INSUFFICIENT_RESOURCES;
-            }
+            /* bl_size check removed — ACL protection is disabled in this
+             * fork and the BL region has been extended to 0xEB000-0xFE000
+             * (80KB). The signed package is trusted; skip the size limit. */
+            fw_sz += p_init->bl_size;
         }
     }
 

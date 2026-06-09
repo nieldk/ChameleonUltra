@@ -17,8 +17,18 @@
 /* Flash window this bootloader will accept writes to (app region).
  * Matches application.ld. */
 #define UF2_FLASH_APP_START    0x00027000UL
-#define UF2_FLASH_APP_END      0x000F3000UL
+#define UF2_FLASH_APP_END      0x000EB000UL
 #define UF2_FLASH_APP_SIZE     (UF2_FLASH_APP_END - UF2_FLASH_APP_START)
+
+/* Stage 1 bootloader accepts writes to the full flash range so the
+ * fullimage.uf2 (which includes MBR, SoftDevice, BL, app) can be
+ * used to upgrade to stage 2. */
+#ifdef STAGE1_BUILD
+#undef  UF2_FLASH_APP_START
+#undef  UF2_FLASH_APP_END
+#define UF2_FLASH_APP_START    0x00000000UL
+#define UF2_FLASH_APP_END      0x00100000UL
+#endif
 
 /* Called once at transport init. */
 void uf2_ghostfat_init(void);

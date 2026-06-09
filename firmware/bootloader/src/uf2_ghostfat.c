@@ -21,7 +21,6 @@ NRF_LOG_MODULE_REGISTER();
 extern void uf2_ping_observer(void);
 
 /* Triggers a USB reconnect so the host remounts with FAIL.TXT visible. */
-extern void uf2_request_usb_reconnect(void);
 
 #define BPB_BYTES_PER_SECTOR    UF2_SECTOR_SIZE
 #define BPB_SECTORS_PER_CLUSTER 1
@@ -247,7 +246,6 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_FAMILY);
         uf2_ping_observer();
-        uf2_request_usb_reconnect();
         return 0;
     }
     if (b->flags & UF2_FLAG_NOFLASH) return 0;
@@ -260,7 +258,6 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_BOUNDS);
         uf2_ping_observer();
-        uf2_request_usb_reconnect();
         return 0;
     }
     if (b->payload_size == 0 || b->payload_size > sizeof(b->data)) {
@@ -269,7 +266,6 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_SEQ);
         uf2_ping_observer();
-        uf2_request_usb_reconnect();
         return 0;
     }
     if (b->num_blocks != 0 && b->block_no >= b->num_blocks) {
@@ -278,7 +274,6 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_SEQ);
         uf2_ping_observer();
-        uf2_request_usb_reconnect();
         return 0;
     }
 
@@ -291,7 +286,6 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
         uf2_status_record_rejected(b->block_no, b->num_blocks,
                                    b->target_addr, UF2_REJECT_WRITE);
         uf2_ping_observer();
-        uf2_request_usb_reconnect();
         return 0;
     }
 
