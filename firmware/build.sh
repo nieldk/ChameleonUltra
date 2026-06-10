@@ -10,7 +10,6 @@ softdevice_id=0x0100
 
 application_version=1
 bootloader_version=5
-bootloader_version_stage1=4   # stage1 must be lower so stage2 is accepted as upgrade
 
 device_type=${CURRENT_DEVICE_TYPE:-ultra}
 case $device_type in
@@ -38,24 +37,17 @@ set -xe
 rm -rf "objects"
 
 if [[ -z "$RECOVERY_MODE" ]]; then
-  # ---- Stage 1 bootloader ------------------------------------------------
-  # Minimal UF2-only bootloader at 0xF3000 (44KB region, stock layout).
-  # Fits within stock BOOTLOADER_SIZE so flash-dfu-sdbl.sh can flash it
-  # from a stock device. Enables the larger 80KB region for stage 2.
+  # ---- Single composite bootloader at 0xF3000 (44KB) ---------------------
+  # UF2 (MSC) + CDC serial DFU, no debug CDC, no logging. Fits the stock
+  # 44KB region so it's directly flashable from stock — no SWD, no
+  # two-stage. The MBR boots 0xF3000, which is where this BL lives.
   # -----------------------------------------------------------------------
   (
     cd bootloader
-    make -j STAGE1=1
-    # Ensure hex is generated (parallel build can miss it)
-    make STAGE1=1 ../objects/bootloader.hex 2>/dev/null || \
-    arm-none-eabi-objcopy -O ihex ../objects/bootloader.out ../objects/bootloader.hex
-  )
-  cp objects/bootloader.hex objects/bootloader-stage1.hex
-
-  # ---- Stage 2 bootloader (full) -----------------------------------------
-  (
-    cd bootloader
     make -j
+    # Ensure hex is generated (parallel build can miss it)
+    make ../objects/bootloader.hex 2>/dev/null || \
+    arm-none-eabi-objcopy -O ihex ../objects/bootloader.out ../objects/bootloader.hex
   )
 
   ./tools/gen_embedded_bl.py \
@@ -91,16 +83,7 @@ fi
   else
     cp ../nrf52_sdk/components/softdevice/${softdevice}/hex/${softdevice}_nrf52_${softdevice_version}_softdevice.hex softdevice.hex
 
-    # Stage 1 DFU zip — minimal BL at 0xF3000, flashable from stock
-    nrfutil nrf5sdk-tools pkg generate \
-      --hw-version $hw_version \
-      --bootloader  bootloader-stage1.hex --bootloader-version $bootloader_version_stage1 \
-      --softdevice  softdevice.hex \
-      --sd-req ${softdevice_id} --sd-id ${softdevice_id} \
-      --key-file ../../resource/dfu_key/chameleon.pem \
-      ${device_type}-dfu-sdbl-stage1.zip
-
-    # Stage 2 DFU zip — full BL at 0xEB000
+    # SD+BL DFU zip — composite BL at 0xF3000, flashable from stock
     nrfutil nrf5sdk-tools pkg generate \
       --hw-version $hw_version \
       --bootloader  bootloader.hex --bootloader-version $bootloader_version \
@@ -146,6 +129,11 @@ fi
     ../tools/uf2conv.py application.hex --family 0x1B57745F -o ${device_type}-application.uf2
     ../tools/uf2conv.py fullimage.hex --family 0x1B57745F -o ${device_type}-fullimage.uf2
 
+    # Bootloader-only UF2 for the stage-1 -> stage-2 handoff. Contains ONLY
+    # the 0xEB000-0xFE000 BL region, so stage 1 can stage it at 0x80000
+    # without app blocks (from fullimage) clobbering the staging area.
+    ../tools/uf2conv.py bootloader.hex --family 0x1B57745F -o ${device_type}-bootloader.uf2
+
     tmp_dir=$(mktemp -d -t cu_binaries_XXXXXXXXXX)
     cp *.hex "$tmp_dir"
     mv $tmp_dir/application_merged.hex $tmp_dir/application.hex
@@ -157,8 +145,7 @@ fi
     echo
     echo "=========================================================="
     echo "Build complete."
-    echo "  Stage 1 BL : objects/${device_type}-dfu-sdbl-stage1.zip"
-    echo "  Stage 2 BL : objects/${device_type}-dfu-sdbl.zip"
+    echo "  SD+BL      : objects/${device_type}-dfu-sdbl.zip"
     echo "  App        : objects/${device_type}-dfu-app.zip"
     echo "  Full image : objects/${device_type}-fullimage.uf2"
     echo "Use flash-dfu-sdbl.sh to install both stages."

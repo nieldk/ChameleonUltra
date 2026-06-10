@@ -1,17 +1,20 @@
 /*
- * nrf_dfu_uf2.c — Nordic SDK DFU transport for UF2 drag-and-drop updates.
+ * nrf_dfu_uf2.c — UF2 (MSC) DFU transport, composite with CDC serial DFU.
  *
- * Single USB device: MSC only. Owns the entire USBD stack.
+ * Single bootloader at 0xF3000 (44KB). The CDC serial DFU transport
+ * (nrf_dfu_serial_usb.c) owns the USBD stack and calls the weak
+ * usb_dfu_transport_class_register() hook, where we append MSC. Result:
+ * a composite CDC(DFU) interfaces 0+1 + MSC(UF2) interface 2 device.
+ *
+ * No debug CDC, no logging — keeps the bootloader within 44KB.
  *
  * Memory layout:
  *     0x00000 - 0x01000   MBR
  *     0x01000 - 0x27000   SoftDevice S140
- *     0x27000 - 0xEB000   Application      <— UF2 writes go here
- *     0xEB000 - 0xFE000   Bootloader       <— do not write
+ *     0x27000 - 0xF3000   Application      <- UF2 writes go here
+ *     0xF3000 - 0xFE000   Bootloader (44KB)
  *     0xFE000 - 0xFF000   MBR params
  *     0xFF000 - 0x100000  Bootloader settings
- *
- * MIT License.
  */
 
 #include <string.h>
@@ -22,9 +25,6 @@
 #include "nrf_bootloader_info.h"
 #include "nrf_nvmc.h"
 #include "nrf_delay.h"
-#ifdef STAGE1_BUILD
-#include "nrf_mbr.h"
-#endif
 #include "app_usbd.h"
 #include "app_usbd_core.h"
 #include "app_usbd_msc.h"
@@ -36,28 +36,19 @@
 
 #define NRF_LOG_MODULE_NAME nrf_dfu_uf2
 #include "nrf_log.h"
-#include "nrf_log_ctrl.h"
 NRF_LOG_MODULE_REGISTER();
 
 #include "crc32.h"
 #include "uf2_ghostfat.h"
 #include "uf2_blockdev.h"
 
-#define MSC_INTERFACE        0
-#define MSC_EPIN             NRF_DRV_USBD_EPIN1
-#define MSC_EPOUT            NRF_DRV_USBD_EPOUT1
+/* Composite: CDC DFU owns interfaces 0+1 / EP1-2. MSC is interface 2 / EP3. */
+#define MSC_INTERFACE        2
+#define MSC_EPIN             NRF_DRV_USBD_EPIN3
+#define MSC_EPOUT            NRF_DRV_USBD_EPOUT3
 #define MSC_WORKBUFFER_SIZE  512
 
 static nrf_dfu_observer_t m_observer;
-
-uint32_t uf2_transport_init(nrf_dfu_observer_t observer)         __attribute__((used));
-uint32_t uf2_transport_close(nrf_dfu_transport_t const *p_excpt) __attribute__((used));
-
-DFU_TRANSPORT_REGISTER(nrf_dfu_transport_t const uf2_dfu_transport) =
-{
-    .init_func  = uf2_transport_init,
-    .close_func = uf2_transport_close,
-};
 
 static void msc_user_ev_handler(app_usbd_class_inst_t const *p_inst,
                                 app_usbd_msc_user_event_t event)
@@ -89,72 +80,12 @@ void uf2_ping_observer(void)
     if (m_observer) m_observer(NRF_DFU_EVT_OBJECT_RECEIVED);
 }
 
-#ifdef STAGE1_BUILD
-/* Stage 1 stages the stage-2 bootloader in the app region, then uses the
- * MBR's SD_MBR_COMMAND_COPY_BL to copy it into place. The MBR runs from
- * the protected region at 0x0 and can safely overwrite the BL region even
- * though stage 1 itself executes from 0xF3000 (inside that region). A
- * direct write would erase stage 1 mid-execution and brick the device.
- *
- * Staging layout in the app region:
- *   STAGE_BL_BASE (0x80000): the stage-2 bootloader image, copied verbatim
- * The stage-2 BL lives at 0xEB000-0xFE000 (76KB max). 0x80000 leaves room
- * below it and is well clear of stage 1's own code path. */
-#define STAGE_BL_BASE        0x00080000UL
-#define STAGE2_BL_DEST       0x000EB000UL
-#define STAGE2_BL_END        0x000FE000UL
-#define UICR_BOOTLOADER_ADDR 0x10001014UL
-#define UICR_PAGE_ADDR       0x10001000UL
-
-static uint32_t m_staged_bl_len;   /* highest BL offset written + payload */
-#endif
-
 bool uf2_flash_write(uint32_t addr, const void *data, uint32_t len)
 {
-#ifdef STAGE1_BUILD
-    /* UICR region (0x10001000+) — skip; stage 1 sets UICR itself in
-     * uf2_dfu_complete after the MBR copy. */
-    if (addr >= 0x10000000UL) {
-        return true;
-    }
-#endif
-
     if (addr < UF2_FLASH_APP_START || addr + len > UF2_FLASH_APP_END) {
-        NRF_LOG_WARNING("UF2 write outside region 0x%08x", addr);
+        NRF_LOG_WARNING("UF2 write outside app region 0x%08x", addr);
         return false;
     }
-
-#ifdef STAGE1_BUILD
-    /* MBR and SoftDevice already correct — skip. */
-    if (addr < 0x00027000UL) {
-        return true;
-    }
-
-    /* Redirect stage-2 BL-region writes into the staging area. The MBR
-     * copy at completion moves them to the real BL region safely. */
-    if (addr >= STAGE2_BL_DEST && addr < STAGE2_BL_END) {
-        uint32_t offset = addr - STAGE2_BL_DEST;
-        uint32_t staged_addr = STAGE_BL_BASE + offset;
-
-        const uint32_t page = NRF_FICR->CODEPAGESIZE;
-        if ((staged_addr & (page - 1)) == 0) {
-            nrf_nvmc_page_erase(staged_addr);
-        }
-        nrf_nvmc_write_bytes(staged_addr, (const uint8_t *)data, len);
-
-        if (offset + len > m_staged_bl_len) {
-            m_staged_bl_len = offset + len;
-        }
-        if (m_observer) m_observer(NRF_DFU_EVT_OBJECT_RECEIVED);
-        return true;
-    }
-
-    /* Settings/MBR-params region (0xFE000+) — skip, stage 2 BL writes
-     * its own settings on first boot. */
-    if (addr >= STAGE2_BL_END) {
-        return true;
-    }
-#endif
 
     const uint32_t page = NRF_FICR->CODEPAGESIZE;
     if ((addr & (page - 1)) == 0) {
@@ -176,38 +107,6 @@ void uf2_dfu_complete(void)
 {
     NRF_LOG_INFO("UF2 transfer complete (%u blocks)",
                  uf2_ghostfat_blocks_written());
-
-#ifdef STAGE1_BUILD
-    /* Stage 2 BL is staged at STAGE_BL_BASE. Use the MBR to copy it into
-     * the real BL region — the MBR runs from the protected region at 0x0
-     * and can erase/write 0xEB000-0xFE000 safely even though stage 1 is
-     * executing from inside that range.
-     *
-     * SD_MBR_COMMAND_COPY_BL copies to the address in UICR BOOTLOADERADDR,
-     * so update UICR to 0xEB000 first. */
-    if (*(volatile uint32_t *)UICR_BOOTLOADER_ADDR != STAGE2_BL_DEST) {
-        nrf_nvmc_page_erase(UICR_PAGE_ADDR);
-        nrf_nvmc_write_word(UICR_BOOTLOADER_ADDR, STAGE2_BL_DEST);
-    }
-
-    /* Round up staged length to word multiple for the MBR command. */
-    uint32_t bl_len = (m_staged_bl_len + 3u) & ~3u;
-
-    NRF_LOG_INFO("Stage1: MBR copy %u bytes from 0x%08x to 0x%08x",
-                 bl_len, STAGE_BL_BASE, STAGE2_BL_DEST);
-    NRF_LOG_FLUSH();
-
-    sd_mbr_command_t cmd = {
-        .command = SD_MBR_COMMAND_COPY_BL,
-        .params.copy_bl.bl_src = (uint32_t *)STAGE_BL_BASE,
-        .params.copy_bl.bl_len = bl_len / sizeof(uint32_t),
-    };
-    (void)sd_mbr_command(&cmd);
-    /* COPY_BL resets the device on success; if it returns, force reset. */
-    nrf_delay_ms(100);
-    NVIC_SystemReset();
-    return;
-#endif
 
     s_dfu_settings.bank_0.bank_code  = NRF_DFU_BANK_VALID_APP;
     s_dfu_settings.bank_0.image_size = uf2_ghostfat_blocks_written() * 256u;
@@ -234,65 +133,28 @@ void uf2_dfu_complete(void)
     NVIC_SystemReset();
 }
 
-/* ---- USBD wiring ---- */
+/* ---- Composite hook ----
+ *
+ * The CDC serial DFU transport owns the USBD stack. It calls this weak
+ * hook after app_usbd_init() but before app_usbd_power_events_enable() —
+ * the only safe window to append MSC. GhostFAT is initialised here and
+ * the observer is shared via uf2_set_observer(). */
 
-static void usbd_event_handler(app_usbd_event_type_t event)
-{
-    switch (event) {
-        case APP_USBD_EVT_DRV_SUSPEND:    app_usbd_suspend_req();  break;
-        case APP_USBD_EVT_DRV_RESUME:                              break;
-        case APP_USBD_EVT_STARTED:                                 break;
-        case APP_USBD_EVT_STOPPED:        app_usbd_disable();      break;
-        case APP_USBD_EVT_POWER_DETECTED:
-            if (!nrf_drv_usbd_is_enabled()) app_usbd_enable();
-            break;
-        case APP_USBD_EVT_POWER_REMOVED:  app_usbd_stop();         break;
-        case APP_USBD_EVT_POWER_READY:    app_usbd_start();        break;
-        default: break;
-    }
-}
-
-uint32_t uf2_transport_init(nrf_dfu_observer_t observer)
+void usb_dfu_transport_class_register(void)
 {
     ret_code_t err;
 
-    m_observer = observer;
     uf2_ghostfat_init();
-
-    static const app_usbd_config_t usbd_config = {
-        .ev_state_proc = usbd_event_handler,
-    };
-
-    err = nrf_drv_clock_init();
-    if (err != NRF_SUCCESS && err != NRF_ERROR_MODULE_ALREADY_INITIALIZED)
-        return err;
-
-    err = nrf_drv_power_init(NULL);
-    if (err != NRF_SUCCESS && err != NRF_ERROR_MODULE_ALREADY_INITIALIZED)
-        return err;
-
-    app_usbd_serial_num_generate();
-
-    err = app_usbd_init(&usbd_config);
-    if (err != NRF_SUCCESS && err != NRF_ERROR_INVALID_STATE)
-        return err;
 
     err = app_usbd_class_append(app_usbd_msc_class_inst_get(&m_app_msc));
     if (err != NRF_SUCCESS) {
         NRF_LOG_ERROR("MSC class append failed: 0x%08x", err);
-        return err;
+    } else {
+        NRF_LOG_INFO("MSC registered as interface 2.");
     }
-
-    err = app_usbd_power_events_enable();
-    if (err != NRF_SUCCESS && err != NRF_ERROR_INVALID_STATE)
-        return err;
-
-    NRF_LOG_INFO("UF2 transport ready.");
-    return NRF_SUCCESS;
 }
 
-uint32_t uf2_transport_close(nrf_dfu_transport_t const *p_exception)
+void uf2_set_observer(nrf_dfu_observer_t observer)
 {
-    (void)p_exception;
-    return NRF_SUCCESS;
+    m_observer = observer;
 }

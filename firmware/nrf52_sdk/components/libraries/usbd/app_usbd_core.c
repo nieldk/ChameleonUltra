@@ -102,9 +102,9 @@ NRF_LOG_MODULE_REGISTER();
    .bLength = sizeof(app_usbd_descriptor_device_t),    /* descriptor size */                             \
    .bDescriptorType = APP_USBD_DESCRIPTOR_DEVICE,      /* descriptor type */                             \
    .bcdUSB = APP_USBD_BCD_VER_MAKE(2,0,0),             /* USB BCD version: 2.0 */                        \
-   .bDeviceClass = 0,                                  /* device class: 0 - specified by interface */    \
-   .bDeviceSubClass = 0,                               /* device subclass: 0 - specified by interface */ \
-   .bDeviceProtocol = 0,                               /* device protocol: 0 - specified by interface */ \
+   .bDeviceClass = 0xEF,                               /* Miscellaneous (composite w/ IAD) */            \
+   .bDeviceSubClass = 0x02,                            /* Common Class */                                \
+   .bDeviceProtocol = 0x01,                            /* Interface Association Descriptor */            \
    .bMaxPacketSize0 = NRF_DRV_USBD_EPSIZE,             /* endpoint size: fixed to: NRF_DRV_USBD_EPSIZE*/ \
    .idVendor = APP_USBD_VID,                           /* Vendor ID*/                                    \
    .idProduct = APP_USBD_PID,                          /* Product ID*/                                   \

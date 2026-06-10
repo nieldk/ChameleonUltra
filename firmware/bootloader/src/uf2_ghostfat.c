@@ -250,25 +250,6 @@ int uf2_ghostfat_write_block(uint32_t lba, const uint8_t *buf)
     }
     if (b->flags & UF2_FLAG_NOFLASH) return 0;
 
-#ifdef STAGE1_BUILD
-    /* UICR region — accept and let uf2_flash_write skip it (stage 1 sets
-     * UICR itself). Counts toward completion so the transfer finishes. */
-    if (b->target_addr >= 0x10000000UL) {
-        uf2_flash_write(b->target_addr, b->data, b->payload_size);
-        uf2_status_record_accepted(b->block_no, b->num_blocks, b->target_addr);
-        if (m_num_blocks_expected == 0 && b->num_blocks != 0)
-            m_num_blocks_expected = b->num_blocks;
-        m_blocks_written++;
-        if (!m_completion_signalled &&
-            m_num_blocks_expected != 0 &&
-            m_blocks_written >= m_num_blocks_expected) {
-            m_completion_signalled = true;
-            uf2_dfu_complete();
-        }
-        return 0;
-    }
-#endif
-
     if (b->target_addr < UF2_FLASH_APP_START ||
         b->target_addr + b->payload_size > UF2_FLASH_APP_END) {
         NRF_LOG_WARNING("Block %u rejected: addr 0x%08x out of bounds [0x%08x..0x%08x]",

@@ -10,7 +10,7 @@ static const char m_info_txt[] =
     "================================\r\n"
     "Chip     : nRF52840\r\n"
     "Family   : 0x1B57745F\r\n"
-    "App addr : 0x00027000 - 0x000EB000\r\n"
+    "App addr : 0x00027000 - 0x000F3000\r\n"
     "\r\n"
     "Drag a .uf2 onto this drive to flash.\r\n"
     "If FAIL.TXT appears after, read it to\r\n"

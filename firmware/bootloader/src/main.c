@@ -54,7 +54,9 @@
 #include "nrf_dfu.h"
 #include "nrf_log.h"
 #include "nrf_log_ctrl.h"
+#if !defined(NRF_LOG_ENABLED) || (NRF_LOG_ENABLED == 0)
 #include "nrf_log_default_backends.h"
+#endif
 #include "app_error.h"
 #include "app_error_weak.h"
 #include "nrf_bootloader_info.h"
@@ -136,6 +138,10 @@ void flash_led(void *p_event_data, uint16_t event_size) {
 
     // restart led flash task.
     app_sched_event_put(NULL, 0, flash_led);
+
+#if defined(NRF_LOG_ENABLED) && (NRF_LOG_ENABLED == 1)
+    NRF_LOG_FLUSH();   /* drain CDC log queue (stage 2 only) */
+#endif
 }
 
 /**
@@ -226,9 +232,16 @@ int main(void) {
     // bl_updater_apply_staged_update(); // removed
 
     // ACL flash protection removed for open-source development.
-    
+
+#if defined(NRF_LOG_ENABLED) && (NRF_LOG_ENABLED == 1)
+    /* Stage 2: custom CDC log backend. Init frontend only — the backend
+     * is registered later in usb_dfu_transport_class_register() once USB
+     * is up. Do NOT call NRF_LOG_DEFAULT_BACKENDS_INIT (pulls in RTT/UART). */
+    (void) nrf_log_init(nrf_bootloader_dfu_timer_counter_get, 32768);
+#else
+    /* Stage 1: logging disabled — macros compile to no-ops. */
     (void) NRF_LOG_INIT(nrf_bootloader_dfu_timer_counter_get);
-    NRF_LOG_DEFAULT_BACKENDS_INIT();
+#endif
 
     NRF_LOG_INFO("Inside main");
 

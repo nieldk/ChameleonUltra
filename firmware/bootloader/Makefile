@@ -2,15 +2,10 @@ include ../Makefile.defs
 
 TARGETS          := bootloader
 
-ifeq ($(STAGE1),1)
-  # Stage 1: minimal BL at 0xF3000 (44KB), fits stock BOOTLOADER_SIZE.
-  # No logging, no CDC DFU. Only purpose is to remove the bl_size check
-  # so stage 2 (80KB at 0xEB000) can be flashed via serial DFU.
-  LINKER_SCRIPT  := bootloader-stage1.ld
-  CFLAGS += -DSTAGE1_BUILD
-else
-  LINKER_SCRIPT  := bootloader.ld
-endif
+# Single composite bootloader at 0xF3000 (44KB): UF2 (MSC) + CDC serial
+# DFU. No debug CDC, no logging — to fit the stock 44KB region so it is
+# directly flashable from stock with no SWD and no two-stage dance.
+LINKER_SCRIPT  := bootloader-stage1.ld
 
 $(OUTPUT_DIRECTORY)/bootloader.out: \
 
@@ -77,11 +72,6 @@ SRC_FILES += \
   $(SDK_ROOT)/components/libraries/bootloader/dfu/nrf_dfu_svci.c \
   $(SDK_ROOT)/components/libraries/bootloader/dfu/nrf_dfu_svci_handler.c \
   $(SDK_ROOT)/components/libraries/bootloader/dfu/nrf_dfu_settings_svci.c \
-  $(SDK_ROOT)/components/libraries/usbd/class/msc/app_usbd_msc.c \
-  $(PROJ_DIR)/nrf_dfu_uf2.c \
-  $(PROJ_DIR)/uf2_ghostfat.c \
-  $(PROJ_DIR)/uf2_status.c \
-  $(PROJ_DIR)/uf2_blockdev.c \
   $(SDK_ROOT)/components/libraries/svc/nrf_svc_handler.c \
   $(SDK_ROOT)/components/ble/common/ble_srv_common.c \
   $(SDK_ROOT)/components/libraries/bootloader/nrf_bootloader.c \
@@ -109,6 +99,19 @@ SRC_FILES += \
   $(SDK_ROOT)/components/libraries/crypto/backend/oberon/oberon_backend_eddsa.c \
   $(SDK_ROOT)/components/libraries/crypto/backend/oberon/oberon_backend_hash.c \
   $(SDK_ROOT)/components/libraries/crypto/backend/oberon/oberon_backend_hmac.c \
+
+# Composite: UF2 (MSC) + CDC serial DFU. No debug CDC, no logging.
+SRC_FILES += \
+  $(SDK_ROOT)/components/libraries/usbd/class/msc/app_usbd_msc.c \
+  $(PROJ_DIR)/nrf_dfu_uf2.c \
+  $(PROJ_DIR)/uf2_ghostfat.c \
+  $(PROJ_DIR)/uf2_status.c \
+  $(PROJ_DIR)/uf2_blockdev.c \
+  $(SDK_ROOT)/components/libraries/bootloader/serial_dfu/nrf_dfu_serial.c \
+  $(SDK_ROOT)/components/libraries/bootloader/serial_dfu/nrf_dfu_serial_usb.c \
+
+INC_FOLDERS += \
+  $(SDK_ROOT)/components/libraries/bootloader/serial_dfu \
 
 # Include folders common to all targets
 INC_FOLDERS += \
@@ -195,8 +198,9 @@ endif
 
 # Optimization flags
 OPT = -Os -g3
-# Uncomment the line below to enable link time optimization
-#OPT += -flto
+# Link-time optimization + dead-code stripping to fit the 44KB region.
+OPT += -flto
+CFLAGS  += -ffunction-sections -fdata-sections
 
 # C flags common to all targets
 CFLAGS += $(OPT)

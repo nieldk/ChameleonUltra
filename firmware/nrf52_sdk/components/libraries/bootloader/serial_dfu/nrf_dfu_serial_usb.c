@@ -59,6 +59,12 @@
 #include "nrf_log.h"
 NRF_LOG_MODULE_REGISTER();
 
+/* Weak hook: the UF2 transport defines this to append its MSC + debug CDC
+ * classes to the composite device after app_usbd_init() but before
+ * app_usbd_power_events_enable(). Must be file scope — GCC ignores
+ * function-body-scope weak declarations. */
+void usb_dfu_transport_class_register(void) __attribute__((weak));
+
 /**@file
  *
  * @defgroup nrf_dfu_serial_usb DFU Serial USB CDC ACM transport
@@ -301,6 +307,14 @@ static uint32_t usb_dfu_transport_init(nrf_dfu_observer_t observer)
 
     m_observer = observer;
 
+    /* Share the observer with the UF2 write path (stage 2 composite) so
+     * UF2 flash writes can ping the DFU inactivity timer. Weak — only
+     * present when the UF2 transport is compiled in. */
+    extern void uf2_set_observer(nrf_dfu_observer_t) __attribute__((weak));
+    if (uf2_set_observer) {
+        uf2_set_observer(observer);
+    }
+
     uint8_t * p_rx_buf = nrf_balloc_alloc(&m_payload_pool);
     if (p_rx_buf == NULL)
     {
@@ -340,6 +354,12 @@ static uint32_t usb_dfu_transport_init(nrf_dfu_observer_t observer)
     app_usbd_class_inst_t const * class_cdc_acm = app_usbd_cdc_acm_class_inst_get(&m_app_cdc_acm);
     err_code                                    = app_usbd_class_append(class_cdc_acm);
     VERIFY_SUCCESS(err_code);
+
+    /* Append MSC (UF2) + debug CDC if the UF2 transport provided the hook.
+     * This is the only safe window — after init, before power events. */
+    if (usb_dfu_transport_class_register) {
+        usb_dfu_transport_class_register();
+    }
 
     NRF_LOG_DEBUG("Starting USB");
 
