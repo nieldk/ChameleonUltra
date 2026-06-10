@@ -8,12 +8,20 @@ $(OUTPUT_DIRECTORY)/application.out: \
 SRC_FILES += \
   $(SRC_COMMON)/hw_connect.c \
   $(SRC_COMMON)/libc_nano_stubs.c \
-  $(PROJ_DIR)/bl_updater.c \
   $(PROJ_DIR)/app_main.c \
   $(PROJ_DIR)/app_cmd.c \
   $(PROJ_DIR)/ble_main.c \
   $(PROJ_DIR)/rfid_main.c \
   $(PROJ_DIR)/settings.c \
+  $(PROJ_DIR)/app_standalone.c \
+  $(PROJ_DIR)/app_cmd_standalone.c \
+  $(PROJ_DIR)/standalone_led.c \
+  $(PROJ_DIR)/standalone_modes/mode_authtrace.c \
+  $(PROJ_DIR)/standalone_modes/mode_slot_cycle.c \
+  $(PROJ_DIR)/standalone_modes/mode_emultrace.c \
+  $(PROJ_DIR)/standalone_modes/mode_relay.c \
+  $(PROJ_DIR)/ble_relay.c \
+  $(PROJ_DIR)/rfid/nfctag/hf/nfc_relay_tag.c \
   $(PROJ_DIR)/usb_main.c \
   $(PROJ_DIR)/rgb_marquee.c \
   $(PROJ_DIR)/bsp/bsp_delay.c \
@@ -356,15 +364,6 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
     $(PROJ_DIR)/rfid/reader/lf/lf_pac_data.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_ioprox_data.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_viking_data.c \
-  $(PROJ_DIR)/app_standalone.c \
-  $(PROJ_DIR)/app_cmd_standalone.c \
-  $(PROJ_DIR)/standalone_led.c \
-  $(PROJ_DIR)/standalone_modes/mode_authtrace.c \
-  $(PROJ_DIR)/standalone_modes/mode_slot_cycle.c \
-  $(PROJ_DIR)/standalone_modes/mode_emultrace.c \
-  $(PROJ_DIR)/standalone_modes/mode_relay.c \
-  $(PROJ_DIR)/ble_relay.c \
-  $(PROJ_DIR)/rfid/nfctag/hf/nfc_relay_tag.c \
 
   INC_FOLDERS +=\
     ${PROJ_DIR}/rfid/reader/ \
@@ -381,14 +380,6 @@ else ifeq (${CURRENT_DEVICE_TYPE}, ${CHAMELEON_LITE})
 $(info  Chameleon Lite <Application>: tag emulation module enable.)
 else
 $(error Chameleon <Application>: No device type define.)
-endif
-
-# Recovery-mode build: gates the bl_updater self-update hook at the very
-# top of main() in app_main.c. Triggered by build.sh when RECOVERY_ZIP is
-# set, which also swaps embedded_bootloader.h to carry the stock BL.
-ifdef RECOVERY_MODE
-  CFLAGS += -DRECOVERY_MODE=1
-$(info  Chameleon <Application>: RECOVERY_MODE build — revert-to-stock UF2.)
 endif
 
 ifeq (${NRF_LOG_UART_ON_SWO_ENABLED}, 1)

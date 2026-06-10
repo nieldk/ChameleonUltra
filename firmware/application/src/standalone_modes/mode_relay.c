@@ -32,6 +32,9 @@
 
 #include "app_standalone.h"
 #include "standalone_led.h"
+
+/* Exported to ble_main.c to suppress spurious battery-shutdown during relay */
+bool g_is_standalone_armed = false;
 #include "ble_relay.h"
 
 #include <string.h>
@@ -158,6 +161,7 @@ static struct {
 
     picc_14a_tag_t real_card;
     bool           real_card_found;
+    bool           rescan_pending;  /* set by on_rescan_req, handled in on_tick */
 
     /* Result tracking */
     size_t  result_write;
@@ -257,21 +261,18 @@ static void result_save_session(uint8_t status) {
     h[RH_ROLE]   = m_st.role;
     h[RH_STATUS] = status;
 
-    /* UID: prefer identity, fall back to real_card */
-    if (m_st.identity.uid_len > 0) {
-        h[RH_UID_LEN] = m_st.identity.uid_len > 4 ? 4 : m_st.identity.uid_len;
-        memcpy(&h[RH_UID], m_st.identity.uid, 4);
-        memcpy(&h[RH_ATQA], m_st.identity.atqa, 2);
-        h[RH_SAK] = m_st.identity.sak;
-    } else if (m_st.real_card_found) {
-#ifndef PROJECT_CHAMELEON_LITE
-        uint8_t uid4[4] = {0};
-        get_4byte_tag_uid(&m_st.real_card, uid4);
-        h[RH_UID_LEN] = 4;
-        memcpy(&h[RH_UID],  uid4, 4);
+    /* On READER: record the real card found by RC522.
+     * On CARD:   record the identity received from READER CU. */
+    if (m_st.role == BLE_RELAY_ROLE_READER && m_st.real_card_found) {
+        h[RH_UID_LEN] = m_st.real_card.uid_len;
+        memcpy(&h[RH_UID],  m_st.real_card.uid,  m_st.real_card.uid_len > 4 ? 4 : m_st.real_card.uid_len);
         memcpy(&h[RH_ATQA], m_st.real_card.atqa, 2);
         h[RH_SAK] = m_st.real_card.sak;
-#endif
+    } else if (m_st.identity.uid_len > 0) {
+        h[RH_UID_LEN] = m_st.identity.uid_len > 4 ? 4 : m_st.identity.uid_len;
+        memcpy(&h[RH_UID],  m_st.identity.uid,  4);
+        memcpy(&h[RH_ATQA], m_st.identity.atqa, 2);
+        h[RH_SAK] = m_st.identity.sak;
     }
 
     h[RH_FRAME_COUNT    ] = (uint8_t)(m_trace_frame_count     );
@@ -287,6 +288,9 @@ static void result_save_session(uint8_t status) {
     m_st.session_count++;
     m_st.result_read = 0;
 
+    /* FDS write can block for seconds on GC with fragmented flash.
+     * Cancel sleep timer before blocking so it can't fire mid-write. */
+    sleep_timer_stop();
     standalone_rc_t save_rc = app_standalone_save_result_buf(STANDALONE_MODE_RELAY,
                                    m_result_words, m_st.result_write);
     if (save_rc != STANDALONE_RC_OK) {
@@ -333,38 +337,16 @@ static void on_connected(uint8_t my_role) {
 /* Forward declaration */
 static void card_setup_emulation(void);
 
+static void on_field_on(void)  { /* reserved for future use */ }
+static void on_field_off(void) { /* reserved for future use */ }
+
 static void on_rescan_req(void) {
-    /* CU1 signals reader left — scan for whatever card CU2 sees now.
-     * Only act as READER in RS_READER_READY (not during frame relay). */
+    /* Set flag — actual RC522 scan deferred to on_tick so it runs
+     * in main-loop context, not inside BLE dispatch chain. */
     if (m_st.role != BLE_RELAY_ROLE_READER) return;
     if (m_st.sub != RS_READER_READY) return;
-
-    set_scan_tag_timeout(200);
-    picc_14a_tag_t new_card;
-    memset(&new_card, 0, sizeof(new_card));
-    if (pcd_14a_reader_scan_auto(&new_card) == STATUS_HF_TAG_OK) {
-        bool changed = (memcmp(new_card.uid, m_st.real_card.uid,
-                               sizeof(new_card.uid)) != 0);
-        if (changed) {
-            m_st.real_card       = new_card;
-            m_st.real_card_found = true;
-            relay_card_identity_t id;
-            memset(&id, 0, sizeof(id));
-            id.atqa[0] = new_card.atqa[0];
-            id.atqa[1] = new_card.atqa[1];
-            id.sak     = new_card.sak;
-            id.uid_len = 4;
-#ifndef PROJECT_CHAMELEON_LITE
-            get_4byte_tag_uid(&new_card, id.uid);
-#else
-            memcpy(id.uid, new_card.uid, 4);
-#endif
-            id.ats_len = 0;
-            ble_relay_send_card_identity(&id);
-            NRF_LOG_INFO("relay reader: card changed on rescan");
-        }
-        pcd_14a_reader_antenna_on();
-    }
+    m_st.rescan_pending = true;
+    NRF_LOG_INFO("relay: RESCAN_REQ queued");
 }
 
 static void on_card_identity(const relay_card_identity_t *id) {
@@ -445,6 +427,7 @@ static void on_disconnected(void) {
     m_st.response_ready    = false;
     m_st.reader_frame_pending = false;
     m_st.real_card_found   = false;  /* allow fresh card scan on reconnect */
+    m_st.rescan_pending    = false;
     memset(&m_st.real_card, 0, sizeof(m_st.real_card));
     m_st.link_start_ticks  = app_timer_cnt_get();
     sleep_timer_stop();
@@ -456,6 +439,11 @@ static void on_disconnected(void) {
  * RELAY_READER: scan real card and send identity to CU1
  * ------------------------------------------------------------------------- */
 static void reader_setup_card(void) {
+    /* Keep sleep timer reset during scanning — BLE_GAP_EVT_DISCONNECTED
+     * (NUS/phone disconnect) starts a 4s sleep timer. Each RC522 scan
+     * blocks up to 500ms; multiple retries can exceed 4s total without
+     * on_tick running, firing the sleep timer and putting us to sleep. */
+    sleep_timer_stop();
     if (!m_st.real_card_found) {
         pcd_14a_reader_reset();
         pcd_14a_reader_antenna_on();
@@ -503,9 +491,14 @@ static void reader_setup_card(void) {
     /* Keep antenna ON — card must remain powered throughout the relay session.
      * Antenna will be turned off only on disconnect or disarm. */
     ble_relay_send_card_identity(&id);
+    /* Cache in m_st.identity so the 1s re-broadcast in RS_READER_READY
+     * keeps sending it — CARD CU may miss the first packet. */
+    memcpy(&m_st.identity, &id, sizeof(id));
+    m_st.identity_received = true;
 
     m_st.sub = RS_READER_READY;
-    ble_relay_set_fast_mode(true);  /* max scan rate for relay latency */
+    /* READER stays in fast scan — must remain responsive to relay frames
+     * and RESCAN_REQ from CARD. Only CARD CU uses slow mode. */
     standalone_led_set_mode_color(STANDALONE_MODE_RELAY, RGB_GREEN);
     standalone_led_solid();
     standalone_feedback(SL_FB_ARMED);
@@ -555,6 +548,8 @@ static const ble_relay_callbacks_t k_relay_cbs = {
     .on_connected     = on_connected,
     .on_card_identity = on_card_identity,
     .on_rescan_req    = on_rescan_req,
+    .on_field_on      = on_field_on,
+    .on_field_off     = on_field_off,
     .on_preauth       = NULL,
     .on_ready         = on_ready,
     .on_frame         = on_frame,
@@ -578,7 +573,9 @@ static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len) {
     m_st.session_count = saved_count;
     m_st.result_loaded = saved_loaded;
 
-    m_st.active  = true;
+    m_st.active           = true;
+    g_is_standalone_armed = true;
+    memset(&m_st.identity, 0, sizeof(m_st.identity));  /* clear stale identity from prev arm */
     m_st.wtx_ms  = RELAY_DEFAULT_WTX_MS;
     m_st.sub     = RS_LINKING;
 
@@ -605,7 +602,8 @@ static standalone_rc_t on_exit(void) {
     standalone_feedback(SL_FB_SUCCESS);
 
     /* Stop relay hardware */
-    m_st.active = false;
+    m_st.active           = false;
+    g_is_standalone_armed = false;
     nfc_relay_tag_clear();
     ble_relay_stop();
     pcd_14a_reader_antenna_off();
@@ -668,10 +666,11 @@ static standalone_rc_t on_tick(uint32_t now_ticks) {
         break;
 
     case RS_CARD_READY:
-        /* Periodic autosave — ensures result is in FDS even if on_exit
-         * is interrupted by USB disconnect on Windows */
+        /* Periodic autosave — guard s_last_autosave==0 so it doesn't
+         * fire immediately on first tick (diff from 0 >> 15s at boot). */
         {
             static uint32_t s_last_autosave = 0;
+            if (s_last_autosave == 0) s_last_autosave = now_ticks;
             if (m_st.was_connected &&
                 app_timer_cnt_diff_compute(now_ticks, s_last_autosave)
                     >= APP_TIMER_TICKS(15000)) {
@@ -718,6 +717,7 @@ static standalone_rc_t on_tick(uint32_t now_ticks) {
                 NRF_LOG_INFO("relay card: reader left, RESCAN_REQ sent");
             }
         }
+
         break;
 
     case RS_CARD_AWAIT_RESPONSE:
@@ -760,9 +760,11 @@ static standalone_rc_t on_tick(uint32_t now_ticks) {
     }
 
     case RS_READER_READY: {
-        /* Periodic autosave */
+        /* Periodic autosave — guard s_last_autosave_r==0 so it doesn't
+         * fire immediately on first tick (diff from 0 >> 15s at boot). */
         {
             static uint32_t s_last_autosave_r = 0;
+            if (s_last_autosave_r == 0) s_last_autosave_r = now_ticks;
             if (m_st.was_connected &&
                 app_timer_cnt_diff_compute(now_ticks, s_last_autosave_r)
                     >= APP_TIMER_TICKS(15000)) {
@@ -777,7 +779,66 @@ static standalone_rc_t on_tick(uint32_t now_ticks) {
             s_last_bcast = now_ticks;
             ble_relay_send_card_identity(&m_st.identity);
         }
-        /* Re-scan triggered by RESCAN_REQ from CU1 — see on_rescan_req() */
+        /* Card change detection: scan when RESCAN_REQ received OR every 5s
+         * when idle (no relay frames for 3s). Single RESCAN_REQ scan misses
+         * the new card if it isn't in the RC522 field at that exact moment;
+         * the periodic scan catches it on the next 5s window. */
+        {
+            static uint32_t s_last_frame_seen  = 0;
+            static uint32_t s_last_card_check  = 0;
+            if (s_last_card_check == 0) s_last_card_check = now_ticks;
+
+            if (m_st.reader_frame_pending) s_last_frame_seen = now_ticks;
+
+            bool reader_idle = (s_last_frame_seen == 0 ||
+                app_timer_cnt_diff_compute(now_ticks, s_last_frame_seen)
+                    >= APP_TIMER_TICKS(3000));
+
+            bool do_scan = m_st.rescan_pending ||
+                (reader_idle &&
+                 app_timer_cnt_diff_compute(now_ticks, s_last_card_check)
+                     >= APP_TIMER_TICKS(5000));
+
+            if (do_scan) {
+                m_st.rescan_pending = false;
+                s_last_card_check   = now_ticks;
+                sleep_timer_stop();
+                set_scan_tag_timeout(200);
+                picc_14a_tag_t new_card;
+                memset(&new_card, 0, sizeof(new_card));
+                if (pcd_14a_reader_scan_auto(&new_card) == STATUS_HF_TAG_OK) {
+                    /* For ISO 14443-4 cards (SAK & 0x20 = DeSFire etc.) the
+                     * anticollision UID is randomised each field-on — compare
+                     * ATQA+SAK only. For other cards compare the full UID. */
+                    bool changed;
+                    if (new_card.sak & 0x20) {
+                        changed = (new_card.atqa[0] != m_st.real_card.atqa[0] ||
+                                   new_card.atqa[1] != m_st.real_card.atqa[1] ||
+                                   new_card.sak     != m_st.real_card.sak);
+                    } else {
+                        changed = (memcmp(new_card.uid, m_st.real_card.uid,
+                                          sizeof(new_card.uid)) != 0);
+                    }
+                    if (changed) {
+                        m_st.real_card       = new_card;
+                        m_st.real_card_found = true;
+                        relay_card_identity_t id;
+                        memset(&id, 0, sizeof(id));
+                        id.atqa[0] = new_card.atqa[0];
+                        id.atqa[1] = new_card.atqa[1];
+                        id.sak     = new_card.sak;
+                        id.uid_len = new_card.uid_len;
+                        memcpy(id.uid, new_card.uid, new_card.uid_len);
+                        id.ats_len = 0;
+                        ble_relay_send_card_identity(&id);
+                        memcpy(&m_st.identity, &id, sizeof(id));
+                        m_st.identity_received = true;
+                        NRF_LOG_INFO("relay reader: card changed, new identity sent");
+                    }
+                    pcd_14a_reader_antenna_on();
+                }
+            }
+        }
         /* Forward frames from CU1 to real card */
         if (m_st.reader_frame_pending) {
             m_st.reader_frame_pending = false;

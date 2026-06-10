@@ -386,6 +386,9 @@ static void conn_params_init(void) {
  */
 static bool g_relay_adv_active = false;
 
+/* Declared in mode_relay.c — suppresses battery shutdown during relay */
+extern bool g_is_standalone_armed;
+
 static void on_adv_evt(ble_adv_evt_t ble_adv_evt) {
     /* Relay mode owns the advertising handle — ignore module events */
     if (g_relay_adv_active) return;
@@ -618,7 +621,7 @@ void ble_main_relay_adv_set(const uint8_t *raw_adv, uint8_t len) {
         ble_gap_adv_params_t params;
         memset(&params, 0, sizeof(params));
         params.properties.type = BLE_GAP_ADV_TYPE_NONCONNECTABLE_NONSCANNABLE_UNDIRECTED;
-        params.interval        = 32;  /* 20ms — minimum non-connectable */
+        params.interval        = 40;  /* 25ms — balanced relay */    /* 50 ms — more frequent for faster discovery */
         params.duration        = BLE_GAP_ADV_TIMEOUT_GENERAL_UNLIMITED;
         params.primary_phy     = BLE_GAP_PHY_1MBPS;
 
@@ -647,7 +650,7 @@ void ble_main_relay_adv_set(const uint8_t *raw_adv, uint8_t len) {
         ble_gap_adv_params_t params;
         memset(&params, 0, sizeof(params));
         params.properties.type = BLE_GAP_ADV_TYPE_NONCONNECTABLE_NONSCANNABLE_UNDIRECTED;
-        params.interval        = 32;  /* 20ms — minimum non-connectable */
+        params.interval        = 40;  /* 25ms — balanced relay */
         params.duration        = BLE_GAP_ADV_TIMEOUT_GENERAL_UNLIMITED;
         params.primary_phy     = BLE_GAP_PHY_1MBPS;
 
@@ -834,7 +837,7 @@ static void battery_level_meas_timeout_handler(void *p_context) {
     }
 
     // check low battery level, if level == 0, we can try to shutdown.
-    if (percentage_batt_lvl == 0) {
+    if (percentage_batt_lvl == 0 && !g_is_standalone_armed) {
         NRF_LOG_INFO("battery too low, try to shutdown...");
         g_is_low_battery_shutdown = true;
         sleep_timer_start(SLEEP_NO_BATTERY_SHUTDOWN);

@@ -67,7 +67,7 @@ static void nvmc_page_erase(uint32_t page_addr)
     nvmc_wait_ready();
 }
 
-static void __attribute__((unused)) nvmc_write_word(uint32_t dst, uint32_t word)
+static void nvmc_write_word(uint32_t dst, uint32_t word)
 {
     nvmc_wait_ready();
     NRF_NVMC->CONFIG = (NVMC_CONFIG_WEN_Wen << NVMC_CONFIG_WEN_Pos);
