@@ -28,12 +28,25 @@
 #include "nrf_soc.h"
 #include "nrf_delay.h"
 
-#define BL_REGION_START    0x000EB000UL
-#define BL_REGION_END      0x000FE000UL
+/* In recovery mode the embedded BL is the STOCK bootloader, which must
+ * be written to its stock address (0xF3000), and the UICR + MBR params
+ * must be rewound to match. In normal mode the embedded BL is our UF2
+ * bootloader at 0xEB000. */
+#ifdef RECOVERY_MODE
+  #define BL_REGION_START    0x000F3000UL
+  #define BL_REGION_END      0x000FE000UL
+  #define UICR_BL_ADDR_STOCK 0x000F3000UL
+#else
+  #define BL_REGION_START    0x000EB000UL
+  #define BL_REGION_END      0x000FE000UL
+#endif
 #define BL_PAGE_SIZE       0x1000UL
 #define BL_REGION_PAGES    ((BL_REGION_END - BL_REGION_START) / BL_PAGE_SIZE)
 #define BL_REGION_BYTES    (BL_REGION_END - BL_REGION_START)
 #define APP_REGION_START   0x00027000UL
+
+#define UICR_BOOTLOADER_ADDR  0x10001014UL
+#define UICR_PAGE_ADDR        0x10001000UL
 
 
 /* ---- Inline NVMC ---- */
@@ -49,6 +62,17 @@ static void nvmc_page_erase(uint32_t page_addr)
     NRF_NVMC->CONFIG = (NVMC_CONFIG_WEN_Een << NVMC_CONFIG_WEN_Pos);
     nvmc_wait_ready();
     NRF_NVMC->ERASEPAGE = page_addr;
+    nvmc_wait_ready();
+    NRF_NVMC->CONFIG = (NVMC_CONFIG_WEN_Ren << NVMC_CONFIG_WEN_Pos);
+    nvmc_wait_ready();
+}
+
+static void __attribute__((unused)) nvmc_write_word(uint32_t dst, uint32_t word)
+{
+    nvmc_wait_ready();
+    NRF_NVMC->CONFIG = (NVMC_CONFIG_WEN_Wen << NVMC_CONFIG_WEN_Pos);
+    nvmc_wait_ready();
+    *(volatile uint32_t *)dst = word;
     nvmc_wait_ready();
     NRF_NVMC->CONFIG = (NVMC_CONFIG_WEN_Ren << NVMC_CONFIG_WEN_Pos);
     nvmc_wait_ready();
@@ -138,6 +162,16 @@ static bl_updater_status_t bl_updater_flash_bl(bool validate_first)
                EMBEDDED_BOOTLOADER_BIN,
                EMBEDDED_BOOTLOADER_BIN_SIZE) != 0)
         return BL_UPDATER_ERR_VERIFY;
+
+#ifdef RECOVERY_MODE
+    /* Rewind the UICR bootloader start address to the stock location.
+     * UICR can only be written after a page erase; the value only takes
+     * effect after a reset. */
+    if (*(volatile uint32_t *)UICR_BOOTLOADER_ADDR != UICR_BL_ADDR_STOCK) {
+        nvmc_page_erase(UICR_PAGE_ADDR);
+        nvmc_write_word(UICR_BOOTLOADER_ADDR, UICR_BL_ADDR_STOCK);
+    }
+#endif
 
     return BL_UPDATER_OK;
 }

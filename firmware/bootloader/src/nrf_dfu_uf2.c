@@ -122,6 +122,22 @@ void uf2_dfu_complete(void)
     NRF_LOG_INFO("UF2 transfer complete (%u blocks)",
                  uf2_ghostfat_blocks_written());
 
+#ifdef STAGE1_BUILD
+    /* Stage 1 just wrote the full stage-2 image including the bootloader
+     * at 0xEB000. The UICR still points at 0xF3000 (where stage 1 lives).
+     * Update it to 0xEB000 so the MBR jumps to the stage-2 bootloader on
+     * reset. UICR can only be written after a page erase. */
+    if (*(volatile uint32_t *)0x10001014 != 0x000EB000UL) {
+        nrf_nvmc_page_erase(0x10001000);
+        nrf_nvmc_write_word(0x10001014, 0x000EB000UL);
+    }
+    /* Don't touch DFU settings in stage 1 — the stage-2 image carries its
+     * own. Just reset into the new bootloader. */
+    nrf_delay_ms(100);
+    NVIC_SystemReset();
+    return;
+#endif
+
     s_dfu_settings.bank_0.bank_code  = NRF_DFU_BANK_VALID_APP;
     s_dfu_settings.bank_0.image_size = uf2_ghostfat_blocks_written() * 256u;
     s_dfu_settings.bank_0.image_crc  = 0;
