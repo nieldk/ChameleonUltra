@@ -22,6 +22,9 @@
 #include "nrf_bootloader_info.h"
 #include "nrf_nvmc.h"
 #include "nrf_delay.h"
+#ifdef STAGE1_BUILD
+#include "nrf_mbr.h"
+#endif
 #include "app_usbd.h"
 #include "app_usbd_core.h"
 #include "app_usbd_msc.h"
@@ -33,6 +36,7 @@
 
 #define NRF_LOG_MODULE_NAME nrf_dfu_uf2
 #include "nrf_log.h"
+#include "nrf_log_ctrl.h"
 NRF_LOG_MODULE_REGISTER();
 
 #include "crc32.h"
@@ -85,18 +89,69 @@ void uf2_ping_observer(void)
     if (m_observer) m_observer(NRF_DFU_EVT_OBJECT_RECEIVED);
 }
 
+#ifdef STAGE1_BUILD
+/* Stage 1 stages the stage-2 bootloader in the app region, then uses the
+ * MBR's SD_MBR_COMMAND_COPY_BL to copy it into place. The MBR runs from
+ * the protected region at 0x0 and can safely overwrite the BL region even
+ * though stage 1 itself executes from 0xF3000 (inside that region). A
+ * direct write would erase stage 1 mid-execution and brick the device.
+ *
+ * Staging layout in the app region:
+ *   STAGE_BL_BASE (0x80000): the stage-2 bootloader image, copied verbatim
+ * The stage-2 BL lives at 0xEB000-0xFE000 (76KB max). 0x80000 leaves room
+ * below it and is well clear of stage 1's own code path. */
+#define STAGE_BL_BASE        0x00080000UL
+#define STAGE2_BL_DEST       0x000EB000UL
+#define STAGE2_BL_END        0x000FE000UL
+#define UICR_BOOTLOADER_ADDR 0x10001014UL
+#define UICR_PAGE_ADDR       0x10001000UL
+
+static uint32_t m_staged_bl_len;   /* highest BL offset written + payload */
+#endif
+
 bool uf2_flash_write(uint32_t addr, const void *data, uint32_t len)
 {
+#ifdef STAGE1_BUILD
+    /* UICR region (0x10001000+) — skip; stage 1 sets UICR itself in
+     * uf2_dfu_complete after the MBR copy. */
+    if (addr >= 0x10000000UL) {
+        return true;
+    }
+#endif
+
     if (addr < UF2_FLASH_APP_START || addr + len > UF2_FLASH_APP_END) {
         NRF_LOG_WARNING("UF2 write outside region 0x%08x", addr);
         return false;
     }
 
-    /* Skip MBR and SoftDevice regions in stage1 full-flash mode —
-     * we only need to write the bootloader and app, not re-flash SD. */
 #ifdef STAGE1_BUILD
+    /* MBR and SoftDevice already correct — skip. */
     if (addr < 0x00027000UL) {
-        /* Silently accept but skip MBR/SD writes — they're already correct. */
+        return true;
+    }
+
+    /* Redirect stage-2 BL-region writes into the staging area. The MBR
+     * copy at completion moves them to the real BL region safely. */
+    if (addr >= STAGE2_BL_DEST && addr < STAGE2_BL_END) {
+        uint32_t offset = addr - STAGE2_BL_DEST;
+        uint32_t staged_addr = STAGE_BL_BASE + offset;
+
+        const uint32_t page = NRF_FICR->CODEPAGESIZE;
+        if ((staged_addr & (page - 1)) == 0) {
+            nrf_nvmc_page_erase(staged_addr);
+        }
+        nrf_nvmc_write_bytes(staged_addr, (const uint8_t *)data, len);
+
+        if (offset + len > m_staged_bl_len) {
+            m_staged_bl_len = offset + len;
+        }
+        if (m_observer) m_observer(NRF_DFU_EVT_OBJECT_RECEIVED);
+        return true;
+    }
+
+    /* Settings/MBR-params region (0xFE000+) — skip, stage 2 BL writes
+     * its own settings on first boot. */
+    if (addr >= STAGE2_BL_END) {
         return true;
     }
 #endif
@@ -123,16 +178,32 @@ void uf2_dfu_complete(void)
                  uf2_ghostfat_blocks_written());
 
 #ifdef STAGE1_BUILD
-    /* Stage 1 just wrote the full stage-2 image including the bootloader
-     * at 0xEB000. The UICR still points at 0xF3000 (where stage 1 lives).
-     * Update it to 0xEB000 so the MBR jumps to the stage-2 bootloader on
-     * reset. UICR can only be written after a page erase. */
-    if (*(volatile uint32_t *)0x10001014 != 0x000EB000UL) {
-        nrf_nvmc_page_erase(0x10001000);
-        nrf_nvmc_write_word(0x10001014, 0x000EB000UL);
+    /* Stage 2 BL is staged at STAGE_BL_BASE. Use the MBR to copy it into
+     * the real BL region — the MBR runs from the protected region at 0x0
+     * and can erase/write 0xEB000-0xFE000 safely even though stage 1 is
+     * executing from inside that range.
+     *
+     * SD_MBR_COMMAND_COPY_BL copies to the address in UICR BOOTLOADERADDR,
+     * so update UICR to 0xEB000 first. */
+    if (*(volatile uint32_t *)UICR_BOOTLOADER_ADDR != STAGE2_BL_DEST) {
+        nrf_nvmc_page_erase(UICR_PAGE_ADDR);
+        nrf_nvmc_write_word(UICR_BOOTLOADER_ADDR, STAGE2_BL_DEST);
     }
-    /* Don't touch DFU settings in stage 1 — the stage-2 image carries its
-     * own. Just reset into the new bootloader. */
+
+    /* Round up staged length to word multiple for the MBR command. */
+    uint32_t bl_len = (m_staged_bl_len + 3u) & ~3u;
+
+    NRF_LOG_INFO("Stage1: MBR copy %u bytes from 0x%08x to 0x%08x",
+                 bl_len, STAGE_BL_BASE, STAGE2_BL_DEST);
+    NRF_LOG_FLUSH();
+
+    sd_mbr_command_t cmd = {
+        .command = SD_MBR_COMMAND_COPY_BL,
+        .params.copy_bl.bl_src = (uint32_t *)STAGE_BL_BASE,
+        .params.copy_bl.bl_len = bl_len / sizeof(uint32_t),
+    };
+    (void)sd_mbr_command(&cmd);
+    /* COPY_BL resets the device on success; if it returns, force reset. */
     nrf_delay_ms(100);
     NVIC_SystemReset();
     return;
