@@ -63,9 +63,9 @@ fi
 (
   cd application
   if [[ -n "$RECOVERY_MODE" ]]; then
-    make -j RECOVERY_MODE=1
+    make -j RECOVERY_MODE=1 BL_VERSION=$bootloader_version
   else
-    make -j
+    make -j BL_VERSION=$bootloader_version
   fi
 )
 
