@@ -8726,12 +8726,6 @@ class HF14ASniff(BaseCLIUnit):
                  'Captures reader->card on NFCT and card->reader via the RC522. '
                  'Place CU, card, and reader in the same field.'
         )
-                parser.add_argument(
-            '--tap', action='store_true',
-            help='Passive tap: CU stays silent while a REAL card answers the reader. '
-                 'Captures reader->card on NFCT and card->reader via the RC522. '
-                 'Place CU, card, and reader in the same field.'
-        )
         parser.add_argument('-o', '--trace', type=str, default=None,
                             help='Write capture as a Proxmark3 .trace file')
         return parser
