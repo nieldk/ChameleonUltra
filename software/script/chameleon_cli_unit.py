@@ -1274,7 +1274,7 @@ class HWVersion(DeviceRequiredUnit):
         fw_version = f"v{fw_version_tuple[0]}.{fw_version_tuple[1]}"
         git_version = self.cmd.get_git_version()
         model = ["Ultra", "Lite"][self.cmd.get_device_model()]
-        print(f" - Chameleon {model}, Version: {fw_version} ({git_version})")
+        print(f" - Phreakbyte edition ({model}), Version: {fw_version} ({git_version})")
 
 
 @hf_14a.command("config")
