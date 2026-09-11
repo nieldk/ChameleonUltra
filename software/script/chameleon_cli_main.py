@@ -73,7 +73,7 @@ class ChameleonCLI:
             status = color_string((CG, label))
         else:
             status = color_string((CR, 'Offline'))
-        return ANSI(f"[{status}] chameleon --> ")
+        return ANSI(f"[{status}] phreakbyte --> ")
         
     @staticmethod
     def print_banner():
