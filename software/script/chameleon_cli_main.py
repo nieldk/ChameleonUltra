@@ -76,6 +76,14 @@ class ChameleonCLI:
         return ANSI(f"[{status}] phreakbyte --> ")
         
     @staticmethod
+    def print_iceman_tribute():
+        print(color_string((CY, ICEMAN)))
+        print(color_string((CG, "        Phreakbyte tips its hat to Iceman.")))
+        print("        Years of RFID research, the Proxmark3 iceman fork, and the")
+        print("        generosity and encouragement that made this independent fork")
+        print("        possible. Standing on the shoulders of giants.")
+        print(color_string((CY, "        Thank you.")))
+
     def print_banner():
         """
             print chameleon ascii banner.
@@ -91,6 +99,9 @@ class ChameleonCLI:
         # look for alternate exit
         if cmd_str in ["quit", "q", "e"]:
             cmd_str = 'exit'
+        if cmd_str.strip().lower() in ("iceman", "credits"):
+            self.print_iceman_tribute()
+            return
 
         # look for alternate comments
         if cmd_str[0] in ";#%":
