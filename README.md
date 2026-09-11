@@ -90,6 +90,11 @@ Device version is derived at build time from `git describe` against `v*.*` tags
 (`firmware/Makefile.defs`). Releases are tagged `vMAJOR.MINOR`, and `hw version`
 reports the tag plus the short commit.
 
+## Commands
+
+A complete list and arguments for all CLI commands in this fork.
+[`docs/command.md`](docs/command.md).
+
 ## Credits and license
 
 Phreakbyte is built on the work of the
