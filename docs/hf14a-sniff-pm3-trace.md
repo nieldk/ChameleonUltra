@@ -50,18 +50,24 @@ Up to 8 sessions, 256 trace bytes each. Config blob (8 bytes): `version`,
 reserved, `timeout_ms` (u16, 100–30000, default 5000), reserved. Results
 persist across reboot.
 
-After draining the stored result buffer over USB/BLE, convert every session to
-its own `.trace`:
+Drain the stored sessions and write one `.trace` per session with the `--pm3`
+option of `standalone get-result`:
 
-```python
-import pm3_trace
-written = pm3_trace.export_tap_sniff_sessions_to_pm3(result_buf)
-# -> writes sniff-session-00.trace, sniff-session-01.trace, ...
+```
+[usb] chameleon --> standalone get-result --pm3 run1
+  run1-00.trace  (3 frame(s), status 0x00)
+  run1-02.trace  (2 frame(s), status 0x00)
 ```
 
-The stored session buffer layout is `u8 session_num, u8 status, u16 trace_len
-(LE), trace[trace_len]` per session; `pm3_trace.iter_tap_sniff_sessions()`
-walks it.
+Files are named `<prefix>-NN.trace` by session number. `--pm3` only applies
+when the active mode is `hf14a_tap_sniff`.
+
+Under the hood this calls `pm3_trace.export_tap_sniff_sessions_to_pm3(raw,
+prefix)`, which re-parses the drained buffer with the parity-aware parser
+(keeping real reader-side parity, unlike the default `get-result` decode which
+strips it). The stored session buffer layout is `u8 session_num, u8 status,
+u16 trace_len (LE), trace[trace_len]` per session;
+`pm3_trace.iter_tap_sniff_sessions()` walks it.
 
 ## Standalone conversion without the client
 
