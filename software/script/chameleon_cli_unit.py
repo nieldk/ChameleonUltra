@@ -12690,6 +12690,8 @@ class StandaloneGetResult(DeviceRequiredUnit):
                            help='emit parsed sessions as JSON')
         group.add_argument('--dump', action='store_true',
                            help='dump every frame in each session')
+        group.add_argument('--pm3', default=None, metavar='<prefix>',
+                           help='write each session as a Proxmark3 .trace (<prefix>-NN.trace)')
         return parser
 
     def on_exec(self, args):
@@ -12700,6 +12702,19 @@ class StandaloneGetResult(DeviceRequiredUnit):
         raw = self.cmd.standalone_drain_result()
         if not raw:
             print(color_string((CY, "no result data")))
+            return
+
+        if args.pm3:
+            if mode != StandaloneMode.HF14A_TAP_SNIFF:
+                print(color_string((CY, f"--pm3 applies to hf14a_tap_sniff (mode={mode.name})")))
+                return
+            import pm3_trace
+            written = pm3_trace.export_tap_sniff_sessions_to_pm3(raw, args.pm3)
+            if not written:
+                print(color_string((CY, "no sessions to export")))
+            else:
+                for fn, nframes, status in written:
+                    print(color_string((CG, f"  {fn}  ({nframes} frame(s), status 0x{status:02x})")))
             return
 
         if args.raw or (args.file and not (args.json or args.dump)):
