@@ -19,7 +19,6 @@ as simple as copying a `.uf2` file onto a USB mass-storage drive — no
 updates.
 
 - **Maintainer:** [nieldk](https://github.com/nieldk) · [sec1.dk](https://sec1.dk)
-- **Active branch:** [`UF2`](https://github.com/nieldk/ChameleonUltra/tree/UF2)
 - **Upstream:** [RfidResearchGroup/ChameleonUltra](https://github.com/RfidResearchGroup/ChameleonUltra)
 
 ## What’s different from upstream
@@ -50,8 +49,6 @@ updates.
   bootstrap mechanism.
 
 -----
-
-# Upstream README (preserved for reference)
 
 # ChameleonUltra Authorized Distributors
 
