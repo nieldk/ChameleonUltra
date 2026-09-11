@@ -72,7 +72,7 @@ class ChameleonCMD:
         """Get bootloader version (read from DFU settings flash page)"""
         resp = self.device.send_cmd_sync(Command.GET_BOOTLOADER_VERSION)
         if resp.status == Status.SUCCESS:
-            resp.parsed = struct.unpack('!BB', resp.data)   # (major, minor)
+            resp.parsed, = struct.unpack('!I', resp.data)   # flat integer
         return resp
 
     @expect_response(Status.SUCCESS)
