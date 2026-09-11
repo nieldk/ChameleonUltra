@@ -71,8 +71,7 @@ static data_frame_tx_t *cmd_processor_get_git_version(uint16_t cmd, uint16_t sta
 #define DFU_SETTINGS_BL_VERSION_OFFSET          12U
 
 static data_frame_tx_t *cmd_processor_get_bootloader_version(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    uint32_t bl_ver_num = *((volatile uint32_t *)(BOOTLOADER_SETTINGS_ADDRESS + DFU_SETTINGS_BL_VERSION_OFFSET));
-    uint32_t payload = U32HTONL(bl_ver_num);
+    uint32_t payload = U32HTONL((uint32_t)BL_VERSION);
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(payload), (uint8_t *)&payload);
 }
 
