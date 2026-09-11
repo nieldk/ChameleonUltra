@@ -26,10 +26,16 @@ CHAMELEON_LITE  := lite
 CURRENT_DEVICE_TYPE ?= ${CHAMELEON_ULTRA}
 
 # Versioning information
-GIT_VERSION := $(shell git describe --abbrev=7 --dirty --always --tags --match "v*.*")
-APP_FW_SEMVER := $(subst v,,$(shell git describe --tags --abbrev=0 --match "v*.*"))
-APP_FW_VER_MAJOR := $(word 1,$(subst ., ,$(APP_FW_SEMVER)))
-APP_FW_VER_MINOR := $(word 2,$(subst ., ,$(APP_FW_SEMVER)))
+# Manual versioning — no longer derived from git tags. Bump these by hand per release.
+APP_FW_VER_MAJOR := 2
+APP_FW_VER_MINOR := 2
+APP_FW_VER_PATCH := 0
+APP_FW_SEMVER := $(APP_FW_VER_MAJOR).$(APP_FW_VER_MINOR).$(APP_FW_VER_PATCH)
+# Human-readable build string: semver + short commit hash when git is available.
+# Uses the commit (never a tag) and degrades to bare semver in a tarball/CI build.
+GIT_REV := $(shell git rev-parse --short=7 HEAD 2>/dev/null)
+GIT_DIRTY := $(shell git diff --quiet 2>/dev/null || echo -dirty)
+GIT_VERSION := v$(APP_FW_SEMVER)$(if $(GIT_REV),-g$(GIT_REV)$(GIT_DIRTY))
 
 # Enable NRF_LOG on SWO pin as UART TX
 NRF_LOG_UART_ON_SWO_ENABLED := 0
