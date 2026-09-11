@@ -455,6 +455,10 @@ $(error APP_FW_VER_MINOR is not defined, please define it)
 endif
 CFLAGS += -DAPP_FW_VER_MAJOR=$(APP_FW_VER_MAJOR) -DAPP_FW_VER_MINOR=$(APP_FW_VER_MINOR)
 
+# Bootloader version shown by `hw blver` — compile-time, ships in the app UF2
+BL_VERSION ?= 0
+CFLAGS += -DBL_VERSION=$(BL_VERSION)
+
 # C++ flags common to all targets
 CXXFLAGS += $(OPT)
 # Assembler flags common to all targets
