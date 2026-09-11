@@ -26,15 +26,19 @@ CHAMELEON_LITE  := lite
 CURRENT_DEVICE_TYPE ?= ${CHAMELEON_ULTRA}
 
 # Versioning information
-# Manual versioning — no longer derived from git tags. Bump these by hand per release.
-APP_FW_VER_MAJOR := 2
-APP_FW_VER_MINOR := 2
-APP_FW_VER_PATCH := 0
-APP_FW_SEMVER := $(APP_FW_VER_MAJOR).$(APP_FW_VER_MINOR).$(APP_FW_VER_PATCH)
+# Derived automatically from the nearest git tag (vMAJOR.MINOR[.PATCH]).
+# Falls back to APP_FW_VER_FALLBACK when git or a matching tag is unavailable
+# (tarball / CI build), so those builds never hit the Makefile's version error.
+APP_FW_VER_FALLBACK := 2.3.0
+GIT_TAG          := $(shell git describe --tags --abbrev=0 --match "v[0-9]*" 2>/dev/null)
+APP_FW_SEMVER    := $(patsubst v%,%,$(or $(GIT_TAG),v$(APP_FW_VER_FALLBACK)))
+APP_FW_VER_MAJOR := $(word 1,$(subst ., ,$(APP_FW_SEMVER)))
+APP_FW_VER_MINOR := $(word 2,$(subst ., ,$(APP_FW_SEMVER)))
+APP_FW_VER_PATCH := $(or $(word 3,$(subst ., ,$(APP_FW_SEMVER))),0)
 # Human-readable build string: semver + short commit hash when git is available.
 # Uses the commit (never a tag) and degrades to bare semver in a tarball/CI build.
-GIT_REV := $(shell git rev-parse --short=7 HEAD 2>/dev/null)
-GIT_DIRTY := $(shell git diff --quiet 2>/dev/null || echo -dirty)
+GIT_REV     := $(shell git rev-parse --short=7 HEAD 2>/dev/null)
+GIT_DIRTY   := $(shell git diff --quiet 2>/dev/null || echo -dirty)
 GIT_VERSION := v$(APP_FW_SEMVER)$(if $(GIT_REV),-g$(GIT_REV)$(GIT_DIRTY))
 
 # Enable NRF_LOG on SWO pin as UART TX
