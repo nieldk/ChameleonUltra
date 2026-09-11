@@ -82,8 +82,8 @@ class ChameleonCLI:
         print("        Years of RFID research, the Proxmark3 iceman fork, and the")
         print("        generosity and encouragement that made this independent fork")
         print("        possible. Standing on the shoulders of giants.")
-        print(color_string((CY, "        Thank you.")))
-
+        print(color_string((CY, "        Thank you."))) 
+    @staticmethod
     def print_banner():
         """
             print chameleon ascii banner.
