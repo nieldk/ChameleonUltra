@@ -8726,6 +8726,14 @@ class HF14ASniff(BaseCLIUnit):
                  'Captures reader->card on NFCT and card->reader via the RC522. '
                  'Place CU, card, and reader in the same field.'
         )
+                parser.add_argument(
+            '--tap', action='store_true',
+            help='Passive tap: CU stays silent while a REAL card answers the reader. '
+                 'Captures reader->card on NFCT and card->reader via the RC522. '
+                 'Place CU, card, and reader in the same field.'
+        )
+        parser.add_argument('-o', '--trace', type=str, default=None,
+                            help='Write capture as a Proxmark3 .trace file')
         return parser
 
     def on_exec(self, args: argparse.Namespace):
@@ -8806,8 +8814,15 @@ class HF14ASniff(BaseCLIUnit):
             print(f"{CR}No frames decoded{C0}")
             return
 
+        if getattr(args, 'trace', None):
+            blob = pm3_trace.frames_to_pm3_trace(frames)
+            with open(args.trace, 'wb') as f:
+                f.write(blob)
+            print(f" Saved Proxmark3 trace: {CG}{args.trace}{C0} "
+                  f"({len(blob)} bytes, {len(frames)} frame(s))")
         rx_count = sum(1 for _, _, tx, _ in frames if not tx)
         tx_count = sum(1 for _, _, tx, _ in frames if tx)
+
         if tx_count > 0:
             print(f" Captured : {CG}{len(frames)}{C0} frame(s)  "
                   f"({CY}{rx_count}{C0} reader→card  {CG}{tx_count}{C0} card→reader)")
