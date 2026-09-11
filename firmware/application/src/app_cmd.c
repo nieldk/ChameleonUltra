@@ -2802,12 +2802,22 @@ uint16_t hf14a_sniff_tap_run(uint32_t timeout_ms, uint16_t *out_cb_count) {
     /* Capture window: a tight poll that drains the RC522's demodulated card
      * bytes in parallel with NFCT's interrupt-driven reader capture — no
      * sleep, or a longer card response overflows the 64-byte FIFO. The WDT
-     * (5 s) is fed regularly. */
-    autotimer *p_at = bsp_obtain_timer(0);
+     * (5 s) is fed regularly.
+     *
+     * The loop is hard-bounded off the free-running TIMER1 us timebase, NOT
+     * the shared bsp autotimer: bsp_obtain_timer() returns an out-of-bounds
+     * timer when its 10-slot pool is exhausted, and that phantom timer's
+     * .time is never incremented, so NO_TIMEOUT_1MS would stay true and this
+     * loop would spin forever. Because the loop feeds the WDT, such a hang is
+     * unrecoverable without SWD. TIMER1 always ticks and can't be exhausted. */
+    NRF_TIMER1->TASKS_CAPTURE[1] = 1;
+    uint32_t t_start_us = NRF_TIMER1->CC[1];
+    uint32_t timeout_us = timeout_ms * 1000u;      /* timeout_ms <= 30000 fits u32 */
     uint32_t poll_ct = 0;
-    while (NO_TIMEOUT_1MS(p_at, timeout_ms)) {
+    for (;;) {
         NRF_TIMER1->TASKS_CAPTURE[1] = 1;
-        uint32_t now     = NRF_TIMER1->CC[1];   /* now (us)                    */
+        uint32_t now = NRF_TIMER1->CC[1];       /* now (us)                    */
+        if ((uint32_t)(now - t_start_us) >= timeout_us) break;  /* wrap-safe bound */
         uint32_t rx_end  = NRF_TIMER1->CC[0];   /* PPI: last RXFRAMEEND (us)   */
         uint32_t r_start = NRF_TIMER1->CC[2];   /* PPI: last RXFRAMESTART (us) */
         /* a reader frame is mid-flight when its start is more recent than its
@@ -2837,7 +2847,6 @@ uint16_t hf14a_sniff_tap_run(uint32_t timeout_ms, uint16_t *out_cb_count) {
         }
         if ((++poll_ct & 0x3FFu) == 0) bsp_wdt_feed();
     }
-    bsp_return_timer(p_at);
     hf14a_sniff_card_flush();              /* emit the final coalesced frame */
 
     /* Remove callback and restore normal sense state */
