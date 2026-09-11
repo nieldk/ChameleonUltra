@@ -1378,11 +1378,10 @@ class HWBootloaderVersion(DeviceRequiredUnit):
 
     def on_exec(self, args: argparse.Namespace):
         try:
-            major, minor = self.cmd.get_bootloader_version()
-            print(f" - Bootloader Version: v{major}.{minor}")
+            version = self.cmd.get_bootloader_version()
+            print(f" - Bootloader Version: {version}")
         except chameleon_com.CMDInvalidException:
             print(" - Bootloader version not supported by current firmware, please update")
-
 
 @hw.command("freemem")
 class HWFreeMemory(DeviceRequiredUnit):
