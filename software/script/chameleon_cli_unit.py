@@ -14,6 +14,7 @@ import threading
 import random
 import struct
 import queue
+import pm3_trace
 from enum import Enum
 from multiprocessing import Pool, cpu_count
 from typing import Union
