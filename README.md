@@ -1,99 +1,101 @@
-![logo](docs/images/ultra-logo.png)
+# Phreakbyte
 
-![ultra picture](docs/images/ultra-overview.png)
+**Phreakbyte edition** is an independent firmware and tooling distribution for the
+ChameleonUltra hardware, focused on fast, frictionless flashing and iteration.
 
-> [!IMPORTANT]
-> **This is a fork — not the upstream ChameleonUltra repository.**
-> 
-> If you’re looking for the official firmware, releases, or distributor
-> links, go to **[RfidResearchGroup/ChameleonUltra](https://github.com/RfidResearchGroup/ChameleonUltra)**.
-> This fork modifies the bootloader; everything else below is preserved
-> from upstream for reference.
+It is a standalone project with its own roadmap. It is derived from
+[RfidResearchGroup/ChameleonUltra](https://github.com/RfidResearchGroup/ChameleonUltra)
+and remains GPLv3. See [Credits and license](#credits-and-license).
 
-# About this fork
+- **Maintainer:** [nieldk](https://github.com/nieldk) at [sec1.dk](https://sec1.dk)
+- **Hardware:** ChameleonUltra / ChameleonLite (unmodified)
 
-This repository replaces the stock signed-DFU bootloader with a **UF2
-drag-and-drop bootloader**. After installation, firmware updates become
-as simple as copying a `.uf2` file onto a USB mass-storage drive — no
-`nrfutil`, no signed packages, no driver install for day-to-day
-updates.
+![overview](docs/images/ultra-overview.png)
 
-- **Maintainer:** [nieldk](https://github.com/nieldk) · [sec1.dk](https://sec1.dk)
-- **Upstream:** [RfidResearchGroup/ChameleonUltra](https://github.com/RfidResearchGroup/ChameleonUltra)
+## Why Phreakbyte
 
-## What’s different from upstream
+The stock firmware ships a signed Nordic Secure DFU bootloader, so every update
+means `nrfutil`, signed packages, and driver handling. Phreakbyte replaces that
+with a UF2 drag-and-drop bootloader. Day-to-day updates become "copy a `.uf2`
+onto a USB drive." That is the whole point: shorter build-flash-test loops.
 
-- **UF2 bootloader** replaces Nordic’s Secure DFU. Drag a `.uf2` file
-  onto the `CHAMELEON` drive — no signing infrastructure required for
-  development builds.
-- **`bl_updater`** mechanism in the application for bootstrapping new
-  bootloaders without SWD. Embeds a freshly-built bootloader in the
-  application’s `.rodata` and writes it to flash via a CLI command.
-- **Revert-to-stock UF2** lets you restore the upstream signed-DFU
-  bootloader at any time with a single drag-and-drop. See
+## What is different from stock
+
+- **UF2 bootloader.** Firmware is flashed by copying a `.uf2` file onto the
+  `CHAMELEON` mass-storage drive. No `nrfutil`, no signed packages, no driver
+  install for routine updates.
+- **`bl_updater`.** Bootstrap a new bootloader from the running application,
+  without an SWD probe. A freshly built bootloader is embedded in the
+  application and written to flash via a CLI command.
+- **Multi-image DFU flashing.** Combined images can be pushed in a single pass.
+- **Revert-to-stock UF2.** A single drag-and-drop restores the signed Nordic
+  Secure DFU bootloader whenever you want it back. See
   [`firmware/tools/RECOVERY_BUILD.md`](firmware/tools/RECOVERY_BUILD.md).
-- Application functionality is otherwise unchanged from upstream — the
-  same NFC/RFID research firmware, the same CLI protocol, the same
-  ChameleonUltraGUI compatibility.
+- **Native cross-platform BLE.** The desktop CLI connects over BLE (Nordic UART)
+  as well as USB.
 
-## Documentation specific to this fork
+The RFID/NFC research feature set and the client protocol are carried forward,
+so existing tooling such as ChameleonUltraGUI continues to work.
 
-- **[Installation guide](firmware/tools/UF2_INSTALL.md)** — clone, build, flash to a
-  stock device, and verify the UF2 bootloader is working.
-- **[Recovery / revert-to-stock](firmware/tools/RECOVERY_BUILD.md)** —
-  building and using the revert-to-stock UF2 for users who want to
-  return to upstream firmware.
-- **[Design deep dive](https://sec1.dk/blog/uf2-on-chameleon.html)** —
-  the engineering story behind the port, including the debugging path
-  through Windows PnP cache, the descriptor bug, and the bl_updater
-  bootstrap mechanism.
+## Install
 
------
+**Prebuilt UF2 (recommended):** follow
+[`firmware/tools/UF2_INSTALL.md`](firmware/tools/UF2_INSTALL.md). In short: enter
+the bootloader, then drag the `.uf2` onto the `CHAMELEON` drive.
 
-# ChameleonUltra Authorized Distributors
+**Build from source:**
 
-Lyon, France: [Lab401](https://lab401.com/)
+```
+cd firmware
+./build.sh
+```
 
-Santa Ana, United States: [Hackerwarehouse](https://hackerwarehouse.com/)
+Then flash with the UF2 helper:
 
-Hastings, UK: [KSEC](https://labs.ksec.co.uk/product/proxgrind-chameleon-ultra/)
+```
+./flash-uf2-app.sh
+```
 
-Montreal, Canada: [TechSecurityTools](https://techsecuritytools.com/product/chameleon-ultra/)
+Other flash paths (`flash-dfu-app.sh`, `flash-dfu-full.sh`, `flash-dfu-sdbl.sh`)
+remain available for SWD and signed-DFU workflows.
 
-Shenzhen, China: [Sneaktechnology](https://sneaktechnology.com)
+## Revert to stock
 
-Guangdong, China: [MTools Tec](https://shop.mtoolstec.com/)
+To return to the upstream signed-DFU bootloader:
 
-Lazada One, Singapore: [Aliexpress by RRG](https://proxgrind.aliexpress.com/store/1101312023)
+```
+cd firmware
+./revert-to-stock.sh
+```
 
-# What is it and how to use ?
+Details and the recovery-image build are documented in
+[`firmware/tools/RECOVERY_BUILD.md`](firmware/tools/RECOVERY_BUILD.md).
 
-Read the [available documentation](https://github.com/RfidResearchGroup/ChameleonUltra/wiki).
+## Client
 
-# Compatible applications
+The Python CLI lives in `software/script`.
 
-- [ChameleonUltraGUI](https://github.com/GameTec-live/ChameleonUltraGUI)
-- [MTools BLE](https://github.com/RfidResearchGroup/ChameleonUltra/wiki/mtoolsble)
-- [Mifare Chameleon Tool (iOS only, Beta)](https://apps.apple.com/it/app/mifare-chameleon-tool/id6761231484)
-- [Chameleon Ultra (Sailfish OS only)](https://sailfishos-chum.github.io/apps/harbour-chameleon-ultra)
+```
+cd software/script
+python3 -m pip install -r requirements.txt
+python3 chameleon_cli_main.py
+```
 
-# Videos
+Connect over USB or BLE from the `hw connect` command. Run `hw version` to see
+the running firmware and build.
 
-*Beware some of the instructions might have changed since recording, check the current documentation when in doubt!*
+## Versioning
 
-- [Downloading and compiling the official CLI](https://www.youtube.com/watch?v=VGpAeitNXH0)
-- [Downloading ChameleonUltraGUI](https://www.youtube.com/watch?v=rHH7iqbX3nY)
-- [ChameleonUltraGUI features overview](https://www.youtube.com/watch?v=YqE8wyVSse4)
-- [Using ChameleonUltraGUI and the Chameleon Ultra](https://www.youtube.com/watch?v=9jtKNJ5-kVY)
-- [MTools BLE - How to clone a card with ChameleonUltra](https://youtu.be/IvH-xtdW1Wk?si=4exqgAAeJ-kxU3aN)
+Device version is derived at build time from `git describe` against `v*.*` tags
+(`firmware/Makefile.defs`). Releases are tagged `vMAJOR.MINOR`, and `hw version`
+reports the tag plus the short commit.
 
-# Official channels
+## Credits and license
 
-Where do you find the community?
+Phreakbyte is built on the work of the
+[RfidResearchGroup ChameleonUltra](https://github.com/RfidResearchGroup/ChameleonUltra)
+project and its contributors. Thanks to Iceman and the RRG team. The detachment
+into a standalone project was made with their knowledge.
 
-- [RFID Hacking community discord server](https://t.ly/d4_C)
-  - Software/chameleon-dev for firmware and clients development discussions
-  - Devices/chameleon-ultra for usage discussions
-- [GameTec_live discord server](https://discord.gg/DJ2A4wxncK)
-
-###### Searching for the docs repo? Find it [here](https://github.com/RfidResearchGroup/ChameleonUltraDocs)
+This project is licensed under the **GNU General Public License v3.0**. Upstream
+copyright notices and `AUTHORS.md` are preserved. See [`LICENSE`](LICENSE).
