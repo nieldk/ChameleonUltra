@@ -1,0 +1,14 @@
+Filetype: DFC Credential
+Version: 4
+Card Generation: EV1
+Card Storage: 2048
+UID: 04 00 00 00 00 00 00
+UID Provenance: Real
+PICC Key Settings 1: 0F
+PICC Key Settings 2: 01
+PICC Authentication Mode: D40
+PICC Key Count: 1
+PICC Key 00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+PICC Key 00 Version: 00
+PICC File Count: 0
+Application Count: 0
