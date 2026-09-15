@@ -63,7 +63,6 @@ class ChameleonCLI:
     """
 
     def _compose_banner(badge):
-    """Overlay the model badge onto the bottom-right of the CHAMELEON art."""
     rows = [list(l) for l in CHAMELEON.split("\n")]
     lines = [l for l in badge.split("\n") if l.strip()]
     anchor = len(rows) - 1 - len(lines)   # the I / O / N rows
