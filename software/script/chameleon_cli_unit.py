@@ -1283,21 +1283,38 @@ class HWStatus(DeviceRequiredUnit):
     # How much remaining battery is considered low?
     BATTERY_LOW_LEVEL = 30
 
-    def args_parser(self) -> ArgumentParserNoExit:
-        parser = ArgumentParserNoExit()
-        parser.description = "Show a one-shot summary of connection, firmware and hardware status"
-        return parser
+    def get_link_speed(self) -> Union[str, None]:
+        transport = getattr(self.device_com, "transport_type", None)
+        link = getattr(self.device_com, "transport", None)
+        if transport is None or link is None:
+            return None
+        if transport is chameleon_com.TransportType.SERIAL:
+            baudrate = getattr(link, "baudrate", None)
+            return f"{baudrate:,} baud" if baudrate else None
+        if transport is chameleon_com.TransportType.BLE:
+            payload = getattr(link, "payload_size", None)
+            return f"{payload} bytes/packet (BLE ATT payload)" if payload else None
+        if transport is chameleon_com.TransportType.SOCKET:
+            return "TCP (network, variable)"
+        return None
 
     def on_exec(self, args: argparse.Namespace):
         transport = getattr(self.device_com, "transport_type", None)
         transport_name = transport.name if transport is not None else "UNKNOWN"
         model = ["Ultra", "Lite"][self.cmd.get_device_model()]
+
+        t0 = time.perf_counter()
         fw_version_tuple = self.cmd.get_app_version()
+        latency_ms = (time.perf_counter() - t0) * 1000
         fw_version = f"v{fw_version_tuple[0]}.{fw_version_tuple[1]}"
         git_version = self.cmd.get_git_version()
 
         print(" - Device status")
         print(f"   connection  -> {transport_name}")
+        link_speed = self.get_link_speed()
+        if link_speed:
+            print(f"   link speed  -> {link_speed}")
+        print(f"   latency     -> {latency_ms:.1f} ms (round-trip)")
         print(f"   model       -> Phreakbyte edition ({model})")
         print(f"   firmware    -> {fw_version} ({git_version})")
 
