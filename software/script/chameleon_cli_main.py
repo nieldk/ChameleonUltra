@@ -25,13 +25,27 @@ LITE = r"""
 """
 
 # create by http://patorjk.com/software/taag/#p=display&f=ANSI%20Shadow&t=Chameleon%20Ultra
-BANNER = """
-██████╗ ██╗  ██╗██████╗ ███████╗ █████╗ ██╗  ██╗██████╗ ██╗   ██╗████████╗███████╗
-██╔══██╗██║  ██║██╔══██╗██╔════╝██╔══██╗██║ ██╔╝██╔══██╗╚██╗ ██╔╝╚══██╔══╝██╔════╝
-██████╔╝███████║██████╔╝█████╗  ███████║█████╔╝ ██████╔╝ ╚████╔╝    ██║   █████╗
-██╔═══╝ ██╔══██║██╔══██╗██╔══╝  ██╔══██║██╔═██╗ ██╔══██╗  ╚██╔╝     ██║   ██╔══╝
-██║     ██║  ██║██║  ██║███████╗██║  ██║██║  ██╗██████╔╝   ██║      ██║   ███████╗
-╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝    ╚═╝      ╚═╝   ╚══════╝
+CHAMELEON = """
+  ╻
+╺━┫  P
+  ┣╸ H
+  ┣╸ R
+  ┣╸ E
+  ┣╸ A   ██████╗██╗  ██╗ █████╗ ███╗   ███╗███████╗██╗     ███████╗ ██████╗ ███╗   ██╗
+  ┣╸ K  ██╔════╝██║  ██║██╔══██╗████╗ ████║██╔════╝██║     ██╔════╝██╔═══██╗████╗  ██║
+  ┣╸ B  ██║     ███████║███████║██╔████╔██║█████╗  ██║     █████╗  ██║   ██║██╔██╗ ██║
+  ┣╸ Y  ██║     ██╔══██║██╔══██║██║╚██╔╝██║██╔══╝  ██║     ██╔══╝  ██║   ██║██║╚██╗██║
+  ┣╸ T  ╚██████╗██║  ██║██║  ██║██║ ╚═╝ ██║███████╗███████╗███████╗╚██████╔╝██║ ╚████║
+  ┣╸ E   ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝╚══════╝╚══════╝ ╚═════╝ ╚═╝  ╚═══╝
+  ┃
+  ┣╸ E
+  ┣╸ D
+  ┣╸ I
+  ┣╸ T
+  ┣╸ I
+  ┣╸ O
+  ┣╸ N
+  ╹
 """
 
 ICEMAN = r"""
@@ -48,6 +62,21 @@ class ChameleonCLI:
         CLI for chameleon
     """
 
+    def _compose_banner(badge):
+    """Overlay the model badge onto the bottom-right of the CHAMELEON art."""
+    rows = [list(l) for l in CHAMELEON.split("\n")]
+    lines = [l for l in badge.split("\n") if l.strip()]
+    anchor = len(rows) - 1 - len(lines)   # the I / O / N rows
+    for k, line in enumerate(lines):
+        r = anchor + k
+        for c, ch in enumerate(line):
+            if ch == " ":
+                continue          # transparent, so the rail is preserved
+            while len(rows[r]) <= c:
+                rows[r].append(" ")
+            rows[r][c] = ch
+    return "\n".join("".join(r).rstrip() for r in rows)
+    
     def __init__(self):
         # new a device communication instance(only communication)
         self.device_com = chameleon_com.ChameleonCom()
@@ -92,15 +121,18 @@ class ChameleonCLI:
         print("        generosity and encouragement that made this independent fork")
         print("        possible. Standing on the shoulders of giants.")
         print(color_string((CY, "        Thank you."))) 
+        
     @staticmethod
-    def print_banner():
-        """
-            print chameleon ascii banner.
-
-        :return:
-        """
-        print(color_string((CY, BANNER)))
-
+    def print_banner(self):
+        model = None
+        try:
+            if self.device_com.isOpen():
+                model = self.cmd.get_device_model()   # 0 = Ultra, 1 = Lite
+        except Exception:
+            pass
+        badge = LITE if model == 1 else ULTRA
+        print(color_string((CY, _compose_banner(badge))))
+        
     def exec_cmd(self, cmd_str):
         if cmd_str == '':
             return
