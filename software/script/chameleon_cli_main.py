@@ -17,14 +17,11 @@ ULTRA = r"""
                                                    ███████      ║ ║║  ║ ╠╦╝╠═╣
                                                                 ╚═╝╩═╝╩ ╩╚═╩ ╩
 """
-
 LITE = r"""
                                                                 ╦  ╦╔╦╗╔═╗
                                                    ███████      ║  ║ ║ ║╣
                                                                 ╩═╝╩ ╩ ╚═╝
 """
-
-# create by http://patorjk.com/software/taag/#p=display&f=ANSI%20Shadow&t=Chameleon%20Ultra
 CHAMELEON = """
   ╻
 ╺━┫  P
@@ -47,21 +44,19 @@ CHAMELEON = """
   ┣╸ N
   ╹
 """
-
-def _compose_banner(badge):
+def _compose_banner(badge, anchor=13):
     rows = [list(l) for l in CHAMELEON.split("\n")]
     lines = [l for l in badge.split("\n") if l.strip()]
-    anchor = len(rows) - 1 - len(lines)   # the I / O / N rows
     for k, line in enumerate(lines):
         r = anchor + k
         for c, ch in enumerate(line):
-            if ch == " ":
-                continue          # transparent, so the rail is preserved
-            while len(rows[r]) <= c:
-                rows[r].append(" ")
+            if ch == " ": continue
+            while len(rows[r]) <= c: rows[r].append(" ")
             rows[r][c] = ch
     return "\n".join("".join(r).rstrip() for r in rows)
-    
+
+print("=== badge right under CHAMELEON (anchor=13) ===\n")
+print(_compose_banner(ULTRA, 13))
 
 ICEMAN = r"""
 ██╗ ██████╗███████╗███╗   ███╗ █████╗ ███╗   ██╗
