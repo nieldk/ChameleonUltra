@@ -48,6 +48,21 @@ CHAMELEON = """
   ╹
 """
 
+def _compose_banner(badge):
+    rows = [list(l) for l in CHAMELEON.split("\n")]
+    lines = [l for l in badge.split("\n") if l.strip()]
+    anchor = len(rows) - 1 - len(lines)   # the I / O / N rows
+    for k, line in enumerate(lines):
+        r = anchor + k
+        for c, ch in enumerate(line):
+            if ch == " ":
+                continue          # transparent, so the rail is preserved
+            while len(rows[r]) <= c:
+                rows[r].append(" ")
+            rows[r][c] = ch
+    return "\n".join("".join(r).rstrip() for r in rows)
+    
+
 ICEMAN = r"""
 ██╗ ██████╗███████╗███╗   ███╗ █████╗ ███╗   ██╗
 ██║██╔════╝██╔════╝████╗ ████║██╔══██╗████╗  ██║
@@ -61,20 +76,6 @@ class ChameleonCLI:
     """
         CLI for chameleon
     """
-
-    def _compose_banner(badge):
-        rows = [list(l) for l in CHAMELEON.split("\n")]
-        lines = [l for l in badge.split("\n") if l.strip()]
-        anchor = len(rows) - 1 - len(lines)   # the I / O / N rows
-        for k, line in enumerate(lines):
-            r = anchor + k
-            for c, ch in enumerate(line):
-                if ch == " ":
-                    continue          # transparent, so the rail is preserved
-                while len(rows[r]) <= c:
-                    rows[r].append(" ")
-                rows[r][c] = ch
-        return "\n".join("".join(r).rstrip() for r in rows)
     
     def __init__(self):
         # new a device communication instance(only communication)
