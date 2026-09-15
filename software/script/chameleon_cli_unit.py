@@ -1283,6 +1283,11 @@ class HWStatus(DeviceRequiredUnit):
     # How much remaining battery is considered low?
     BATTERY_LOW_LEVEL = 30
 
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Show a one-shot summary of connection, firmware and hardware status"
+        return parser
+
     def get_link_speed(self) -> Union[str, None]:
         transport = getattr(self.device_com, "transport_type", None)
         link = getattr(self.device_com, "transport", None)
@@ -1349,7 +1354,6 @@ class HWStatus(DeviceRequiredUnit):
             print(f"   heap        -> {used:,}/{total:,} bytes used ({pct:.1f}%)")
         except chameleon_com.CMDInvalidException:
             print("   heap        -> not supported by current firmware")
-
 
 @hf_14a.command("config")
 class HF14AConfig(DeviceRequiredUnit):
