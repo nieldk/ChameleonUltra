@@ -121,7 +121,6 @@ class ChameleonCLI:
         print("        possible. Standing on the shoulders of giants.")
         print(color_string((CY, "        Thank you."))) 
         
-    @staticmethod
     def print_banner(self):
         model = None
         try:
