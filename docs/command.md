@@ -60,6 +60,10 @@ Get device address (used with Bluetooth)
 
 Get current device firmware version
 
+### `hw status`
+
+Show a one-shot summary of connection, firmware and hardware status
+
 ### `hw blver`
 
 Get bootloader version
