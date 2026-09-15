@@ -1278,6 +1278,62 @@ class HWVersion(DeviceRequiredUnit):
         print(f" - Phreakbyte edition ({model}), Version: {fw_version} ({git_version})")
 
 
+@hw.command("status")
+class HWStatus(DeviceRequiredUnit):
+    # How much remaining battery is considered low?
+    BATTERY_LOW_LEVEL = 30
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Show a one-shot summary of connection, firmware and hardware status"
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        transport = getattr(self.device_com, "transport_type", None)
+        transport_name = transport.name if transport is not None else "UNKNOWN"
+        model = ["Ultra", "Lite"][self.cmd.get_device_model()]
+        fw_version_tuple = self.cmd.get_app_version()
+        fw_version = f"v{fw_version_tuple[0]}.{fw_version_tuple[1]}"
+        git_version = self.cmd.get_git_version()
+
+        print(" - Device status")
+        print(f"   connection  -> {transport_name}")
+        print(f"   model       -> Phreakbyte edition ({model})")
+        print(f"   firmware    -> {fw_version} ({git_version})")
+
+        try:
+            bl_version = self.cmd.get_bootloader_version()
+            print(f"   bootloader  -> {bl_version}")
+        except chameleon_com.CMDInvalidException:
+            print("   bootloader  -> not supported by current firmware")
+
+        print(f"   chip ID     -> {self.cmd.get_device_chip_id()}")
+        print(f"   address     -> {self.cmd.get_device_address()}")
+        print(f"   mode        -> Tag {'Reader' if self.cmd.is_device_reader_mode() else 'Emulator'}")
+
+        try:
+            active_slot = SlotNumber.from_fw(self.cmd.get_active_slot())
+            print(f"   active slot -> {active_slot.value}")
+        except Exception:
+            pass
+
+        try:
+            voltage, percentage = self.cmd.get_battery_info()
+            low = " " + color_string((CR, "[!] Low battery")) if percentage < self.BATTERY_LOW_LEVEL else ""
+            print(f"   battery     -> {voltage} mV, {percentage}%{low}")
+        except chameleon_com.CMDInvalidException:
+            print("   battery     -> not supported by current firmware")
+
+        try:
+            mem = self.cmd.get_free_memory()
+            free, total = mem['free'], mem['total']
+            used = total - free
+            pct = (used / total * 100.0) if total > 0 else 0.0
+            print(f"   heap        -> {used:,}/{total:,} bytes used ({pct:.1f}%)")
+        except chameleon_com.CMDInvalidException:
+            print("   heap        -> not supported by current firmware")
+
+
 @hf_14a.command("config")
 class HF14AConfig(DeviceRequiredUnit):
     class Config(Enum):
