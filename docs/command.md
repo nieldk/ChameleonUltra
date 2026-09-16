@@ -508,6 +508,34 @@ MIFARE Ultralight / NTAG write one page
 - `-p`, `--page` <dec> — The index of the page to write to.  (required)
 - `-d`, `--data` <hex> — Your page data, as a 4 byte (8 character) hex string.  (required)
 
+#### `hf mfu ndefread`
+
+Read an NDEF message from a MIFARE Ultralight / NTAG tag (Type 2 Tag TLV area, starting at the first user memory page).
+
+- `-k`, `--key` <hex> — Authentication key (EV1/NTAG 4 bytes).
+- `-l` — Swap endianness of the key.
+- `-p`, `--page` <dec> — First page to start scanning the TLV area from (default: 4).  (default: 4)
+- `-q`, `--qty` <dec> — Number of pages to read before giving up (default: auto-detect the tag's size, or read until an empty response / Terminator TLV is found if the size can't be determined).
+- `-f`, `--file` — Save the raw NDEF message bytes to this file.
+- `--raw` — Only print the raw NDEF message hex, skip record decoding.
+
+#### `hf mfu ndefwrite`
+
+Write an NDEF message to a MIFARE Ultralight / NTAG tag (Type 2 Tag TLV area, starting at the first user memory page).
+
+- `-k`, `--key` <hex> — Authentication key (EV1/NTAG 4 bytes).
+- `-l` — Swap endianness of the key.
+- `-u`, `--uri` <uri> — Write a URI record, e.g. a URL.
+- `-t`, `--text` <text> — Write a Text record.
+- `-m`, `--mime` <hex> — Write a MIME record payload as hex, requires `--mime-type`.
+- `-r`, `--raw` <hex> — Write a complete, already-encoded raw NDEF message as hex (will still be TLV-wrapped).
+- `--lang` <lang> — Text record language code (default: en).  (default: en)
+- `--mime-type` <type> — MIME type for `--mime`, e.g. text/plain.
+- `-p`, `--page` <dec> — First page to write the TLV area at (default: 4).  (default: 4)
+- `-q`, `--qty` <dec> — Number of available user pages on the tag, used as a safety check before writing (default: auto-detect the tag's size).
+
+One of `-u`/`-t`/`-m`/`-r` is required.
+
 #### `hf mfu eview`
 
 MIFARE Ultralight / NTAG view emulator data

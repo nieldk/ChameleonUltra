@@ -15,6 +15,7 @@ import random
 import struct
 import queue
 import pm3_trace
+import chameleon_ndef as ndef
 from enum import Enum
 from multiprocessing import Pool, cpu_count
 from typing import ClassVar, Union
@@ -4599,6 +4600,126 @@ class HFMFEConfig(SlotIndexArgsAndGoUnit, HF14AAntiCollArgsUnit, DeviceRequiredU
             )
 
 
+def detect_mfu_page_count(cmd):
+    """
+    Scan for a single MIFARE Ultralight / NTAG compatible tag and try to
+    auto-detect its total page count, using the same GET_VERSION /
+    AUTHENTICATE fingerprinting `hf mfu dump` uses.
+
+    Returns a (tag_name, stop_page) tuple:
+     - tag_name is a human readable model name, or None if it couldn't be
+       pinned down exactly.
+     - stop_page is the number of pages on the tag (exclusive upper bound),
+       or None if the size is unknown and the caller should either read
+       until the first error or ask the user for --qty.
+
+    Raises RuntimeError with a human readable message if no single
+    compatible tag could be found.
+    """
+    tags = cmd.hf14a_scan()
+    if len(tags) > 1:
+        raise RuntimeError("Collision detected, leave only one tag.")
+    elif len(tags) == 0:
+        raise RuntimeError("No tag detected.")
+    elif tags[0]["atqa"] != b"\x44\x00" or tags[0]["sak"] != b"\x00":
+        raise RuntimeError(
+            f"Tag is not Mifare Ultralight compatible "
+            f"(ATQA {tags[0]['atqa'].hex()} SAK {tags[0]['sak'].hex()})."
+        )
+
+    options = {
+        "activate_rf_field": 0,
+        "wait_response": 1,
+        "append_crc": 1,
+        "auto_select": 1,
+        "keep_rf_field": 1,
+        "check_response_crc": 1,
+    }
+
+    tag_name = None
+    stop_page = None
+
+    # first try sending the GET_VERSION command
+    try:
+        version = cmd.hf14a_raw(
+            options=options, resp_timeout_ms=100, data=struct.pack("!B", 0x60)
+        )
+        if len(version) == 0:
+            version = None
+    except (ValueError, chameleon_com.CMDInvalidException, TimeoutError):
+        version = None
+
+    # try sending AUTHENTICATE command and observe the result
+    try:
+        supports_auth = (
+            len(
+                cmd.hf14a_raw(
+                    options=options,
+                    resp_timeout_ms=100,
+                    data=struct.pack("!B", 0x1A),
+                )
+            )
+            != 0
+        )
+    except (ValueError, chameleon_com.CMDInvalidException, TimeoutError):
+        supports_auth = False
+
+    if version is not None and not supports_auth:
+        # either ULEV1 or NTAG
+        assert len(version) == 8
+
+        is_mikron_ulev1 = version[1] == 0x34 and version[2] == 0x21
+        if (version[2] == 3 or is_mikron_ulev1) and version[4] == 1 and version[5] == 0:
+            # Ultralight EV1 V0
+            size_map = {
+                0x0B: ("Mifare Ultralight EV1 48b", 20),
+                0x0E: ("Mifare Ultralight EV1 128b", 41),
+            }
+        elif version[2] == 4 and version[4] == 1 and version[5] == 0:
+            # NTAG 210/212/213/215/216 V0
+            size_map = {
+                0x0B: ("NTAG 210", 20),
+                0x0E: ("NTAG 212", 41),
+                0x0F: ("NTAG 213", 45),
+                0x11: ("NTAG 215", 135),
+                0x13: ("NTAG 216", 231),
+            }
+        else:
+            size_map = {}
+
+        if version[6] in size_map:
+            tag_name, stop_page = size_map[version[6]]
+    elif version is None and supports_auth:
+        # Ultralight C
+        tag_name = "Mifare Ultralight C"
+        stop_page = 48
+    elif version is None and not supports_auth:
+        try:
+            # Invalid command returning a NAK means that's some old type of NTAG.
+            cmd.hf14a_raw(
+                options=options, resp_timeout_ms=100, data=struct.pack("!B", 0xFF)
+            )
+            tag_name = "NTAG 20x"
+            # exact size isn't knowable this way
+        except (ValueError, chameleon_com.CMDInvalidException, TimeoutError):
+            # Regular Ultralight
+            tag_name = "Mifare Ultralight"
+            stop_page = 16
+    # else: probably Ultralight AES, which isn't supported yet - leave both None
+
+    # release the RF field, callers will reselect properly for the actual operation
+    try:
+        cmd.hf14a_raw(
+            options={**options, "keep_rf_field": 0},
+            resp_timeout_ms=100,
+            data=struct.pack("!BB", 0x30, 0),
+        )
+    except (ValueError, chameleon_com.CMDInvalidException, TimeoutError):
+        pass
+
+    return tag_name, stop_page
+
+
 @hf_mfu.command("ercnt")
 class HFMFUERCNT(DeviceRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
@@ -4807,6 +4928,380 @@ class HFMFUWRPG(MFUAuthArgsUnit):
                 # we may lose the tag again here
                 pass
             print(color_string((CR, " - Auth failed")))
+
+
+@hf_mfu.command("ndefread")
+class HFMFUNDEFREAD(MFUAuthArgsUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = super().args_parser()
+        parser.description = (
+            "Read an NDEF message from a MIFARE Ultralight / NTAG tag "
+            "(Type 2 Tag TLV area, starting at the first user memory page)."
+        )
+        parser.add_argument(
+            "-p",
+            "--page",
+            type=int,
+            required=False,
+            default=4,
+            metavar="<dec>",
+            help="First page to start scanning the TLV area from (default: 4).",
+        )
+        parser.add_argument(
+            "-q",
+            "--qty",
+            type=int,
+            required=False,
+            default=None,
+            metavar="<dec>",
+            help="Number of pages to read before giving up (default: read until "
+                 "an empty response or a Terminator TLV is found).",
+        )
+        parser.add_argument(
+            "-f",
+            "--file",
+            type=str,
+            required=False,
+            default="",
+            help="Save the raw NDEF message bytes to this file.",
+        )
+        parser.add_argument(
+            "--raw",
+            action="store_true",
+            help="Only print the raw NDEF message hex, skip record decoding.",
+        )
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        param = self.get_param(args)
+
+        if args.qty is not None:
+            max_pages = args.qty
+        else:
+            try:
+                tag_name, stop_page = detect_mfu_page_count(self.cmd)
+            except RuntimeError as e:
+                print(color_string((CR, f"- {e}")))
+                return
+
+            if tag_name is not None:
+                print(f" - Detected tag type as {tag_name}.")
+
+            if stop_page is not None:
+                max_pages = stop_page - args.page
+                if max_pages <= 0:
+                    print(
+                        color_string(
+                            (
+                                CR,
+                                f"- Start page {args.page} is beyond the tag's "
+                                f"{stop_page} pages.",
+                            )
+                        )
+                    )
+                    return
+            else:
+                print(
+                    color_string(
+                        (CY, "- Couldn't auto-detect tag size, reading until first error.")
+                    )
+                )
+                max_pages = 256
+
+        options = {
+            "activate_rf_field": 0,
+            "wait_response": 1,
+            "append_crc": 1,
+            "auto_select": 1,
+            "keep_rf_field": 1,
+            "check_response_crc": 1,
+        }
+
+        if param.key is not None:
+            try:
+                resp = self.cmd.hf14a_raw(
+                    options=options,
+                    resp_timeout_ms=200,
+                    data=struct.pack("!B", 0x1B) + param.key,
+                )
+                failed_auth = len(resp) < 2
+                if not failed_auth:
+                    print(f" - PACK: {resp[:2].hex()}")
+            except Exception:
+                failed_auth = True
+            options["auto_select"] = 0
+        else:
+            failed_auth = False
+
+        if failed_auth:
+            options["keep_rf_field"] = 0
+            try:
+                self.cmd.hf14a_raw(
+                    options=options,
+                    resp_timeout_ms=200,
+                    data=struct.pack("!BB", 0x30, args.page),
+                )
+            except (ValueError, chameleon_com.CMDInvalidException, TimeoutError):
+                pass
+            print(color_string((CR, " - Auth failed")))
+            return
+
+        area = bytearray()
+        stopped_early = False
+
+        for offset in range(max_pages):
+            page = args.page + offset
+            is_last_attempt = offset == max_pages - 1
+            options["keep_rf_field"] = 0 if is_last_attempt else 1
+            try:
+                resp = self.cmd.hf14a_raw(
+                    options=options,
+                    resp_timeout_ms=200,
+                    data=struct.pack("!BB", 0x30, page),
+                )
+            except (ValueError, chameleon_com.CMDInvalidException, TimeoutError):
+                resp = None
+
+            if resp is None or len(resp) < 4:
+                stopped_early = True
+                break
+
+            area += resp[:4]
+
+            # stop early once we've seen a Terminator TLV, no need to keep reading
+            if ndef.TLV_TERMINATOR in area:
+                options["keep_rf_field"] = 0
+                try:
+                    self.cmd.hf14a_raw(
+                        options=options,
+                        resp_timeout_ms=200,
+                        data=struct.pack("!BB", 0x30, page),
+                    )
+                except (ValueError, chameleon_com.CMDInvalidException, TimeoutError):
+                    pass
+                break
+
+        if not area:
+            print(color_string((CR, "- No data read from tag.")))
+            return
+        if stopped_early and args.qty is None:
+            print(color_string((CY, "- Stopped at first unreadable page.")))
+
+        message = ndef.find_ndef_message(bytes(area))
+        if message is None:
+            print(color_string((CR, "- No NDEF Message TLV found in the scanned area.")))
+            print(f" - Raw area: {bytes(area).hex()}")
+            return
+
+        print(f" - NDEF message: {len(message)} bytes")
+        if args.file != "":
+            with open(args.file, "wb") as fd:
+                fd.write(message)
+            print(f" - Saved to {args.file}")
+
+        if args.raw:
+            print(f" - Raw: {message.hex()}")
+            return
+
+        try:
+            records = ndef.decode_message(message)
+        except ndef.NdefError as e:
+            print(color_string((CR, f"- Failed to decode records: {e}")))
+            print(f" - Raw: {message.hex()}")
+            return
+
+        for i, rec in enumerate(records):
+            print(f" - Record {i}: {rec.describe()}")
+
+
+@hf_mfu.command("ndefwrite")
+class HFMFUNDEFWRITE(MFUAuthArgsUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = super().args_parser()
+        parser.description = (
+            "Write an NDEF message to a MIFARE Ultralight / NTAG tag "
+            "(Type 2 Tag TLV area, starting at the first user memory page)."
+        )
+        record_group = parser.add_mutually_exclusive_group(required=True)
+        record_group.add_argument(
+            "-u", "--uri", type=str, metavar="<uri>", help="Write a URI record, e.g. a URL."
+        )
+        record_group.add_argument(
+            "-t", "--text", type=str, metavar="<text>", help="Write a Text record."
+        )
+        record_group.add_argument(
+            "-m",
+            "--mime",
+            type=str,
+            metavar="<hex>",
+            help="Write a MIME record payload as hex, requires --mime-type.",
+        )
+        record_group.add_argument(
+            "-r",
+            "--raw",
+            type=str,
+            metavar="<hex>",
+            help="Write a complete, already-encoded raw NDEF message as hex "
+                 "(will still be TLV-wrapped).",
+        )
+        parser.add_argument(
+            "--lang", type=str, default="en", metavar="<lang>", help="Text record language code (default: en)."
+        )
+        parser.add_argument(
+            "--mime-type", type=str, default=None, metavar="<type>", help="MIME type for --mime, e.g. text/plain."
+        )
+        parser.add_argument(
+            "-p",
+            "--page",
+            type=int,
+            required=False,
+            default=4,
+            metavar="<dec>",
+            help="First page to write the TLV area at (default: 4).",
+        )
+        parser.add_argument(
+            "-q",
+            "--qty",
+            type=int,
+            required=False,
+            default=None,
+            metavar="<dec>",
+            help="Number of available user pages on the tag, used as a safety "
+                 "check before writing (default: no check).",
+        )
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        param = self.get_param(args)
+
+        if args.mime is not None and args.mime_type is None:
+            print(color_string((CR, "- --mime requires --mime-type")))
+            return
+
+        try:
+            if args.uri is not None:
+                message = ndef.encode_message([ndef.NdefRecord.uri(args.uri)])
+            elif args.text is not None:
+                message = ndef.encode_message(
+                    [ndef.NdefRecord.text(args.text, lang=args.lang)]
+                )
+            elif args.mime is not None:
+                message = ndef.encode_message(
+                    [ndef.NdefRecord.mime(args.mime_type, bytes.fromhex(args.mime))]
+                )
+            else:
+                message = bytes.fromhex(args.raw)
+        except (ndef.NdefError, ValueError) as e:
+            print(color_string((CR, f"- Failed to build NDEF message: {e}")))
+            return
+
+        wrapped = ndef.wrap_ndef_message(message)
+        pages = ndef.pages_from_message(wrapped)
+
+        if args.qty is not None:
+            available = args.qty
+        else:
+            try:
+                tag_name, stop_page = detect_mfu_page_count(self.cmd)
+            except RuntimeError as e:
+                print(color_string((CR, f"- {e}")))
+                return
+
+            if tag_name is not None:
+                print(f" - Detected tag type as {tag_name}.")
+
+            if stop_page is not None:
+                available = stop_page - args.page
+            else:
+                available = None
+                print(
+                    color_string(
+                        (
+                            CY,
+                            "- Couldn't auto-detect tag size, writing without a "
+                            "capacity check.",
+                        )
+                    )
+                )
+
+        if available is not None and len(pages) > available:
+            print(
+                color_string(
+                    (
+                        CR,
+                        f"- NDEF message needs {len(pages)} pages but only "
+                        f"{available} are available.",
+                    )
+                )
+            )
+            return
+
+        print(f" - NDEF message: {len(message)} bytes ({len(pages)} pages incl. TLV wrapper)")
+
+        options = {
+            "activate_rf_field": 0,
+            "wait_response": 1,
+            "append_crc": 1,
+            "auto_select": 1,
+            "keep_rf_field": 0,
+            "check_response_crc": 0,
+        }
+
+        if param.key is not None:
+            options["keep_rf_field"] = 1
+            options["check_response_crc"] = 1
+            try:
+                resp = self.cmd.hf14a_raw(
+                    options=options,
+                    resp_timeout_ms=200,
+                    data=struct.pack("!B", 0x1B) + param.key,
+                )
+                failed_auth = len(resp) < 2
+                if not failed_auth:
+                    print(f" - PACK: {resp[:2].hex()}")
+            except Exception:
+                failed_auth = True
+            options["keep_rf_field"] = 0
+            options["auto_select"] = 0
+            options["check_response_crc"] = 0
+        else:
+            failed_auth = False
+
+        if failed_auth:
+            options["keep_rf_field"] = 0
+            try:
+                self.cmd.hf14a_raw(
+                    options=options,
+                    resp_timeout_ms=200,
+                    data=struct.pack("!BB", 0x30, args.page),
+                )
+            except (ValueError, chameleon_com.CMDInvalidException, TimeoutError):
+                pass
+            print(color_string((CR, " - Auth failed")))
+            return
+
+        for offset, page_data in enumerate(pages):
+            page = args.page + offset
+            is_last = offset == len(pages) - 1
+            options["keep_rf_field"] = 0 if is_last else 1
+            try:
+                resp = self.cmd.hf14a_raw(
+                    options=options,
+                    resp_timeout_ms=200,
+                    data=struct.pack("!BB", 0xA2, page) + page_data,
+                )
+            except (ValueError, chameleon_com.CMDInvalidException, TimeoutError):
+                print(color_string((CR, f"- Write failed at page {page} (tag lost).")))
+                return
+
+            options["auto_select"] = 0
+
+            if len(resp) == 0 or resp[0] != 0x0A:
+                code = resp[0] if len(resp) else None
+                print(color_string((CR, f"- Write failed at page {page} ({code}).")))
+                return
+
+        print(color_string((CG, "- Ok, NDEF message written.")))
 
 
 @hf_mfu.command("eview")
