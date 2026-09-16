@@ -42,14 +42,11 @@ or macOS (Windows via WSL). No programmer or SWD adapter.
 
 Software — ARM toolchain, Python, git:
 
-```bash
-# Arch
-sudo pacman -S arm-none-eabi-gcc arm-none-eabi-newlib python python-pip git
-# Debian / Ubuntu / Kali
-sudo apt install gcc-arm-none-eabi libnewlib-arm-none-eabi python3-pip git
-# macOS
-brew install --cask gcc-arm-embedded && brew install python git
-```
+Download the arm toolchain from [Arm toolchain official releases](https://gitlab.arm.com/tooling/gnu-toolchains-for-arm)
+
+Follow instructions on [Installing Arm tool-chain](https://learn.arm.com/install-guides/gcc/arm-gnu/) on how to install the tool-chain.
+
+Your distros package manager version will likely build a bootloader that does not fit memory regions and you will encounter errors compiling!!!
 
 **nRF Util (v7 or newer).** The build and flash scripts use the modern, modular
 `nrfutil` — a standalone native binary, **not** the legacy `pip install nrfutil`
@@ -79,25 +76,12 @@ mergehex --version
 
 ---
 
-## Step 1 — clone and fetch tags
+## Step 1 — clone this repository
 
 ```bash
-git clone -b UF2 https://github.com/nieldk/ChameleonUltra.git
+git clone https://github.com/nieldk/ChameleonUltra.git
 cd ChameleonUltra
-git remote add upstream https://github.com/RfidResearchGroup/ChameleonUltra.git
-git fetch upstream --tags
 ```
-
-The build derives its version string from `git describe`, and tags live on
-upstream. Confirm:
-
-```bash
-git describe --tags        # e.g. v2.0.0-15-gabc1234
-```
-
-If it reports "No names found": `git fetch upstream 'refs/tags/*:refs/tags/*'`.
-
----
 
 ## Step 2 — build
 
@@ -112,7 +96,7 @@ Tail of a successful build:
 ```
 ==========================================================
 Build complete.
-  SD+BL      : objects/ultra-dfu-sdbl.zip
+  SD+BL      : objects/ultra-dfu-bl.zip
   App        : objects/ultra-dfu-app.zip
   Full image : objects/ultra-fullimage.uf2
 Use flash-dfu-sdbl.sh to install both stages.
