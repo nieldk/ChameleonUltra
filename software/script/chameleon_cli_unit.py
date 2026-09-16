@@ -5280,29 +5280,58 @@ class HFMFUNDEFWRITE(MFUAuthArgsUnit):
             print(color_string((CR, " - Auth failed")))
             return
 
+        max_retries = 3
+
         for offset, page_data in enumerate(pages):
             page = args.page + offset
             is_last = offset == len(pages) - 1
             options["keep_rf_field"] = 0 if is_last else 1
-            try:
-                resp = self.cmd.hf14a_raw(
-                    options=options,
-                    resp_timeout_ms=200,
-                    data=struct.pack("!BB", 0xA2, page) + page_data,
-                )
-            except (ValueError, chameleon_com.CMDInvalidException, TimeoutError):
-                print(color_string((CR, f"- Write failed at page {page} (tag lost).")))
+            
+            write_successful = False
+
+            for attempt in range(1, max_retries + 1):
+                try:
+                    resp = self.cmd.hf14a_raw(
+                        options=options,
+                        resp_timeout_ms=200,
+                        data=struct.pack("!BB", 0xA2, page) + page_data,
+                    )
+
+                    # 0x0A is the NTAG/Ultralight ACK byte
+                    if len(resp) > 0 and resp[0] == 0x0A:
+                        write_successful = True
+                        break
+                    else:
+                        code = resp[0] if len(resp) else None
+                        print(
+                            color_string(
+                                (
+                                    CY,
+                                    f" - Write page {page} attempt {attempt}/{max_retries} failed ({code}). Retrying...",
+                                )
+                            )
+                        )
+                except (ValueError, chameleon_com.CMDInvalidException, TimeoutError):
+                    print(
+                        color_string(
+                            (
+                                CY,
+                                f" - Write page {page} attempt {attempt}/{max_retries} exception. Retrying...",
+                            )
+                        )
+                    )
+
+                # Re-enable auto_select on retries in case communication dropped
+                options["auto_select"] = 1
+
+            if not write_successful:
+                print(color_string((CR, f"- Write failed permanently at page {page} after {max_retries} attempts.")))
                 return
 
+            # Keep field alive without re-selecting for consecutive writes
             options["auto_select"] = 0
 
-            if len(resp) == 0 or resp[0] != 0x0A:
-                code = resp[0] if len(resp) else None
-                print(color_string((CR, f"- Write failed at page {page} ({code}).")))
-                return
-
         print(color_string((CG, "- Ok, NDEF message written.")))
-
 
 @hf_mfu.command("eview")
 class HFMFUEVIEW(DeviceRequiredUnit):
