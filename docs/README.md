@@ -1,4 +1,4 @@
-# ChameleonUltra (sec1.dk fork) — Documentation
+# ChameleonUltra (PhreakByte Edition)) — Documentation
 
 This is a standalone fork of ChameleonUltra. General device usage, protocol
 coverage and CLI reference are shared with upstream and documented in the
