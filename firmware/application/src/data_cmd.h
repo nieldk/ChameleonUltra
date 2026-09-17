@@ -52,6 +52,8 @@
 #define DATA_CMD_SET_SLEEP_TIMEOUT              (1040)
 #define DATA_CMD_GET_BOOTLOADER_VERSION         (1041)
 #define DATA_CMD_GET_FREE_MEMORY                (1042)
+#define DATA_CMD_GET_BLE_NAME                   (1043)
+#define DATA_CMD_SET_BLE_NAME                   (1044)
 
 //
 // ******************************************************************

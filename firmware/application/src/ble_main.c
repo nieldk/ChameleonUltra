@@ -125,6 +125,23 @@ void set_ble_connect_key(uint8_t *key) {
     APP_ERROR_CHECK(sd_ble_opt_set(BLE_GAP_OPT_PASSKEY, &m_static_pin_option));
 }
 
+/**@brief Function for (re-)applying the GAP device name from settings.
+ *
+ * @details Uses the custom BLE name from settings if one is configured, otherwise falls
+ *          back to the firmware default (DEVICE_NAME_STR). Safe to call again at runtime
+ *          (e.g. right after `SET_BLE_NAME`) to update the advertised name without a reboot.
+ */
+void ble_update_device_name(void) {
+    ble_gap_conn_sec_mode_t sec_mode;
+    BLE_GAP_CONN_SEC_MODE_SET_OPEN(&sec_mode);
+
+    const char *custom_name = settings_get_ble_name();
+    const char *name_to_use = (custom_name[0] != '\0') ? custom_name : DEVICE_NAME_STR;
+
+    uint32_t err_code = sd_ble_gap_device_name_set(&sec_mode, (const uint8_t *) name_to_use, strlen(name_to_use));
+    APP_ERROR_CHECK(err_code);
+}
+
 /**@brief Function for the GAP initialization.
  *
  * @details This function will set up all the necessary GAP (Generic Access Profile) parameters of
@@ -133,12 +150,8 @@ void set_ble_connect_key(uint8_t *key) {
 static void gap_params_init(void) {
     uint32_t                err_code;
     ble_gap_conn_params_t   gap_conn_params;
-    ble_gap_conn_sec_mode_t sec_mode;
 
-    BLE_GAP_CONN_SEC_MODE_SET_OPEN(&sec_mode);
-
-    err_code = sd_ble_gap_device_name_set(&sec_mode, (const uint8_t *) DEVICE_NAME_STR, strlen(DEVICE_NAME_STR));
-    APP_ERROR_CHECK(err_code);
+    ble_update_device_name();
 
     memset(&gap_conn_params, 0, sizeof(gap_conn_params));
 

@@ -2118,6 +2118,23 @@ static data_frame_tx_t *cmd_processor_set_ble_connect_key(uint16_t cmd, uint16_t
     return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
 }
 
+static data_frame_tx_t *cmd_processor_get_ble_name(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    const char *name = settings_get_ble_name();
+    return data_frame_make(cmd, STATUS_SUCCESS, strlen(name), (uint8_t *)name);
+}
+
+static data_frame_tx_t *cmd_processor_set_ble_name(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length > BLE_NAME_MAX_LEN) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    if (!settings_set_ble_name((const char *)data, length)) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    // Apply immediately so a live device advertises the new name without a reboot.
+    ble_update_device_name();
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
 static data_frame_tx_t *cmd_processor_delete_all_ble_bonds(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     advertising_stop();
     delete_bonds_all();
@@ -3887,6 +3904,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_GET_ALL_SLOT_NICKS,           NULL,                        cmd_processor_get_all_slot_nicks,            NULL                   },
     {    DATA_CMD_GET_BOOTLOADER_VERSION,       NULL,                        cmd_processor_get_bootloader_version,        NULL                   },
     {    DATA_CMD_GET_FREE_MEMORY,              NULL,                        cmd_processor_get_free_memory,               NULL                   },
+    {    DATA_CMD_GET_BLE_NAME,                 NULL,                        cmd_processor_get_ble_name,                  NULL                   },
+    {    DATA_CMD_SET_BLE_NAME,                 NULL,                        cmd_processor_set_ble_name,                  NULL                   },
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
 

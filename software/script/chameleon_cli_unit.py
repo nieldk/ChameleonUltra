@@ -9222,6 +9222,41 @@ class HWBlePair(DeviceRequiredUnit):
             print(color_string((CY, "Do not forget to store your settings in flash!")))
 
 
+@hw_settings.command("blename")
+class HWSettingsBLEName(DeviceRequiredUnit):
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Get or set the BLE advertised name (max 20 chars). Pass an empty string to reset to the firmware default."
+        parser.add_argument(
+            "-n", "--name", required=False, help="BLE advertised name for your device (max 20 chars), or \"\" to reset to default"
+        )
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        current = self.cmd.get_ble_name()
+        current_display = current if current else color_string((CY, "(default)"))
+        print(f" - The current BLE name of the device: {color_string((CG, current_display))}")
+
+        if args.name is not None:
+            if len(args.name) > 20:
+                print(
+                    f" - {color_string((CR, 'The BLE name must be at most 20 characters'))}"
+                )
+                return
+            self.cmd.set_ble_name(args.name)
+            new_display = args.name if args.name else color_string((CY, "(default)"))
+            print(
+                f" - Successfully set BLE name to: {color_string((CG, new_display))}"
+            )
+            print(
+                color_string((CY, "Do not forget to store your settings in flash!"))
+            )
+            print(
+                color_string((CY, "You may need to reconnect/rescan for the new name to show up."))
+            )
+
+
 @hw.command("raw")
 class HWRaw(DeviceRequiredUnit):
 

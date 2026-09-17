@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <string.h>
 #include "crc_utils.h"
 #include "app_status.h"
 #include "settings.h"
@@ -58,6 +59,11 @@ void settings_init_sleep_timeout_config(void) {
     config.sleep_timeout = SETTINGS_SLEEP_TIMEOUT_DEFAULT_S;
 }
 
+// add on version7
+void settings_init_ble_name_config(void) {
+    memset(config.ble_name, 0, sizeof(config.ble_name)); // empty = use firmware default name
+}
+
 void settings_init_config(void) {
     settings_update_version_for_config();
     config.animation_config = SettingsAnimationModeFull; // add on version1
@@ -66,6 +72,7 @@ void settings_init_config(void) {
     settings_init_ble_connect_key_config();
     settings_init_ble_pairing_enable_config();
     settings_init_sleep_timeout_config();
+    settings_init_ble_name_config();
 }
 
 void settings_migrate(void) {
@@ -88,6 +95,9 @@ void settings_migrate(void) {
 
         case 5:
             settings_init_sleep_timeout_config();
+
+        case 6:
+            settings_init_ble_name_config();
 
             /*
              * Add new migration steps ABOVE THIS COMMENT
@@ -307,4 +317,30 @@ uint32_t settings_get_sleep_timeout(void) {
 
 void settings_set_sleep_timeout(uint8_t seconds) {
     config.sleep_timeout = seconds;
+}
+
+/**
+ * @brief Get the custom BLE advertised name.
+ *
+ * @return const char* NUL-terminated string; empty ("") means "use firmware default name".
+ */
+const char *settings_get_ble_name(void) {
+    return config.ble_name;
+}
+
+/**
+ * @brief Set the custom BLE advertised name.
+ *
+ * @param name Pointer to the name bytes (not necessarily NUL-terminated on the wire).
+ * @param len Number of bytes in `name`. Pass 0 to reset to the firmware default name.
+ * @return true if the name was accepted and stored in RAM (caller must still `hw settings store`).
+ * @return false if `len` exceeds BLE_NAME_MAX_LEN.
+ */
+bool settings_set_ble_name(const char *name, uint8_t len) {
+    if (len > BLE_NAME_MAX_LEN) {
+        return false;
+    }
+    memset(config.ble_name, 0, sizeof(config.ble_name));
+    memcpy(config.ble_name, name, len);
+    return true;
 }

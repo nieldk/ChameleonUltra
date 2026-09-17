@@ -5,12 +5,13 @@
 
 #include "utils.h"
 
-#define SETTINGS_CURRENT_VERSION 6
+#define SETTINGS_CURRENT_VERSION 7
 #define SETTINGS_SLEEP_TIMEOUT_DEFAULT_S 8   // default wake timeout in seconds (matches SLEEP_DELAY_MS_BUTTON_WAKEUP)
 #define SETTINGS_SLEEP_TIMEOUT_MIN_S      5
 #define SETTINGS_SLEEP_TIMEOUT_MAX_S      60
 #define BLE_PAIRING_KEY_LEN 6
 #define DEFAULT_BLE_PAIRING_KEY "123456"  // length must == 6
+#define BLE_NAME_MAX_LEN 20   // keep comfortably under BLE_GAP_DEVNAME_MAX_LEN (31 with default GAP cfg)
 
 typedef enum {
     SettingsAnimationModeFull = 0U,
@@ -58,6 +59,9 @@ typedef struct ALIGN_U32 {
     // 1 byte (add on version6)
     uint8_t sleep_timeout; // wake timeout in seconds after button wakeup
 
+    // BLE_NAME_MAX_LEN + 1 bytes (add on version7)
+    char ble_name[BLE_NAME_MAX_LEN + 1]; // NUL-terminated custom BLE name; empty string = use firmware default
+
     /*
      * Warning !!!!!!!!!!!!!!!!!!!!!! <-------------
      * If you need to add settings,
@@ -85,4 +89,7 @@ bool settings_get_ble_pairing_enable_first_load(void);
 uint32_t settings_get_sleep_timeout(void);
 void settings_set_sleep_timeout(uint8_t seconds);
 void settings_init_sleep_timeout_config(void);
+const char *settings_get_ble_name(void);
+bool settings_set_ble_name(const char *name, uint8_t len);
+void settings_init_ble_name_config(void);
 #endif

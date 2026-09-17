@@ -1904,6 +1904,27 @@ class ChameleonCMD:
         return resp
 
     @expect_response(Status.SUCCESS)
+    def get_ble_name(self):
+        """
+        Get the custom BLE advertised name. Empty string means the firmware default is in use.
+        """
+        resp = self.device.send_cmd_sync(Command.GET_BLE_NAME)
+        if resp.status == Status.SUCCESS:
+            resp.parsed = resp.data.decode(encoding='utf-8')
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def set_ble_name(self, name: str):
+        """
+        Set a custom BLE advertised name (max 20 bytes UTF-8). Pass an empty string to reset
+        to the firmware default name.
+        """
+        data = name.encode(encoding='utf-8')
+        if len(data) > 20:
+            raise ValueError("The BLE name must be at most 20 bytes")
+        return self.device.send_cmd_sync(Command.SET_BLE_NAME, data)
+
+    @expect_response(Status.SUCCESS)
     def delete_all_ble_bonds(self):
         """
         From peer manager delete all bonds.
