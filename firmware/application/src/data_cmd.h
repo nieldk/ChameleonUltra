@@ -54,6 +54,7 @@
 #define DATA_CMD_GET_FREE_MEMORY                (1042)
 #define DATA_CMD_GET_BLE_NAME                   (1043)
 #define DATA_CMD_SET_BLE_NAME                   (1044)
+#define DATA_CMD_RESET_DEVICE                   (1045)  /* plain reboot into the app, no bootloader/factory wipe */
 
 //
 // ******************************************************************

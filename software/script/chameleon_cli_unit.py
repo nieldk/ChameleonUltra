@@ -9035,6 +9035,25 @@ class HWSettingsReset(DeviceRequiredUnit):
             print(" - Reset failed")
 
 
+@hw.command("reset")
+class HWReset(DeviceRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "Reboot the device. Plain restart only — slots and settings are untouched."
+        )
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        print("Device restarting...")
+        if self.cmd.reset_device():
+            print(" - Reset successful! Please reconnect.")
+        else:
+            print(" - Reset failed!")
+        # let time for comm thread to close port
+        time.sleep(0.1)
+
+
 @hw.command("factory_reset")
 class HWFactoryReset(DeviceRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:

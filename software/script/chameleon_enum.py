@@ -67,6 +67,8 @@ class Command(enum.IntEnum):
     GET_BLE_NAME = 1043
     SET_BLE_NAME = 1044
 
+    RESET_DEVICE = 1045
+
     HF14A_SCAN = 2000
     MF1_DETECT_SUPPORT = 2001
     MF1_DETECT_PRNG = 2002

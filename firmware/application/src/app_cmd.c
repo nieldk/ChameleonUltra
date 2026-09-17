@@ -187,6 +187,15 @@ static data_frame_tx_t *cmd_processor_reset_settings(uint16_t cmd, uint16_t stat
     return data_frame_make(cmd, status, 0, NULL);
 }
 
+static data_frame_tx_t *cmd_processor_reset_device(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    // Plain reboot: no GPREGRET bootloader flag, no FDS wipe, just restart the
+    // app. Reply first, then reset shortly after so the response frame has
+    // time to actually reach the host before the link drops (same pattern
+    // as cmd_processor_wipe_fds).
+    delayed_reset(50);
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
 static data_frame_tx_t *cmd_processor_get_device_settings(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     uint8_t settings[7 + BLE_PAIRING_KEY_LEN] = {};
     settings[0] = SETTINGS_CURRENT_VERSION; // current version
@@ -3877,6 +3886,7 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_GET_DEVICE_ADDRESS,           NULL,                        cmd_processor_get_device_address,            NULL                   },
     {    DATA_CMD_SAVE_SETTINGS,                NULL,                        cmd_processor_save_settings,                 NULL                   },
     {    DATA_CMD_RESET_SETTINGS,               NULL,                        cmd_processor_reset_settings,                NULL                   },
+    {    DATA_CMD_RESET_DEVICE,                 NULL,                        cmd_processor_reset_device,                  NULL                   },
     {    DATA_CMD_SET_ANIMATION_MODE,           NULL,                        cmd_processor_set_animation_mode,            NULL                   },
     {    DATA_CMD_GET_ANIMATION_MODE,           NULL,                        cmd_processor_get_animation_mode,            NULL                   },
     {    DATA_CMD_GET_GIT_VERSION,              NULL,                        cmd_processor_get_git_version,               NULL                   },

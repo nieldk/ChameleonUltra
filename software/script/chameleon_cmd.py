@@ -1749,6 +1749,17 @@ class ChameleonCMD:
         """
         self.device.send_cmd_auto(Command.ENTER_BOOTLOADER, close=True)
 
+    def reset_device(self):
+        """
+        Plain reboot: restart the application, no bootloader, no settings/slot wipe.
+        The device replies success first, then reboots ~50ms later, so we can
+        wait for the response before closing the (now-dead) connection.
+        """
+        resp = self.device.send_cmd_sync(Command.RESET_DEVICE)
+        resp.parsed = resp.status == Status.SUCCESS
+        self.device.close()
+        return resp
+
     def update_bl(self):
         """
         Ask the device to flash the embedded bootloader (bl_updater) and reset.
