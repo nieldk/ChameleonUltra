@@ -1332,6 +1332,14 @@ class HWStatus(DeviceRequiredUnit):
 
         print(f"   chip ID     -> {self.cmd.get_device_chip_id()}")
         print(f"   address     -> {self.cmd.get_device_address()}")
+
+        try:
+            ble_name = self.cmd.get_ble_name()
+            ble_name_display = ble_name if ble_name else color_string((CY, "(default)"))
+            print(f"   ble name    -> {ble_name_display}")
+        except chameleon_com.CMDInvalidException:
+            print("   ble name    -> not supported by current firmware")
+
         print(f"   mode        -> Tag {'Reader' if self.cmd.is_device_reader_mode() else 'Emulator'}")
 
         try:
