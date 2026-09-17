@@ -17,7 +17,7 @@
 #include "nrf_log_default_backends.h"
 NRF_LOG_MODULE_REGISTER();
 
-const uint32_t start_gap = 30 * 8;     // 30Tc
+const uint32_t start_gap = 50 * 8;     // 50Tc (was 30Tc): more power-up/reset margin for weakly coupled tags; T5577 spec allows 8..50Tc
 const uint32_t write_gap = 9 * 8;      // 9Tc
 const uint32_t gap_sep_zero = 24 * 8;  // 24Tc
 const uint32_t gap_sep_one = 54 * 8;   // 54Tc
@@ -117,7 +117,7 @@ void t55xx_send_cmd(uint8_t opcode, uint32_t *passwd, uint8_t lock_bit, uint32_t
     request_timeslot(37 * 1000, t55xx_timeslot_callback);
 
     if (opcode != 0) {
-        bsp_delay_ms(6);  // Maybe continue to write a card next time, you need to wait more for a while
+        bsp_delay_ms(10);  // T5577 EEPROM program time ~5.6ms typ; 10ms gives margin for slow clones (was 6ms)
     } else {
         bsp_delay_ms(1);
     }
