@@ -3846,6 +3846,35 @@ static data_frame_tx_t *cmd_processor_hf14a_4_debug_counters(uint16_t cmd, uint1
 #endif
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
+static data_frame_tx_t *cmd_processor_indala_scan(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    uint8_t card_buffer[LF_INDALA_TAG_ID_SIZE] = {0x00};
+    status = scan_indala(card_buffer);
+    if (status != STATUS_LF_TAG_OK) {
+        return data_frame_make(cmd, status, 0, NULL);
+    }
+    return data_frame_make(cmd, STATUS_LF_TAG_OK, sizeof(card_buffer), card_buffer);
+}
+
+static data_frame_tx_t *cmd_processor_indala_write_to_t55xx(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    typedef struct {
+        uint8_t id[LF_INDALA_TAG_ID_SIZE];
+        uint8_t new_key[4];
+        uint8_t old_keys[4];
+    } PACKED payload_t;
+    payload_t *payload = (payload_t *)data;
+    if (length < sizeof(payload_t)) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint16_t tail = length - offsetof(payload_t, old_keys);
+    bool fc8 = (tail % 4 == 1) ? data[length - 1] : 0;
+    uint8_t key_count = (tail - (tail % 4 == 1 ? 1 : 0)) / 4;
+    if (key_count == 0) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    status = write_indala_to_t55xx(payload->id, payload->new_key, payload->old_keys, key_count, fc8);
+    return data_frame_make(cmd, status, 0, NULL);
+}
+
 static data_frame_tx_t *cmd_processor_fdxb_scan(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     uint8_t card_buffer[2 + FDXB_DATA_SIZE] = {0x00};
     status = scan_fdxb(card_buffer);
@@ -3954,6 +3983,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
 #if defined(PROJECT_CHAMELEON_ULTRA)
     {    DATA_CMD_FDXB_SCAN,                    before_reader_run,           cmd_processor_fdxb_scan,                     NULL                   },
     {    DATA_CMD_FDXB_WRITE_TO_T55XX,          before_reader_run,           cmd_processor_fdxb_write_to_t55xx,           NULL                   },
+    {    DATA_CMD_INDALA_SCAN,                  before_reader_run,           cmd_processor_indala_scan,                   NULL                   },
+    {    DATA_CMD_INDALA_WRITE_TO_T55XX,        before_reader_run,           cmd_processor_indala_write_to_t55xx,         NULL                   },
 #endif
     {    DATA_CMD_IDTECK_WRITE_TO_T55XX,        before_reader_run,           cmd_processor_idteck_write_to_t55xx,         NULL                   },
     {    DATA_CMD_LF_T55XX_WRITE,               before_reader_run,           cmd_processor_lf_t55xx_write,                NULL                   },

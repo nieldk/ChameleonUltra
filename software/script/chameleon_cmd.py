@@ -953,6 +953,33 @@ class ChameleonCMD:
         data = struct.pack(f'!8s4s{4*len(old_keys)}s', id_bytes, new_key, b''.join(old_keys))
         return self.device.send_cmd_sync(Command.IDTECK_WRITE_TO_T55XX, data)
 
+    def indala_scan(self):
+        """
+        Read the card number of Indala.
+
+        :return:
+        """
+        resp = self.device.send_cmd_sync(Command.INDALA_SCAN)
+        if resp.status == Status.LF_TAG_OK:
+            resp.parsed = resp.data
+        return resp
+
+    @expect_response(Status.LF_TAG_OK)
+    def indala_write_to_t55xx(self, id_bytes: bytes, fc8_override: bool = False):
+        """
+        Write Indala card number into T55XX.
+
+        :param id_bytes: 8-byte raw Indala frame
+        :param fc8_override: Use fc/8 PSK modulation for CU self-test
+        :return:
+        """
+        if len(id_bytes) != 8:
+            raise ValueError("The id bytes length must equal 8")
+        data = struct.pack(f'!8s4s{4*len(old_keys)}s', id_bytes, new_key, b''.join(old_keys))
+        if fc8_override:
+            data += b'\x01'
+        return self.device.send_cmd_sync(Command.INDALA_WRITE_TO_T55XX, data)
+
     @expect_response(Status.LF_TAG_OK)
     def adc_generic_read(self):
         """

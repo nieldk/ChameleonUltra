@@ -126,6 +126,8 @@
 #define DATA_CMD_FDXB_SCAN                       (3021)
 #define DATA_CMD_FDXB_WRITE_TO_T55XX             (3022)
 #endif
+#define DATA_CMD_INDALA_SCAN                    (3035)
+#define DATA_CMD_INDALA_WRITE_TO_T55XX          (3036)
 
 //
 // ******************************************************************
