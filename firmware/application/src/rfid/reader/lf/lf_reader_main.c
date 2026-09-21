@@ -317,7 +317,7 @@ uint8_t write_fdxb_to_t55xx(uint8_t *fdxb_data, uint8_t *new_passwd, uint8_t *ol
 }
 
 uint8_t scan_indala(uint8_t *data) {
-    if (psk_generic_read(&indala, data, g_timeout_readem_ms)) {
+    if (psk_generic_read(&indala, data, g_timeout_readem_ms, true)) {  // fc/2 @ 166.67 kHz
         return STATUS_LF_TAG_OK;
     }
     return STATUS_LF_TAG_NO_FOUND;

@@ -137,6 +137,61 @@ void lf_125khz_radio_saadc_disable(void) {
     unregister_lf_adc_callback();
 }
 
+/* --- 166.67 kHz SAADC capture (TIMER3-triggered, decoupled from the carrier) ---
+ * Real Indala is PSK1 fc/2: the 125 kHz CARRIER phase is flipped per data bit
+ * (the tuned LF antenna filters out the 62.5 kHz subcarrier). Sampling at
+ * 166.667 kHz (16 MHz / 96) aliases the carrier to 41.67 kHz = DFT bin 2, which
+ * psk166_correlate_iq() reads to recover per-bit phase. The normal reader path
+ * samples at the 125 kHz carrier rate (PWM-PERIOD-END PPI), where fc/2 sits at
+ * Nyquist and cannot be demodulated — hence this separate sample clock.
+ * TIMER3 is otherwise unused; sdk_config has NRFX_TIMER3_ENABLED=1. */
+static nrfx_timer_t      m_psk166_timer = NRFX_TIMER_INSTANCE(3);
+static nrf_ppi_channel_t m_psk166_saadc_ppi;
+static bool              m_psk166_inited = false;
+
+static void psk166_capture_init(void) {
+    if (m_psk166_inited) return;
+    nrfx_err_t err_code;
+
+    nrfx_timer_config_t cfg = NRFX_TIMER_DEFAULT_CONFIG;
+    cfg.frequency = NRF_TIMER_FREQ_16MHz;
+    cfg.mode      = NRF_TIMER_MODE_TIMER;
+    cfg.bit_width = NRF_TIMER_BIT_WIDTH_16;
+    err_code = nrfx_timer_init(&m_psk166_timer, &cfg, NULL);
+    APP_ERROR_CHECK(err_code);
+
+    /* 16 MHz / 96 = 166.667 kHz, auto-clear on compare. */
+    nrfx_timer_extended_compare(&m_psk166_timer, NRF_TIMER_CC_CHANNEL0, 96,
+                                NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK, false);
+
+    err_code = nrfx_ppi_channel_alloc(&m_psk166_saadc_ppi);
+    APP_ERROR_CHECK(err_code);
+    err_code = nrfx_ppi_channel_assign(
+                   m_psk166_saadc_ppi,
+                   nrfx_timer_event_address_get(&m_psk166_timer, NRF_TIMER_EVENT_COMPARE0),
+                   nrf_saadc_task_address_get(NRF_SAADC_TASK_SAMPLE));
+    APP_ERROR_CHECK(err_code);
+
+    m_psk166_inited = true;
+}
+
+/* Enable 166.67 kHz sampling. The carrier PWM's own SAADC PPI stays disabled
+ * (we never enable it on this path), so SAADC is triggered only by TIMER3. */
+void lf_125khz_radio_saadc166_enable(lf_adc_callback_t cb) {
+    register_lf_adc_callback(cb);
+    psk166_capture_init();
+    nrfx_err_t err_code = nrfx_ppi_channel_enable(m_psk166_saadc_ppi);
+    APP_ERROR_CHECK(err_code);
+    nrfx_timer_enable(&m_psk166_timer);
+}
+
+void lf_125khz_radio_saadc166_disable(void) {
+    nrfx_timer_disable(&m_psk166_timer);
+    nrfx_err_t err_code = nrfx_ppi_channel_disable(m_psk166_saadc_ppi);
+    APP_ERROR_CHECK(err_code);
+    unregister_lf_adc_callback();
+}
+
 void lf_125khz_radio_gpiote_enable(void) {
     nrfx_err_t err_code;
     err_code = nrfx_ppi_channel_enable(m_pwm_timer_count_ppi_channel);

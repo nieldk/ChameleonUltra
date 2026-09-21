@@ -27,7 +27,7 @@ static void saadc_cb(nrf_saadc_value_t *vals, size_t size) {
     }
 }
 
-bool psk_generic_read(const protocol *p, uint8_t *data, uint32_t timeout_ms) {
+bool psk_generic_read(const protocol *p, uint8_t *data, uint32_t timeout_ms, bool hi_rate) {
     void *codec = p->alloc();
     if (!codec) {
         NRF_LOG_ERROR("PSK: alloc failed");
@@ -43,7 +43,11 @@ bool psk_generic_read(const protocol *p, uint8_t *data, uint32_t timeout_ms) {
         p->free(codec);
         return false;
     }
-    lf_125khz_radio_saadc_enable(saadc_cb);
+    if (hi_rate) {
+        lf_125khz_radio_saadc166_enable(saadc_cb);  // 166.67 kHz for PSK1 fc/2
+    } else {
+        lf_125khz_radio_saadc_enable(saadc_cb);     // 125 kHz (carrier-locked)
+    }
 
     bool ok = false;
     autotimer *p_at = bsp_obtain_timer(0);
@@ -63,7 +67,11 @@ bool psk_generic_read(const protocol *p, uint8_t *data, uint32_t timeout_ms) {
 
     bsp_return_timer(p_at);
     stop_lf_125khz_radio();
-    lf_125khz_radio_saadc_disable();
+    if (hi_rate) {
+        lf_125khz_radio_saadc166_disable();
+    } else {
+        lf_125khz_radio_saadc_disable();
+    }
     cb_free(&cb);
 
     p->free(codec);

@@ -53,7 +53,7 @@ typedef struct {
 
 static indala_codec *indala_alloc(void) {
     indala_codec *codec = malloc(sizeof(indala_codec));
-    codec->modem = psk_alloc(PSK_BITRATE_32, 0);  // struct only, no sample malloc
+    codec->modem = psk_alloc(PSK166_BITRATE_43, 0);  // fc/2 @ 166.67 kHz; struct only
     codec->modem->buf_size = INDALA_PSK_BUF_SIZE;
     codec->modem->samples = psk_shared_samples;    // shared static buffer
     return codec;
@@ -89,115 +89,92 @@ static void indala_extract_data(indala_codec *d, uint64_t reg) {
     }
 }
 
-// Period-8 rectangular wave DDC mixer for fc/8 PSK.
-// cos-like: [+1,+1,+1,+1,-1,-1,-1,-1], sin-like: [-1,-1,+1,+1,+1,+1,-1,-1]
-// DC cancels naturally (both waves sum to 0 over any period).
-static inline void indala_integrate_bit(const uint16_t *samples, uint16_t base,
-                                        int32_t *out_I, int32_t *out_Q) {
-    static const int8_t cos8[8] = { 1,  1,  1,  1, -1, -1, -1, -1};
-    static const int8_t sin8[8] = {-1, -1,  1,  1,  1,  1, -1, -1};
-    int32_t I = 0, Q = 0;
-    for (uint8_t k = 0; k < INDALA_BPS; k++) {
-        int32_t s = (int32_t)samples[base + k];
-        uint8_t p = (base + k) & 7;
-        I += cos8[p] * s;
-        Q += sin8[p] * s;
-    }
-    *out_I = I;
-    *out_Q = Q;
+// ── fc/2 PSK1 read (166.67 kHz capture) ─────────────────────────────────────
+// Real Indala flips the 125 kHz CARRIER phase per data bit; the tuned LF
+// antenna filters out the 62.5 kHz subcarrier. Sampled at 166.667 kHz the
+// carrier aliases to 41.67 kHz = DFT bin 2, and psk166_correlate_iq() returns a
+// signed scalar whose sign tracks carrier phase, so a sign flip between adjacent
+// bits is a PSK1 transition.
+//
+// Bit period = 32 carrier cycles = 256 µs = 128/3 samples (42.667) at 166.667
+// kHz. Bit boundaries step with that fixed-point ratio so error does not
+// accumulate across a 64-bit frame.
+#define IND166_BIT_NUM   (128)   // bit spacing numerator (128/3 = 42.667 samples/bit)
+#define IND166_BIT_DEN   (3)
+#define IND166_OFFSETS   (43)    // alignment search span: one bit period
+#define IND166_CORR_LEN  (40)    // per-bit integration: 10 alias cycles (clean DFT); bench-tunable 40..43
+
+static inline uint16_t ind166_base(uint8_t off, uint16_t bit) {
+    return (uint16_t)(INDALA_SKIP + off + ((uint32_t)bit * IND166_BIT_NUM) / IND166_BIT_DEN);
 }
 
 static bool indala_try_decode(indala_codec *d) {
     psk_t *m = d->modem;
     uint16_t n = m->sample_count;
 
-    // Need: skip + 32 alignment offsets + at least 64 bits
-    if (n < INDALA_SKIP + INDALA_BPS + INDALA_RAW_SIZE * INDALA_BPS) return false;
+    // Need: skip + one bit of alignment slack + 64 bits.
+    if (n < INDALA_SKIP + (IND166_BIT_NUM / IND166_BIT_DEN)
+            + (uint32_t)INDALA_RAW_SIZE * IND166_BIT_NUM / IND166_BIT_DEN)
+        return false;
 
-    // Phase 1: Alignment search.
-    // Try all 32 offsets within one bit period. For each, integrate 64 bits
-    // using DDC mixer and compute total IQ magnitude. The correct bit-boundary
-    // alignment maximizes magnitude because each integration window falls
-    // entirely within one bit. Wrong alignments lose magnitude at transitions.
+    // Phase 1: alignment search. The offset that maximises total bit energy has
+    // each integration window inside one bit; wrong offsets straddle transitions
+    // and lose energy.
     uint8_t best_off = 0;
     int64_t best_mag = 0;
-
-    for (uint8_t off = 0; off < INDALA_BPS; off++) {
-        int64_t total_mag = 0;
+    for (uint8_t off = 0; off < IND166_OFFSETS; off++) {
+        int64_t total = 0;
         for (uint8_t bit = 0; bit < INDALA_RAW_SIZE; bit++) {
-            uint16_t base = INDALA_SKIP + off + (uint16_t)bit * INDALA_BPS;
-            if (base + INDALA_BPS > n) break;
-
-            int32_t I, Q;
-            indala_integrate_bit(m->samples, base, &I, &Q);
-            total_mag += (int64_t)I * I + (int64_t)Q * Q;
+            uint16_t base = ind166_base(off, bit);
+            if ((uint32_t)base + IND166_CORR_LEN > n) break;
+            int32_t sc = psk166_correlate_iq(m, base, IND166_CORR_LEN);
+            total += (int64_t)sc * sc;
         }
-        if (total_mag > best_mag) {
-            best_mag = total_mag;
-            best_off = off;
-        }
+        if (total > best_mag) { best_mag = total; best_off = off; }
     }
 
-    // Phase 2: Compute IQ vectors for all available bits at best alignment.
-    int32_t bit_I[INDALA_MAX_BITS], bit_Q[INDALA_MAX_BITS];
+    // Phase 2: signed per-bit correlation at best alignment.
+    int32_t bit_s[INDALA_MAX_BITS];
     uint16_t num_bits = 0;
-
     for (uint16_t bit = 0; bit < INDALA_MAX_BITS; bit++) {
-        uint16_t base = INDALA_SKIP + best_off + (uint16_t)bit * INDALA_BPS;
-        if (base + INDALA_BPS > n) break;
-
-        indala_integrate_bit(m->samples, base, &bit_I[num_bits], &bit_Q[num_bits]);
-        num_bits++;
+        uint16_t base = ind166_base(best_off, bit);
+        if ((uint32_t)base + IND166_CORR_LEN > n) break;
+        bit_s[num_bits++] = psk166_correlate_iq(m, base, IND166_CORR_LEN);
     }
-
     if (num_bits < INDALA_RAW_SIZE) return false;
 
-    NRF_LOG_INFO("IND: off=%d nb=%d mag=%d",
+    NRF_LOG_INFO("IND fc/2: off=%d nb=%d mag=%d",
         best_off, num_bits, (int32_t)(best_mag >> 20));
 
-    // Phase 3: Differential PSK1 decode + preamble search.
-    // T55XX uses differential PSK1: bit=1 means phase changed from previous
-    // bit, bit=0 means same phase. Dot product of adjacent IQ vectors detects
-    // phase changes: positive = same phase (bit 0), negative = changed (bit 1).
+    // Phase 3: differential PSK1 — sign flip between adjacent bits = transition.
     uint8_t diff_bits[INDALA_MAX_BITS];
     uint16_t ndiff = 0;
     for (uint16_t j = 1; j < num_bits; j++) {
-        int64_t dot = (int64_t)bit_I[j] * bit_I[j - 1] +
-                      (int64_t)bit_Q[j] * bit_Q[j - 1];
-        diff_bits[ndiff++] = (dot < 0) ? 1 : 0;
+        int64_t prod = (int64_t)bit_s[j] * bit_s[j - 1];
+        diff_bits[ndiff++] = (prod < 0) ? 1 : 0;
     }
 
-    // Phase 4: Integrate diff bits → raw data bits.
-    // PSK1 on T55XX: diff_bits are phase transitions (XOR of adjacent raw bits).
-    // Cumulative XOR recovers raw data. Unknown starting phase → ~reg handles it.
+    // Phase 4: cumulative XOR recovers raw bits; unknown start phase → the
+    // preamble check also tries the inverse.
     uint8_t raw_bits[INDALA_MAX_BITS];
     raw_bits[0] = 0;
-    for (uint16_t j = 0; j < ndiff; j++) {
-        raw_bits[j + 1] = raw_bits[j] ^ diff_bits[j];
-    }
+    for (uint16_t j = 0; j < ndiff; j++) raw_bits[j + 1] = raw_bits[j] ^ diff_bits[j];
     uint16_t nraw = ndiff + 1;
 
-    // Search for Indala preamble in integrated bitstream
     for (uint16_t pos = 0; pos + INDALA_RAW_SIZE <= nraw; pos++) {
         uint64_t reg = 0;
-        for (uint8_t j = 0; j < INDALA_RAW_SIZE; j++) {
-            reg = (reg << 1) | raw_bits[pos + j];
-        }
-
-        if (indala_check_preamble(reg)) {
-            NRF_LOG_INFO("IND: DONE pos=%d reg=%08x%08x",
+        for (uint8_t j = 0; j < INDALA_RAW_SIZE; j++) reg = (reg << 1) | raw_bits[pos + j];
+        if (indala_check_preamble(reg))  {
+            NRF_LOG_INFO("IND fc/2: DONE pos=%d reg=%08x%08x",
                 pos, (uint32_t)(reg >> 32), (uint32_t)reg);
-            indala_extract_data(d, reg);
-            return true;
+            indala_extract_data(d, reg);  return true;
         }
         if (indala_check_preamble(~reg)) {
-            NRF_LOG_INFO("IND: DONE pos=%d reg=%08x%08x (inv)",
+            NRF_LOG_INFO("IND fc/2: DONE pos=%d reg=%08x%08x (inv)",
                 pos, (uint32_t)((~reg) >> 32), (uint32_t)(~reg));
-            indala_extract_data(d, ~reg);
-            return true;
+            indala_extract_data(d, ~reg); return true;
         }
     }
-
     return false;
 }
 
@@ -205,7 +182,7 @@ static bool indala_decoder_feed(indala_codec *d, uint16_t val) {
     psk_t *m = d->modem;
     psk_feed_sample(m, val);
 
-    // Wait for full buffer before attempting decode
+    // Wait for a full buffer before attempting decode.
     if (m->sample_count < m->buf_size) {
         return false;
     }
@@ -214,8 +191,8 @@ static bool indala_decoder_feed(indala_codec *d, uint16_t val) {
         return true;
     }
 
-    // Shift by 1 frame (2048 samples) to bring in fresh data
-    psk_shift(m, INDALA_RAW_SIZE * INDALA_BPS);
+    // Shift ~one frame of fresh samples in (psk_shift keeps psk166 phase_offset coherent).
+    psk_shift(m, (uint16_t)((uint32_t)INDALA_RAW_SIZE * IND166_BIT_NUM / IND166_BIT_DEN));
     return false;
 };
 
