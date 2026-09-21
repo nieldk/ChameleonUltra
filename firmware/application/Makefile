@@ -51,6 +51,8 @@ SRC_FILES += \
   $(PROJ_DIR)/rfid/nfctag/lf/protocols/em410x.c \
   $(PROJ_DIR)/rfid/nfctag/lf/protocols/hidprox.c \
   $(PROJ_DIR)/rfid/nfctag/lf/protocols/pac.c \
+  $(PROJ_DIR)/rfid/nfctag/lf/utils/pskdemod.c \
+  $(PROJ_DIR)/rfid/nfctag/lf/protocols/indala.c \
   $(PROJ_DIR)/rfid/nfctag/lf/protocols/ioprox.c \
   $(PROJ_DIR)/rfid/nfctag/lf/protocols/viking.c \
   $(PROJ_DIR)/rfid/nfctag/lf/protocols/jablotron.c \
@@ -372,6 +374,7 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
     $(PROJ_DIR)/rfid/reader/lf/lf_jablotron_data.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_fdxb_data.c \
     $(PROJ_DIR)/rfid/nfctag/lf/protocols/fdxb.c \
+    $(PROJ_DIR)/rfid/reader/lf/lf_psk_reader.c \
 
   INC_FOLDERS +=\
     ${PROJ_DIR}/rfid/reader/ \

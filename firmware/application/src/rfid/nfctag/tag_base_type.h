@@ -63,6 +63,8 @@ typedef enum {
     // Keri
     // NexWatch
     TAG_TYPE_IDTECK = 310,
+    // Indala 64-bit PSK1 (read + T55xx clone only; not registered for emulation)
+    TAG_TYPE_INDALA = 311,
 
     //////// Reader-Talk-First    400
     // T5577

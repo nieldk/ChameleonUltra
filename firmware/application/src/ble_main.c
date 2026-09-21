@@ -909,7 +909,7 @@ void register_lf_adc_callback(lf_adc_callback_t cb) {
     APP_ERROR_CHECK(err_code);
 
     nrf_saadc_channel_config_t ch = NRFX_SAADC_DEFAULT_CHANNEL_CONFIG_SE(NRF_SAADC_INPUT_AIN5);
-    ch.acq_time = NRF_SAADC_ACQTIME_5US;
+    ch.acq_time = NRF_SAADC_ACQTIME_3US;  // 166.67kHz LF capture needs <6us/conv (was 5us)
     err_code = nrfx_saadc_channel_init(ADC_CHANNEL, &ch);
     APP_ERROR_CHECK(err_code);
 

@@ -20,6 +20,7 @@ extern "C" {
 #define T5577_PSKCF_RF_2 0
 #define T5577_PSKCF_RF_4 0x00000400
 #define T5577_PSKCF_RF_8 0x00000800
+#define T5577_PSKCF_MASK 0x00000C00
 #define T5577_MODULATION_DIRECT 0
 #define T5577_MODULATION_PSK1 0x00001000
 #define T5577_MODULATION_PSK2 0x00002000
@@ -100,6 +101,13 @@ extern "C" {
     T5577_MODULATION_PSK1 |       \
     T5577_PSKCF_RF_2 |            \
     T5577_PWD |                   \
+    (2 << T5577_MAXBLOCK_SHIFT))
+
+// Indala 64-bit: PSK1 at RF/32, subcarrier fc/2 (RF_2 default), 2 data blocks.
+#define T5577_INDALA_64_CONFIG ( \
+    T5577_MODULATION_PSK1 |      \
+    T5577_BITRATE_RF_32 |        \
+    T5577_PWD |                  \
     (2 << T5577_MAXBLOCK_SHIFT))
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
