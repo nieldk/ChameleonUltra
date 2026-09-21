@@ -14496,10 +14496,16 @@ class LFIndalaWriteT55xx(LFIndalaIdArgsUnit, ReaderRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
         parser.description = "Clone Indala tag to T55XX (use -r <hex>, or --fc <n> --cn <n>)"
-        return self.add_card_arg(parser, required=True)
+        parser = self.add_card_arg(parser, required=True)
+        parser.add_argument("--fc8", action="store_true",
+                            help="Write fc/8 PSK so the Chameleon reader can read it back "
+                                 "(self-test; NOT the fc/2 format a real Indala reader expects)")
+        return parser
 
     def on_exec(self, args: argparse.Namespace):
         id_bytes = bytes.fromhex(args.raw)
-        self.cmd.indala_write_to_t55xx(id_bytes)
+        self.cmd.indala_write_to_t55xx(id_bytes, fc8_override=args.fc8)
+        mode = "fc/8 (CU self-test)" if args.fc8 else "fc/2 (real Indala)"
         print(f" {indala_format_output(id_bytes)}")
-        print(f" Write done. Verify with 'lf indala read'.")
+        print(f" Write done [{mode}]. Verify with 'lf indala read'"
+              + ("." if args.fc8 else " (needs --fc8 to be CU-readable)."))
