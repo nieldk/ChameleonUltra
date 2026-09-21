@@ -90,15 +90,6 @@ static void indala_extract_data(indala_codec *d, uint64_t reg) {
 }
 
 // ── fc/2 PSK1 read (166.67 kHz capture) ─────────────────────────────────────
-// Real Indala flips the 125 kHz CARRIER phase per data bit; the tuned LF
-// antenna filters out the 62.5 kHz subcarrier. Sampled at 166.667 kHz the
-// carrier aliases to 41.67 kHz = DFT bin 2, and psk166_correlate_iq() returns a
-// signed scalar whose sign tracks carrier phase, so a sign flip between adjacent
-// bits is a PSK1 transition.
-//
-// Bit period = 32 carrier cycles = 256 µs = 128/3 samples (42.667) at 166.667
-// kHz. Bit boundaries step with that fixed-point ratio so error does not
-// accumulate across a 64-bit frame.
 #define IND166_BIT_NUM   (128)   // bit spacing numerator (128/3 = 42.667 samples/bit)
 #define IND166_BIT_DEN   (3)
 #define IND166_OFFSETS   (43)    // alignment search span: one bit period
