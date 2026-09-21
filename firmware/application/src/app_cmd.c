@@ -3867,12 +3867,11 @@ static data_frame_tx_t *cmd_processor_indala_write_to_t55xx(uint16_t cmd, uint16
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
     }
     uint16_t tail = length - offsetof(payload_t, old_keys);
-    bool fc8 = (tail % 4 == 1) ? data[length - 1] : 0;
-    uint8_t key_count = (tail - (tail % 4 == 1 ? 1 : 0)) / 4;
+    uint8_t key_count = tail / 4;
     if (key_count == 0) {
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
     }
-    status = write_indala_to_t55xx(payload->id, payload->new_key, payload->old_keys, key_count, fc8);
+    status = write_indala_to_t55xx(payload->id, payload->new_key, payload->old_keys, key_count);
     return data_frame_make(cmd, status, 0, NULL);
 }
 
