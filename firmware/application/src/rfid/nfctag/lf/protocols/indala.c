@@ -108,15 +108,6 @@ static inline uint16_t ind166_base(uint8_t off, uint16_t bit) {
     return (uint16_t)(INDALA_SKIP + off + ((uint32_t)bit * IND166_BIT_NUM) / IND166_BIT_DEN);
 }
 
-static volatile uint8_t  s_dbg_off = 0;
-static volatile uint16_t s_dbg_nb  = 0;
-static volatile int32_t  s_dbg_mag = 0;
-void indala_get_debug(uint8_t *off, uint16_t *nb, int32_t *mag) {
-    if (off) *off = s_dbg_off;
-    if (nb)  *nb  = s_dbg_nb;
-    if (mag) *mag = s_dbg_mag;
-}
-
 static bool indala_try_decode(indala_codec *d) {
     psk_t *m = d->modem;
     uint16_t n = m->sample_count;
@@ -154,7 +145,6 @@ static bool indala_try_decode(indala_codec *d) {
 
     NRF_LOG_INFO("IND fc/2: off=%d nb=%d mag=%d",
         best_off, num_bits, (int32_t)(best_mag >> 20));
-    s_dbg_off = best_off; s_dbg_nb = num_bits; s_dbg_mag = (int32_t)(best_mag >> 20);
 
     // Phase 3: differential PSK1 — sign flip between adjacent bits = transition.
     uint8_t diff_bits[INDALA_MAX_BITS];
