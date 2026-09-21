@@ -14486,10 +14486,16 @@ class LFIndalaRead(ReaderRequiredUnit):
 
     def on_exec(self, args: argparse.Namespace):
         resp = self.cmd.indala_scan()
+        d = resp.data or b""
+        if len(d) >= 15:
+            off = d[8]
+            nb = d[9] | (d[10] << 8)
+            mag = int.from_bytes(d[11:15], "little", signed=True)
+            print(f" [dbg] off={off} nbits={nb} mag={mag}")
         if resp.status != Status.LF_TAG_OK:
             print(f" Indala scan failed: {resp.status}")
             return
-        print(f" {indala_format_output(resp.parsed)}")
+        print(f" {indala_format_output(d[:8])}")
 
 @lf_indala.command("write")
 class LFIndalaWriteT55xx(LFIndalaIdArgsUnit, ReaderRequiredUnit):
