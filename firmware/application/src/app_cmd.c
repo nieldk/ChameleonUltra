@@ -3847,20 +3847,13 @@ static data_frame_tx_t *cmd_processor_hf14a_4_debug_counters(uint16_t cmd, uint1
 
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
-extern void indala_get_debug(uint8_t *off, uint16_t *nb, int32_t *mag);
 static data_frame_tx_t *cmd_processor_indala_scan(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    uint8_t resp[LF_INDALA_TAG_ID_SIZE + 7] = {0x00};   // [0..7]=id, [8]=off, [9..10]=nbits, [11..14]=mag
-    status = scan_indala(resp);                          // fills resp[0..7] on success
-    uint8_t off = 0; uint16_t nb = 0; int32_t mag = 0;
-    indala_get_debug(&off, &nb, &mag);
-    resp[8]  = off;
-    resp[9]  = (uint8_t)(nb & 0xFF);
-    resp[10] = (uint8_t)(nb >> 8);
-    resp[11] = (uint8_t)(mag & 0xFF);
-    resp[12] = (uint8_t)((mag >> 8) & 0xFF);
-    resp[13] = (uint8_t)((mag >> 16) & 0xFF);
-    resp[14] = (uint8_t)((mag >> 24) & 0xFF);
-    return data_frame_make(cmd, status, sizeof(resp), resp);  // status still OK / NO_FOUND
+    uint8_t resp[LF_INDALA_TAG_ID_SIZE] = {0x00};
+    status = scan_indala(resp);
+    if (status != STATUS_LF_TAG_OK) {
+        return data_frame_make(cmd, status, 0, NULL);
+    }
+    return data_frame_make(cmd, status, sizeof(resp), resp);
 }
 
 static data_frame_tx_t *cmd_processor_indala_write_to_t55xx(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
