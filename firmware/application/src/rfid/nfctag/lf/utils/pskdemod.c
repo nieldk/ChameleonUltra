@@ -15,18 +15,20 @@ nrf_pwm_sequence_t psk_shared_pwm_seq = {
     .end_delay = 0,
 };
 
-// cos(2π·2·n/8) × 1024, period 4 samples.
-// At fs=166.67kHz, DFT bin k=2 of N=8 → 2×166.67/8 = 41.67kHz.
-// 125kHz carrier aliases to 166.67-125 = 41.67kHz — matches bin k=2.
-// The tuned antenna passes the carrier; fc/2 subcarrier is filtered out.
+// cos(2π·3·n/8) × 1024.
+// At fs=166.67kHz, DFT bin k=3 of N=8 -> 3x166.67/8 = 62.5kHz.
+// The tag's real fc/2 subcarrier (62.5kHz) AM-modulates the field; the
+// reader's envelope detector (same front end as the 125kHz path) outputs
+// that 62.5kHz envelope to the SAADC, so bin k=3 is what's actually present
+// in the sampled data -- not an aliased 125kHz carrier phase.
 static const int16_t psk166_cos_lut[8] = {
-    1024, 0, -1024, 0, 1024, 0, -1024, 0
+    1024, -724, 0, 724, -1024, 724, 0, -724
 };
 
-// sin(2π·2·n/8) × 1024, period 4 samples.
-// Quadrature component for phase-independent carrier phase detection.
+// sin(2π·3·n/8) × 1024. Quadrature component for phase-independent
+// subcarrier phase detection.
 static const int16_t psk166_sin_lut[8] = {
-    0, 1024, 0, -1024, 0, 1024, 0, -1024
+    0, 724, -1024, 724, 0, -724, 1024, -724
 };
 
 void psk_free(psk_t *m) {
