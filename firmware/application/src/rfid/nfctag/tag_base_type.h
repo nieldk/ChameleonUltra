@@ -94,6 +94,9 @@ typedef enum {
     TAG_TYPE_DESFIRE_EV1_2K = 1300,
     TAG_TYPE_DESFIRE_EV1_4K,
     TAG_TYPE_DESFIRE_EV1_8K,
+    TAG_TYPE_DESFIRE_EV2_2K,
+    TAG_TYPE_DESFIRE_EV2_4K,
+    TAG_TYPE_DESFIRE_EV2_8K,
 
     // ST25TA series             2000
 
@@ -132,7 +135,9 @@ typedef enum {
         TAG_TYPE_MF0UL11, TAG_TYPE_MF0UL21, TAG_TYPE_NTAG_210,        \
         TAG_TYPE_NTAG_212, TAG_TYPE_HF14A_4, TAG_TYPE_SEOS,               \
         TAG_TYPE_DESFIRE_EV1_2K,                                         \
-        TAG_TYPE_DESFIRE_EV1_4K, TAG_TYPE_DESFIRE_EV1_8K
+        TAG_TYPE_DESFIRE_EV1_4K, TAG_TYPE_DESFIRE_EV1_8K,                \
+        TAG_TYPE_DESFIRE_EV2_2K, TAG_TYPE_DESFIRE_EV2_4K,                \
+        TAG_TYPE_DESFIRE_EV2_8K
 
 typedef struct {
     tag_specific_type_t tag_hf;

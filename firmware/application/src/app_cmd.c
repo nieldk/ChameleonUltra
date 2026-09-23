@@ -1602,6 +1602,9 @@ static nfc_tag_14a_coll_res_reference_t *get_coll_res_data(bool write) {
         case TAG_TYPE_DESFIRE_EV1_2K:
         case TAG_TYPE_DESFIRE_EV1_4K:
         case TAG_TYPE_DESFIRE_EV1_8K:
+        case TAG_TYPE_DESFIRE_EV2_2K:
+        case TAG_TYPE_DESFIRE_EV2_4K:
+        case TAG_TYPE_DESFIRE_EV2_8K:
             info = nfc_tag_desfire_get_coll_res();
             break;
 #endif
