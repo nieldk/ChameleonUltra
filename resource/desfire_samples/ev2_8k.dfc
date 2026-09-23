@@ -1,0 +1,30 @@
+# DESFire EV2 8K test credential (Phreakbyte) -- AES PICC + one app,
+# one free-access Standard Data file. Distinct UID and AES keys per size.
+Filetype: DFC Credential
+Version: 4
+Card Generation: EV2
+Card Storage: 8192
+UID: 04 77 88 99 00 AA BB
+UID Provenance: Real
+PICC Key Settings 1: 0F
+PICC Key Settings 2: 81
+PICC Authentication Mode: AES
+PICC Key Count: 1
+PICC Key 00: 0F 0E 0D 0C 0B 0A 09 08 07 06 05 04 03 02 01 00
+PICC Key 00 Version: 00
+Application Count: 1
+Application 00 AID: A2 00 02
+Application 00 Key Settings 1: 0F
+Application 00 Key Settings 2: 81
+Application 00 Authentication Mode: AES
+Application 00 Key Count: 1
+Application 00 Key 00: 0F 0E 0D 0C 0B 0A 09 08 07 06 05 04 03 02 01 00
+Application 00 Key 00 Version: 00
+Application 00 File Count: 1
+Application 00 File 00 Number: 01
+Application 00 File 00 Type: Standard Data
+Application 00 File 00 Communication Settings: 00
+Application 00 File 00 Access Rights: EE EE
+Application 00 File 00 Size: 32
+Application 00 File 00 Data: 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F
+Application 00 File 00 Data Complete: 1
