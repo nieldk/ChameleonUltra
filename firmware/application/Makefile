@@ -427,11 +427,8 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
     ${TINY_DES_DIR} \
     ${TINY_AES_NRF_DIR} \
 
-  # The device carries the EV1 feature set, which is what its slot record and
-  # its flash budget hold. Raising the profile grows DfcCredential and the
-  # static assertion in nfc_desfire.c reports it.
-  CFLAGS += -DDFC_BUILD_PROFILE=DFC_PROFILE_FULL_EV1
-  # "TINY" here selects dfc-core's mbedTLS-shim crypto seam (shim/mbedtls_compat.c),
+  CFLAGS += -DDFC_BUILD_PROFILE=DFC_PROFILE_FULL_EV2
+# "TINY" here selects dfc-core's mbedTLS-shim crypto seam (shim/mbedtls_compat.c),
   # which routes AES to nrf_crypto and DES/3DES to the vendored tiny-DES-c.
   CFLAGS += -DDFC_CRYPTO_BACKEND_TINY=1
   CFLAGS += -DDES_ENABLE_ECB=1 -DDES_ENABLE_CBC=1
@@ -450,15 +447,11 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
 # 4052 octets and the record 4344, leaving 156 spare there and 3848 spare
 # against the 8192-octet flash-record ceiling.
 #
-# Key material is pooled rather than reserved per application, so the key count
-# now costs one version octet per slot instead of 24, which is what makes 14
-# keys -- the per-application maximum this engine emulates -- affordable. The
-# pool is sized like the file pool: generously for real credentials rather than
-# at the theoretical worst case of every application holding every key. It still
-# holds one application's full 14 keys at the widest key type.
-  CFLAGS += -DDFC_MAX_APPS=8 -DDFC_MAX_KEYS=14 -DDFC_MAX_FILES=14
-  CFLAGS += -DDFC_FILE_POOL_SIZE=2048 -DDFC_MAX_FILE_DATA=2048
-  CFLAGS += -DDFC_KEY_POOL_SIZE=448
+# EV2 records are large; trimmed so sizeof(DfcCredential) fits one 8192B FDS
+# page (FDS_VIRTUAL_PAGE_SIZE=2048 words). apps=4/keys=10/files=10/pool=1024 -> ~7992B.
+CFLAGS += -DDFC_MAX_APPS=4 -DDFC_MAX_KEYS=10 -DDFC_MAX_FILES=10
+CFLAGS += -DDFC_FILE_POOL_SIZE=1024 -DDFC_MAX_FILE_DATA=1024
+CFLAGS += -DDFC_KEY_POOL_SIZE=448
 
 # The credential codec runs once per load, never per frame. Its writer makes two
 # passes over the same body callbacks, and at -O3 GCC devirtualises and inlines
