@@ -491,7 +491,9 @@ int nfc_tag_desfire_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buf
 
 bool nfc_tag_desfire_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
     if (tag_type != TAG_TYPE_DESFIRE_EV1_2K && tag_type != TAG_TYPE_DESFIRE_EV1_4K &&
-        tag_type != TAG_TYPE_DESFIRE_EV1_8K) {
+        tag_type != TAG_TYPE_DESFIRE_EV1_8K &&
+        tag_type != TAG_TYPE_DESFIRE_EV2_2K && tag_type != TAG_TYPE_DESFIRE_EV2_4K &&
+        tag_type != TAG_TYPE_DESFIRE_EV2_8K) {
         return false;
     }
 

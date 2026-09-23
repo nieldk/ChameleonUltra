@@ -395,6 +395,9 @@ class TagSpecificType(enum.IntEnum):
     DESFIRE_EV1_2K = 1300
     DESFIRE_EV1_4K = 1301
     DESFIRE_EV1_8K = 1302
+    DESFIRE_EV2_2K = 1303
+    DESFIRE_EV2_4K = 1304
+    DESFIRE_EV2_8K = 1305
 
     # ST25TA series          2000
 
@@ -489,6 +492,12 @@ class TagSpecificType(enum.IntEnum):
             return "DESFire EV1 4K"
         elif self == TagSpecificType.DESFIRE_EV1_8K:
             return "DESFire EV1 8K"
+        elif self == TagSpecificType.DESFIRE_EV2_2K:
+            return "DESFire EV2 2K"
+        elif self == TagSpecificType.DESFIRE_EV2_4K:
+            return "DESFire EV2 4K"
+        elif self == TagSpecificType.DESFIRE_EV2_8K:
+            return "DESFire EV2 8K"
         elif self == TagSpecificType.HF14A_4:
             return "ISO14443-4"
         elif self < TagSpecificType.OLD_TAG_TYPES_END:

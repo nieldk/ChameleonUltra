@@ -12750,8 +12750,13 @@ class HfDesELoad(SlotIndexArgsAndGoUnit):
             print(f" {CR}[!] cannot be encoded for the device: {e}{C0}")
             return
         # The slot has to be a DESFire type before the credential will be accepted.
-        self.cmd.set_slot_tag_type(self.slot_num, TagSpecificType.DESFIRE_EV1_2K)
-        self.cmd.set_slot_data_default(self.slot_num, TagSpecificType.DESFIRE_EV1_2K)
+        # Label the slot by the credential's generation so `hw slot list` matches
+        # the card; the engine drives behaviour from the credential regardless.
+        dfc_tag_type = (TagSpecificType.DESFIRE_EV2_2K
+                        if cred.generation == 2  # 2 == EV2
+                        else TagSpecificType.DESFIRE_EV1_2K)
+        self.cmd.set_slot_tag_type(self.slot_num, dfc_tag_type)
+        self.cmd.set_slot_data_default(self.slot_num, dfc_tag_type)
         self.cmd.set_slot_enable(self.slot_num, TagSenseType.HF, True)
 
         # The slot's anti-collision record is the device's to settle: it is the

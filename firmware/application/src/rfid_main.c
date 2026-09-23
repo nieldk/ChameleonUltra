@@ -119,7 +119,10 @@ uint8_t get_color_by_slot(uint8_t slot) {
     if (enabled_hf &&
             (tag_types.tag_hf == TAG_TYPE_DESFIRE_EV1_2K ||
              tag_types.tag_hf == TAG_TYPE_DESFIRE_EV1_4K ||
-             tag_types.tag_hf == TAG_TYPE_DESFIRE_EV1_8K)) {
+             tag_types.tag_hf == TAG_TYPE_DESFIRE_EV1_8K ||
+             tag_types.tag_hf == TAG_TYPE_DESFIRE_EV2_2K ||
+             tag_types.tag_hf == TAG_TYPE_DESFIRE_EV2_4K ||
+             tag_types.tag_hf == TAG_TYPE_DESFIRE_EV2_8K)) {
         return RGB_MAGENTA;
     }
 #endif

@@ -125,6 +125,9 @@ static tag_base_handler_map_t tag_base_map[] = {
     {TAG_SENSE_HF, TAG_TYPE_DESFIRE_EV1_2K, nfc_tag_desfire_data_loadcb, nfc_tag_desfire_data_savecb, nfc_tag_desfire_data_factory, &m_tag_data_hf},
     {TAG_SENSE_HF, TAG_TYPE_DESFIRE_EV1_4K, nfc_tag_desfire_data_loadcb, nfc_tag_desfire_data_savecb, nfc_tag_desfire_data_factory, &m_tag_data_hf},
     {TAG_SENSE_HF, TAG_TYPE_DESFIRE_EV1_8K, nfc_tag_desfire_data_loadcb, nfc_tag_desfire_data_savecb, nfc_tag_desfire_data_factory, &m_tag_data_hf},
+    {TAG_SENSE_HF, TAG_TYPE_DESFIRE_EV2_2K, nfc_tag_desfire_data_loadcb, nfc_tag_desfire_data_savecb, nfc_tag_desfire_data_factory, &m_tag_data_hf},
+    {TAG_SENSE_HF, TAG_TYPE_DESFIRE_EV2_4K, nfc_tag_desfire_data_loadcb, nfc_tag_desfire_data_savecb, nfc_tag_desfire_data_factory, &m_tag_data_hf},
+    {TAG_SENSE_HF, TAG_TYPE_DESFIRE_EV2_8K, nfc_tag_desfire_data_loadcb, nfc_tag_desfire_data_savecb, nfc_tag_desfire_data_factory, &m_tag_data_hf},
 #endif
 };
 
