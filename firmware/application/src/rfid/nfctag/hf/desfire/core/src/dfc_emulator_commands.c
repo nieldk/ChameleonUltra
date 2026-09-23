@@ -1035,31 +1035,49 @@ static void
     dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OK);
 }
 
+// DESFire GetVersion storage-size byte: encodes 2^n octets of user memory,
+// LSB 0 = exact size. 2K -> 0x16, 4K -> 0x18, 8K -> 0x1A. Derived from the
+// credential so the advertised size matches the emulated card.
+static uint8_t dfc_version_storage_byte(size_t storage_bytes) {
+    if(storage_bytes <= 2048u) return 0x16;
+    if(storage_bytes <= 4096u) return 0x18;
+    return 0x1A;
+}
+
 static void handle_get_version(DfcEmulator* emulator, DfcByteBuf* tx_buffer) {
     static const uint8_t ev1_hardware_version[] = {0x04, 0x01, 0x01, 0x01, 0x00, 0x1A, 0x05};
+    static const uint8_t ev2_hardware_version[] = {0x04, 0x01, 0x01, 0x12, 0x00, 0x18, 0x05};
     static const uint8_t ev3_hardware_version[] = {0x04, 0x01, 0x01, 0x33, 0x00, 0x18, 0x05};
     const uint8_t* hardware_version =
         emulator->credential->card.generation == DfcGenerationEv3 ? ev3_hardware_version :
+        emulator->credential->card.generation == DfcGenerationEv2 ? ev2_hardware_version :
                                                                     ev1_hardware_version;
+    uint8_t hw[7];
+    memcpy(hw, hardware_version, sizeof(hw));
+    hw[5] = dfc_version_storage_byte(emulator->credential->card.storage);
     clear_pending_chain(emulator);
     emulator->get_version_frame = 1;
     dfc_bytebuf_append_byte(tx_buffer, DFC_CMD_ADDITIONAL_FRAME);
-    dfc_bytebuf_append_bytes(tx_buffer, hardware_version, sizeof(ev1_hardware_version));
+    dfc_bytebuf_append_bytes(tx_buffer, hw, sizeof(hw));
 }
 
 static void handle_get_version_continuation(DfcEmulator* emulator, DfcByteBuf* tx_buffer) {
     static const uint8_t ev1_software_version[] = {0x04, 0x01, 0x01, 0x01, 0x03, 0x1A, 0x05};
-    static const uint8_t ev2_hardware_version[] = {0x04, 0x01, 0x01, 0x02, 0x00, 0x1A, 0x05};
-    static const uint8_t ev3_software_version[] = {0x04, 0x01, 0x01, 0x03, 0x00, 0x18};
+    static const uint8_t ev2_software_version[] = {0x04, 0x01, 0x01, 0x02, 0x01, 0x18, 0x05};
+    static const uint8_t ev3_software_version[] = {0x04, 0x01, 0x01, 0x03, 0x00, 0x18, 0x05};
     static const uint8_t production[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x24};
 
     if(emulator->get_version_frame == 1) {
         const uint8_t* software_version =
             emulator->credential->card.generation == DfcGenerationEv3 ? ev3_software_version :
+            emulator->credential->card.generation == DfcGenerationEv2 ? ev2_software_version :
                                                                         ev1_software_version;
+        uint8_t sw[7];
+        memcpy(sw, software_version, sizeof(sw));
+        sw[5] = dfc_version_storage_byte(emulator->credential->card.storage);
         emulator->get_version_frame = 2;
         dfc_bytebuf_append_byte(tx_buffer, DFC_CMD_ADDITIONAL_FRAME);
-        dfc_bytebuf_append_bytes(tx_buffer, software_version, sizeof(ev1_software_version));
+        dfc_bytebuf_append_bytes(tx_buffer, sw, sizeof(sw));
         return;
     }
 
