@@ -13418,7 +13418,7 @@ def authtrace_pretty_dump(sessions):
                 expect_at    = False
 
             if decoded_ctx is None:
-                decoded, col = _decode_14a_frame_col(data, sz_bits)
+                decoded, col, _ = _decode_14a_frame_col(data, sz_bits)
             else:
                 decoded, col = decoded_ctx, col_ctx
 
