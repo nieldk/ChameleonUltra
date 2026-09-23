@@ -1049,7 +1049,8 @@ static void handle_get_version(DfcEmulator* emulator, DfcByteBuf* tx_buffer) {
 
 static void handle_get_version_continuation(DfcEmulator* emulator, DfcByteBuf* tx_buffer) {
     static const uint8_t ev1_software_version[] = {0x04, 0x01, 0x01, 0x01, 0x03, 0x1A, 0x05};
-    static const uint8_t ev3_software_version[] = {0x04, 0x01, 0x01, 0x03, 0x00, 0x18, 0x05};
+    static const uint8_t ev2_hardware_version[] = {0x04, 0x01, 0x01, 0x02, 0x00, 0x1A, 0x05};
+    static const uint8_t ev3_software_version[] = {0x04, 0x01, 0x01, 0x03, 0x00, 0x18};
     static const uint8_t production[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x24};
 
     if(emulator->get_version_frame == 1) {
