@@ -80,6 +80,11 @@ FILE_TYPES = {
 }
 
 GENERATIONS = {"EV1": 1, "EV2": 2, "EV3": 3}
+
+# Generations the firmware emulator actually implements. dfc-core provides the
+# EV2 auth / secure-messaging / transaction-MAC path when the firmware is built
+# with DFC_PROFILE_FULL_EV2. EV3-only features (e.g. SDM) remain unemulated.
+EMULATED_GENERATIONS = {GENERATIONS["EV1"], GENERATIONS["EV2"]}
 PROVENANCES = {"Real": 0, "Random": 1, "Unknown": 2}
 
 # ISO file IDs that name the master file or are otherwise reserved, so they
@@ -466,10 +471,10 @@ def _validate(cred: DfcCredential) -> None:
         raise DfcError(f"UID must be 4 or 7 bytes, got {len(cred.uid)}")
     if cred.generation not in GENERATIONS.values():
         raise DfcError(f"unknown card generation {cred.generation}")
-    if cred.generation != GENERATIONS["EV1"]:
+    if cred.generation not in EMULATED_GENERATIONS:
         raise DfcError(
             f"{_name_of(GENERATIONS, cred.generation, 'this card generation')} "
-            "is represented by DFC v4 but is not emulated by this firmware",
+            "uses DFC v4 features (EV3) not emulated by this firmware",
             DfcErrorClass.UNSUPPORTED,
         )
     if cred.uid_provenance not in PROVENANCES.values():
@@ -805,10 +810,10 @@ def der_decode(blob: bytes, cls=DfcCredential) -> "DfcCredential":
     cred.generation = _read_uint(_req(card, 0x80), 0xFF)
     if cred.generation not in GENERATIONS.values():
         raise DfcError(f"unknown card generation {cred.generation}")
-    if cred.generation != GENERATIONS["EV1"]:
+    if cred.generation not in EMULATED_GENERATIONS:
         raise DfcError(
             f"{_name_of(GENERATIONS, cred.generation, 'this card generation')} "
-            "is represented by DFC v4 but is not emulated by this firmware",
+            "uses DFC v4 features (EV3) not emulated by this firmware",
             DfcErrorClass.UNSUPPORTED,
         )
     cred.storage = _read_uint(_req(card, 0x81), U32_MAX)
