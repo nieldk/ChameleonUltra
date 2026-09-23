@@ -58,7 +58,7 @@ static uint8_t m_tag_data_buffer_lf[20];  // LF card data buffer
 static uint16_t m_tag_data_lf_crc;
 static tag_data_buffer_t m_tag_data_lf = {sizeof(m_tag_data_buffer_lf), m_tag_data_buffer_lf, &m_tag_data_lf_crc};
 
-static uint8_t m_tag_data_buffer_hf[4500];  // HF card data buffer
+static uint8_t m_tag_data_buffer_hf[8192];  // HF card data buffer (= 1 FDS page; holds EV2 record)
 static uint16_t m_tag_data_hf_crc;
 static tag_data_buffer_t m_tag_data_hf = {sizeof(m_tag_data_buffer_hf), m_tag_data_buffer_hf, &m_tag_data_hf_crc};
 
