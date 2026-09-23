@@ -12749,16 +12749,19 @@ class HfDesELoad(SlotIndexArgsAndGoUnit):
         except DfcError as e:
             print(f" {CR}[!] cannot be encoded for the device: {e}{C0}")
             return
-        # The slot has to be a DESFire type before the credential will be accepted.
-        # Label the slot by the credential's generation so `hw slot list` matches
-        # the card; the engine drives behaviour from the credential regardless.
-        dfc_tag_type = (TagSpecificType.DESFIRE_EV2_2K
-                        if cred.generation == 2  # 2 == EV2
-                        else TagSpecificType.DESFIRE_EV1_2K)
+        # Label the slot by the credential's generation AND storage tier so
+        # `hw slot list` matches what einfo/edump report; the engine still drives
+        # behaviour from the credential itself.
+        _ev = cred.generation == 2  # 2 == EV2
+        if cred.storage > 4096:
+            dfc_tag_type = TagSpecificType.DESFIRE_EV2_8K if _ev else TagSpecificType.DESFIRE_EV1_8K
+        elif cred.storage > 2048:
+            dfc_tag_type = TagSpecificType.DESFIRE_EV2_4K if _ev else TagSpecificType.DESFIRE_EV1_4K
+        else:
+            dfc_tag_type = TagSpecificType.DESFIRE_EV2_2K if _ev else TagSpecificType.DESFIRE_EV1_2K
         self.cmd.set_slot_tag_type(self.slot_num, dfc_tag_type)
         self.cmd.set_slot_data_default(self.slot_num, dfc_tag_type)
-        self.cmd.set_slot_enable(self.slot_num, TagSenseType.HF, True)
-
+        
         # The slot's anti-collision record is the device's to settle: it is the
         # only party that knows what the engine answers activation with for the
         # fields a credential leaves out. Setting it from here would mean
