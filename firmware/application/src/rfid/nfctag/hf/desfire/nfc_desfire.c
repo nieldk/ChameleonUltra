@@ -584,5 +584,5 @@ void nfc_tag_desfire_get_stats(
 }
 
 _Static_assert(
-    sizeof(nfc_tag_desfire_information_t) <= 4500,
-    "DESFire slot record exceeds the shared HF tag data buffer");
+    sizeof(nfc_tag_desfire_information_t) <= 8136,
+    "DESFire slot record exceeds one FDS page (FDS_VIRTUAL_PAGE_SIZE 2048 words = 8192B, ~56B overhead)");
