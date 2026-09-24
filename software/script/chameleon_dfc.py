@@ -99,6 +99,7 @@ AUTH_MODES = {
     "Legacy": 0x0A,
     "NativeD40": 0x0A,
     "Native-D40": 0x0A,
+    "2TDEA": 0x0A,
     "ISO": 0x1A,
     "AES": 0xAA,
 }
