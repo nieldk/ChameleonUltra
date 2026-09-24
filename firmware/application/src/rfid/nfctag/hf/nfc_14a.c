@@ -436,6 +436,13 @@ void nfc_tag_14a_data_process(uint8_t *p_data) {
             }
             // Only in the case that can provide anti -collision resources,
             if (auto_coll_res != NULL) {
+#ifdef CU_BISECT_ATQA_STOCK
+                if (m_tag_handler.cb_reset != NULL) m_tag_handler.cb_reset();
+                m_tag_state_14a = NFC_TAG_STATE_14A_READY;
+                if (!m_sniff_passive) {
+                    nfc_tag_14a_tx_bytes(auto_coll_res->atqa, 2, false);
+                }
+#else
                 if (!m_sniff_passive) {
                     /* Arm the time-critical reply before resetting higher-layer
                      * protocol state. The NFCT copies from m_nfc_tx_buffer. */
@@ -444,6 +451,7 @@ void nfc_tag_14a_data_process(uint8_t *p_data) {
                 }
                 if (m_tag_handler.cb_reset != NULL) m_tag_handler.cb_reset();
                 m_tag_state_14a = NFC_TAG_STATE_14A_READY;
+#endif
             } else {
                 m_tag_state_14a = NFC_TAG_STATE_14A_IDLE;
                 NRF_LOG_INFO("Auto anti-collision resource no exists.");
@@ -637,18 +645,23 @@ void nfc_tag_14a_data_process(uint8_t *p_data) {
             //
             // Only 106 kbit/s is acknowledged, which is all the NFCT does. A faster
             // request goes unanswered rather than accepted and not honoured.
-            if ((szDataBits == 32 || szDataBits == 40) && (p_data[0] & 0xF0) == 0xD0) {
+#ifdef CU_BISECT_NO_PPS
+            if (0 &&
+#else
+            if ((auto_coll_res->sak[0] & 0x20) &&
+#endif
+                (szDataBits == 32 || szDataBits == 40) && (p_data[0] & 0xF0) == 0xD0) {
                 uint8_t frame_len = szDataBits / 8;
                 bool pps1_present = (p_data[1] & 0x10) != 0;
-                if (nfc_tag_14a_checks_crc(p_data, frame_len) && frame_len == (pps1_present ? 5 : 4)) {
+                if (frame_len == (pps1_present ? 5 : 4) && nfc_tag_14a_checks_crc(p_data, frame_len)) {
                     // DRI is PPS1 bits 1..0 and DSI bits 3..2; all zero is 106 kbit/s.
                     uint8_t pps1 = pps1_present ? p_data[2] : 0x00;
                     if ((pps1 & 0x0F) == 0x00) {
                         uint8_t ppss = p_data[0];
                         nfc_tag_14a_tx_bytes(&ppss, 1, true);
                     }
+                    return;
                 }
-                return;
             }
             // No processing is successful, it may be some other data. You need to re-post processing
             if (m_tag_handler.cb_state != NULL) {    //Activation status, transfer the message to other registered processor processing
@@ -780,12 +793,17 @@ void nfc_tag_14a_event_callback(nrfx_nfct_evt_t const *p_event) {
             // Notify the active tag handler that the field is gone. DESFire needs
             // this to drop an authenticated session; the other handlers treat it
             // as an idempotent state clear.
+#ifdef CU_BISECT_NO_FIELD_RESET
             if (m_tag_handler.cb_field != NULL) {
                 m_tag_handler.cb_field(false);
-            } else if (m_tag_handler.cb_reset != NULL) {
-                m_tag_handler.cb_reset();
             }
-
+#else
+             if (m_tag_handler.cb_field != NULL) {
+                 m_tag_handler.cb_field(false);
+             } else if (m_tag_handler.cb_reset != NULL) {
+                 m_tag_handler.cb_reset();
+             }
+#endif
             if (reset_if_field_lost) {
                 // Fix a bug where certain special conditions prevent triggering TX start events and actually transmit incorrect data to the card reader.
                 // After more more more testing, I found that simply going into sleep mode and restarting can restore work.
@@ -835,9 +853,11 @@ void nfc_tag_14a_event_callback(nrfx_nfct_evt_t const *p_event) {
              * The relay's multi-round exchange means the very next frame may be
              * another WTX/response that needs the long window, and clamping to
              * 302us here would let the nRF abandon that next response slot. */
+#ifndef CU_BISECT_NO_TXEND_FDT
             if (!m_relay_hold_fdt_max) {
                 nrf_nfct_frame_delay_max_set(0x00001000UL);
             }
+#endif
             // After the transmission is over, you need to be able to receive it
             NRFX_NFCT_RX_BYTES
             break;
