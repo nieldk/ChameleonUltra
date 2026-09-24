@@ -449,9 +449,9 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
 #
 # EV2 records are large; trimmed so sizeof(DfcCredential) fits one 8192B FDS
 # page (FDS_VIRTUAL_PAGE_SIZE=2048 words). apps=4/keys=10/files=10/pool=1024 -> ~7992B.
-CFLAGS += -DDFC_MAX_APPS=4 -DDFC_MAX_KEYS=10 -DDFC_MAX_FILES=10
-CFLAGS += -DDFC_FILE_POOL_SIZE=1024 -DDFC_MAX_FILE_DATA=1024
 CFLAGS += -DDFC_KEY_POOL_SIZE=448
+CFLAGS += -DDFC_MAX_APPS=4 -DDFC_MAX_KEYS=14 -DDFC_MAX_FILES=8
+CFLAGS += -DDFC_FILE_POOL_SIZE=1024 -DDFC_MAX_FILE_DATA=1024
 
 # The credential codec runs once per load, never per frame. Its writer makes two
 # passes over the same body callbacks, and at -O3 GCC devirtualises and inlines
