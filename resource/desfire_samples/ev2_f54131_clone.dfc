@@ -1,0 +1,60 @@
+# Structural clone of a real DESFire EV2 4K card (AID F54131), from mfdes dump.
+# Keys are unknown (cannot be read from a card) -> all-zero placeholders; this
+# reproduces identity/enumeration (info, getversion, aids, file settings) for
+# diffing against the real card. Auth will NOT match until real keys are set.
+Filetype: DFC Credential
+Version: 4
+Card Generation: EV2
+Card Storage: 4096
+UID: 04 42 38 1A D3 10 90
+UID Provenance: Real
+PICC Key Settings 1: 0F
+PICC Key Settings 2: 01
+PICC Authentication Mode: Legacy
+PICC Key Count: 1
+PICC Key 00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+PICC Key 00 Version: 00
+PICC ATS: 06 75 77 81 02 80
+PICC SAK: 20
+PICC ATQA: 03 44
+Application Count: 1
+Application 00 AID: F5 41 31
+Application 00 Key Settings 1: 0F
+Application 00 Key Settings 2: 8E
+Application 00 Authentication Mode: AES
+Application 00 Key Count: 14
+Application 00 Key 00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Application 00 Key 00 Version: 00
+Application 00 Key 01: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Application 00 Key 01 Version: 00
+Application 00 Key 02: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Application 00 Key 02 Version: 00
+Application 00 Key 03: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Application 00 Key 03 Version: 00
+Application 00 Key 04: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Application 00 Key 04 Version: 00
+Application 00 Key 05: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Application 00 Key 05 Version: 00
+Application 00 Key 06: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Application 00 Key 06 Version: 00
+Application 00 Key 07: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Application 00 Key 07 Version: 00
+Application 00 Key 08: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Application 00 Key 08 Version: 00
+Application 00 Key 09: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Application 00 Key 09 Version: 00
+Application 00 Key 0A: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Application 00 Key 0A Version: 00
+Application 00 Key 0B: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Application 00 Key 0B Version: 00
+Application 00 Key 0C: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Application 00 Key 0C Version: 00
+Application 00 Key 0D: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Application 00 Key 0D Version: 00
+Application 00 File Count: 1
+Application 00 File 00 Number: 01
+Application 00 File 00 Type: Standard Data
+Application 00 File 00 Communication Settings: 03
+Application 00 File 00 Access Rights: 12 00
+Application 00 File 00 Size: 5
+Application 00 File 00 Data Complete: 0
