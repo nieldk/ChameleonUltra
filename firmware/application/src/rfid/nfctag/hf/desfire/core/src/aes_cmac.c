@@ -10,16 +10,16 @@ static uint8_t zeroes[] =
 static uint8_t Rb[] =
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x87};
 
-static void aes_cmac_padBlock(uint8_t* block, size_t len) {
+void aes_cmac_padBlock(uint8_t* block, size_t len) {
     block[len] = 0x80;
 }
 
-static bool aes_cmac_aes(uint8_t* key, uint8_t* plain, size_t plain_len, uint8_t* enc) {
+bool aes_cmac_aes(uint8_t* key, uint8_t* plain, size_t plain_len, uint8_t* enc) {
     uint8_t iv[BLOCK_SIZE] = {0};
     return dfc_crypto_aes_cbc(true, key, BLOCK_SIZE, iv, plain, enc, plain_len);
 }
 
-static void aes_cmac_bitShiftLeft(uint8_t* input, uint8_t* output, size_t len) {
+void aes_cmac_bitShiftLeft(uint8_t* input, uint8_t* output, size_t len) {
     size_t last = len - 1;
     for(size_t i = 0; i < last; i++) {
         output[i] = input[i] << 1;
@@ -31,13 +31,13 @@ static void aes_cmac_bitShiftLeft(uint8_t* input, uint8_t* output, size_t len) {
 }
 
 // x = a ^ b
-static void aes_cmac_xor(uint8_t* a, uint8_t* b, uint8_t* x, size_t len) {
+void aes_cmac_xor(uint8_t* a, uint8_t* b, uint8_t* x, size_t len) {
     for(size_t i = 0; i < len; i++) {
         x[i] = a[i] ^ b[i];
     }
 }
 
-static bool aes_cmac_generateSubkeys(uint8_t* key, uint8_t* subkey1, uint8_t* subkey2) {
+bool aes_cmac_generateSubkeys(uint8_t* key, uint8_t* subkey1, uint8_t* subkey2) {
     uint8_t l[BLOCK_SIZE] = {0};
     aes_cmac_aes(key, zeroes, BLOCK_SIZE, l);
 

@@ -795,7 +795,7 @@ bool dfc_credential_picc_ats_is_consistent(const DfcCredential* credential) {
     return credential->picc_ats[0] == (uint8_t)credential->picc_ats_len;
 }
 
-DfcCredential* dfc_credential_alloc(void) {
+DfcCredential* dfc_credential_alloc() {
     DfcCredential* credential = malloc(sizeof(DfcCredential));
     memset(credential, 0, sizeof(DfcCredential));
     return credential;
@@ -819,16 +819,13 @@ bool dfc_credential_clear(DfcCredential* credential) {
     return true;
 }
 
-void dfc_credential_init_factory(DfcCredential* credential) {
+void dfc_credential_init_blank(DfcCredential* credential) {
     dfc_credential_clear(credential);
 
     credential->uid_len = DFC_DESFIRE_UID_LEN;
     dfc_random_fill(credential->uid, credential->uid_len);
     credential->uid[0] = DFC_DESFIRE_UID_FIRST_BYTE;
-}
 
-void dfc_credential_init_blank(DfcCredential* credential) {
-    dfc_credential_init_factory(credential);
     const uint8_t aid_desfire_order[3] = {0x01, 0x00, 0x00};
     DfcApplication* app = dfc_credential_create_application_desfire_order(
         credential, aid_desfire_order, 0x0F, DFC_KEY_TYPE_DES_2K3DES | 1);
@@ -869,4 +866,6 @@ size_t dfc_credential_key_length(uint8_t key_settings_2) {
 bool dfc_credential_uid_is_detectable(DfcCredential* credential) {
     return dfc_desfire_uid_is_detectable(credential->uid, credential->uid_len);
 }
+
+
 

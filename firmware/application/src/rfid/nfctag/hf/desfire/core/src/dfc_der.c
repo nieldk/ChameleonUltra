@@ -27,8 +27,6 @@
 #define CARD_UID        P(2)
 #define CARD_PROVENANCE P(3)
 #define CARD_SIGNATURE  P(4)
-#define CARD_HARDWARE_VERSION P(5)
-#define CARD_SOFTWARE_VERSION P(6)
 
 // Picc
 #define PICC_KS1        P(0)
@@ -325,7 +323,6 @@ static void body_records(Writer* w, const void* p) {
     const DfcFile* f = x->file;
     const uint8_t* known = dfc_file_data_const(x->c, f);
     size_t count = f->record_size ? f->data_len / f->record_size : 0;
-    if(count > f->record_count) count = f->record_count;
     for(size_t i = 0; i < count; i++) {
         w_tlv(w, TAG_OCTETS, known + i * f->record_size, f->record_size);
     }
@@ -435,12 +432,6 @@ static void body_card(Writer* w, const void* p) {
         w_tlv(w, CARD_SIGNATURE, c->picc_static_signature, sizeof(c->picc_static_signature));
     }
 #endif
-    if(c->card.has_hardware_version) {
-        w_tlv(w, CARD_HARDWARE_VERSION, c->card.hardware_version, sizeof(c->card.hardware_version));
-    }
-    if(c->card.has_software_version) {
-        w_tlv(w, CARD_SOFTWARE_VERSION, c->card.software_version, sizeof(c->card.software_version));
-    }
 }
 
 static uint8_t auth_mode_code(uint8_t auth_command) {
@@ -743,11 +734,8 @@ DfcDerStatus dfc_der_validate_model(const DfcCredential* c) {
             if(f->record_count > f->max_records) return DfcDerMalformed;
             if(f->data_len % f->record_size != 0) return DfcDerMalformed;
             size_t stored = f->data_len / f->record_size;
-            bool reserved = stored == f->max_records;
-            if(stored > f->record_count && !reserved) return DfcDerMalformed;
-            if(f->contents_complete && stored != f->record_count && !reserved) {
-                return DfcDerMalformed;
-            }
+            if(stored > f->record_count) return DfcDerMalformed;
+            if(f->contents_complete && stored != f->record_count) return DfcDerMalformed;
             if(f->type == FILE_TYPE_CYCLIC && f->max_records < 2) return DfcDerMalformed;
         }
         if(f->has_iso_file_id) {
@@ -852,15 +840,6 @@ static bool r_tlv(Slice* s, Tlv* out) {
     return true;
 }
 
-size_t dfc_der_length(const uint8_t* data, size_t capacity) {
-    if(!data) return 0;
-    Slice input = {data, capacity};
-    Tlv tlv;
-    if(!r_tlv(&input, &tlv) || tlv.tag != TAG_CREDENTIAL) return 0;
-    size_t length = capacity - input.len;
-    return length <= DFC_DER_MAX_SIZE ? length : 0;
-}
-
 // Components of one SEQUENCE, keyed by identifier octet, with declaration order
 // enforced. `order` lists the identifiers in the order section 2.2.2 declares
 // them; anything else, or out of order, is malformed.
@@ -881,7 +860,7 @@ static bool
     for(size_t i = 0; i < order_len; i++) out->tags[i] = order[i];
 
     size_t cursor = 0;
-    Tlv tlv = {0};
+    Tlv tlv;
     while(body.len > 0) {
         if(!r_tlv(&body, &tlv)) return false;
         size_t idx = order_len;
@@ -1517,28 +1496,16 @@ DfcDerStatus dfc_der_decode(DfcCredential* credential, const uint8_t* in, size_t
 
     uint64_t version;
     if(!r_uint(f_get(&cf, CRED_VERSION), 0xFF, &version)) return DfcDerMalformed;
-    if(version < DFC_MIN_READ_FORMAT_VERSION || version > DFC_FORMAT_VERSION) {
-        return DfcDerUnsupported;
-    }
+    if(version != DFC_FORMAT_VERSION) return DfcDerUnsupported;
 
     dfc_credential_clear(credential);
 
     // Card
-    static const uint8_t caorder_v4[] = {
+    static const uint8_t caorder[] = {
         CARD_GENERATION, CARD_STORAGE, CARD_UID, CARD_PROVENANCE, CARD_SIGNATURE};
-    static const uint8_t caorder_v5[] = {CARD_GENERATION,
-                                         CARD_STORAGE,
-                                         CARD_UID,
-                                         CARD_PROVENANCE,
-                                         CARD_SIGNATURE,
-                                         CARD_HARDWARE_VERSION,
-                                         CARD_SOFTWARE_VERSION};
     const Slice* card = f_get(&cf, CRED_CARD);
     Fields caf;
-    const uint8_t* caorder = version == DFC_MIN_READ_FORMAT_VERSION ? caorder_v4 : caorder_v5;
-    size_t caorder_len = version == DFC_MIN_READ_FORMAT_VERSION ? sizeof(caorder_v4) :
-                                                                   sizeof(caorder_v5);
-    if(!card || !r_fields(*card, caorder, caorder_len, &caf)) return DfcDerMalformed;
+    if(!card || !r_fields(*card, caorder, sizeof(caorder), &caf)) return DfcDerMalformed;
     uint64_t generation, storage, provenance;
     if(!r_uint(f_get(&caf, CARD_GENERATION), 0xFF, &generation)) return DfcDerMalformed;
     if(generation < DfcGenerationEv1 || generation > DfcGenerationEv3) return DfcDerMalformed;
@@ -1556,18 +1523,6 @@ DfcDerStatus dfc_der_decode(DfcCredential* credential, const uint8_t* in, size_t
     credential->card.generation = (DfcGeneration)generation;
     credential->card.storage = (uint32_t)storage;
     credential->card.uid_provenance = (DfcUidProvenance)provenance;
-    const Slice* hardware_version = f_get(&caf, CARD_HARDWARE_VERSION);
-    if(hardware_version) {
-        if(!r_octets(hardware_version, sizeof(credential->card.hardware_version),
-                     credential->card.hardware_version)) return DfcDerMalformed;
-        credential->card.has_hardware_version = true;
-    }
-    const Slice* software_version = f_get(&caf, CARD_SOFTWARE_VERSION);
-    if(software_version) {
-        if(!r_octets(software_version, sizeof(credential->card.software_version),
-                     credential->card.software_version)) return DfcDerMalformed;
-        credential->card.has_software_version = true;
-    }
     const Slice* signature = f_get(&caf, CARD_SIGNATURE);
     if(signature) {
 #if DFC_ENABLE_STATIC_SIGNATURE

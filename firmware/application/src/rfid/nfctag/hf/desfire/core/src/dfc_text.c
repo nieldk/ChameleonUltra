@@ -317,21 +317,6 @@ static bool opt_hex(
     return true;
 }
 
-static bool opt_hex_exact(P* p, const char* key, uint8_t* out, size_t want, bool* present) {
-    *present = false;
-    Line l;
-    if(!lookup(p, key, &l, true)) return !p->failed;
-    size_t n = 0;
-    if(!hex_count(p, &l, key, &n)) return false;
-    if(n != want) {
-        return fail(
-            p, l.number, "%s: expected %u octets, found %u", key, (unsigned)want, (unsigned)n);
-    }
-    hex_decode(&l, out, n);
-    *present = true;
-    return true;
-}
-
 // Decimal integer of rule 4. `allow_sign` selects the signed form used by the
 // three value-file limits.
 static bool parse_decimal(P* p, const Line* l, const char* key, bool allow_sign, int64_t* out) {
@@ -721,7 +706,7 @@ static bool parse_files(P* p, const char* parent, size_t owner) {
         } else if(f->type == TYPE_TMAC) {
             if(!parse_transaction_mac_contents(p, prefix, f)) return false;
         } else {
-            return fail_class(p, DfcTextUnsupported, 0, "%s Type: unsupported", prefix);
+            return fail_class(p, DfcTextUnsupported, 0, "%s Type: not in version 4", prefix);
         }
     }
     return true;
@@ -1130,12 +1115,10 @@ DfcTextStatus
             break;
         }
         if(!required(&p, "Version", &l)) break;
-        if(l.value_len != 1 || l.value[0] < '0' + DFC_MIN_READ_FORMAT_VERSION ||
-           l.value[0] > '0' + DFC_FORMAT_VERSION) {
-            fail_class(&p, DfcTextUnsupported, l.number, "Version shall be 4 or 5");
+        if(l.value_len != 1 || l.value[0] != ('0' + DFC_FORMAT_VERSION)) {
+            fail_class(&p, DfcTextUnsupported, l.number, "Version shall be 4");
             break;
         }
-        unsigned format_version = (unsigned)(l.value[0] - '0');
 
         size_t index = 0;
         if(!req_token(&p, "Card Generation", GENERATION_NAMES, 3, &index)) break;
@@ -1163,24 +1146,6 @@ DfcTextStatus
         if(!req_token(&p, "UID Provenance", PROVENANCE_NAMES, 3, &index)) break;
         credential->card.uid_provenance = (DfcUidProvenance)index;
         if(!parse_static_signature(&p)) break;
-        if(format_version >= 5) {
-            if(!opt_hex_exact(
-                   &p,
-                   "Card Hardware Version",
-                   credential->card.hardware_version,
-                   sizeof(credential->card.hardware_version),
-                   &credential->card.has_hardware_version)) {
-                break;
-            }
-            if(!opt_hex_exact(
-                   &p,
-                   "Card Software Version",
-                   credential->card.software_version,
-                   sizeof(credential->card.software_version),
-                   &credential->card.has_software_version)) {
-                break;
-            }
-        }
 
         if(!parse_picc(&p)) break;
         if(!parse_files(&p, "PICC", DFC_FILE_OWNER_PICC)) break;
@@ -1216,7 +1181,7 @@ DfcTextStatus
         // shared model rules apply here too.
         DfcDerStatus model = dfc_der_validate_model(credential);
         if(model != DfcDerOk) {
-            fail_class(&p, (DfcTextStatus)model, 0, "the model breaks a DFC format rule");
+            fail_class(&p, (DfcTextStatus)model, 0, "the model breaks a version 4 rule");
         }
     }
 
@@ -1492,19 +1457,11 @@ static DfcTextStatus write_credential(W* w, const DfcCredential* c) {
     if(c->picc_num_keys > DFC_MAX_KEYS) return DfcTextMalformed;
 
     w_line_str(w, "Filetype", "DFC Credential");
-    w_line_uint(w, "Version", DFC_FORMAT_VERSION);
+    w_line_str(w, "Version", "4");
     w_line_str(w, "Card Generation", GENERATION_NAMES[c->card.generation - 1]);
     w_line_uint(w, "Card Storage", c->card.storage);
     w_line_hex(w, "UID", c->uid, c->uid_len);
     w_line_str(w, "UID Provenance", PROVENANCE_NAMES[c->card.uid_provenance]);
-    if(c->card.has_hardware_version) {
-        w_line_hex(w, "Card Hardware Version", c->card.hardware_version,
-                   sizeof(c->card.hardware_version));
-    }
-    if(c->card.has_software_version) {
-        w_line_hex(w, "Card Software Version", c->card.software_version,
-                   sizeof(c->card.software_version));
-    }
 #if DFC_ENABLE_STATIC_SIGNATURE
     if(c->picc_has_static_signature) {
         w_line_hex(

@@ -8,13 +8,13 @@
 static uint8_t zeroes[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 static uint8_t Rb[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1b};
 
-static void des_cmac_padBlock(uint8_t* block, size_t len) {
+void des_cmac_padBlock(uint8_t* block, size_t len) {
     block[len] = 0x80;
 }
 
 // CMAC's underlying block cipher, selected by key length: 8 bytes = single DES,
 // 16 bytes = 2-key 3DES, 24 bytes = 3-key 3DES.
-static bool des_cmac_block_cipher(
+bool des_cmac_block_cipher(
     uint8_t* key,
     size_t key_len,
     uint8_t* plain,
@@ -25,7 +25,7 @@ static bool des_cmac_block_cipher(
     return dfc_crypto_des_cbc(true, key, key_len, iv, plain, enc, plain_len);
 }
 
-static void des_cmac_bitShiftLeft(uint8_t* input, uint8_t* output, size_t len) {
+void des_cmac_bitShiftLeft(uint8_t* input, uint8_t* output, size_t len) {
     size_t last = len - 1;
     for(size_t i = 0; i < last; i++) {
         output[i] = input[i] << 1;
@@ -37,14 +37,13 @@ static void des_cmac_bitShiftLeft(uint8_t* input, uint8_t* output, size_t len) {
 }
 
 // x = a ^ b
-static void des_cmac_xor(uint8_t* a, uint8_t* b, uint8_t* x, size_t len) {
+void des_cmac_xor(uint8_t* a, uint8_t* b, uint8_t* x, size_t len) {
     for(size_t i = 0; i < len; i++) {
         x[i] = a[i] ^ b[i];
     }
 }
 
-static bool des_cmac_generateSubkeys(
-    uint8_t* key, size_t key_len, uint8_t* subkey1, uint8_t* subkey2) {
+bool des_cmac_generateSubkeys(uint8_t* key, size_t key_len, uint8_t* subkey1, uint8_t* subkey2) {
     uint8_t l[BLOCK_SIZE] = {0};
     des_cmac_block_cipher(key, key_len, zeroes, BLOCK_SIZE, l);
 

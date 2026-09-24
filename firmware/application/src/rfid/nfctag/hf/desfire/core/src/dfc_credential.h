@@ -142,11 +142,6 @@ typedef struct {
     uint32_t storage;
     // The UID itself lives on DfcCredential; this records where it came from.
     DfcUidProvenance uid_provenance;
-    // Optional seven-octet GetVersion response overrides.
-    bool has_hardware_version;
-    uint8_t hardware_version[7];
-    bool has_software_version;
-    uint8_t software_version[7];
 } DfcCard;
 
 typedef struct {
@@ -237,12 +232,10 @@ typedef struct {
     char name[DFC_FILE_NAME_MAX_LENGTH + 1];
 } DfcCredential;
 
-DfcCredential* dfc_credential_alloc(void);
+DfcCredential* dfc_credential_alloc();
 void dfc_credential_free(DfcCredential* dfc_credential);
 
 bool dfc_credential_clear(DfcCredential* dfc_credential);
-// Factory defaults and a generated UID, without applications or files.
-void dfc_credential_init_factory(DfcCredential* credential);
 // Resets credential to a blank, emulatable template: random UID, a default AID, a
 // single D40 DES key (all-zero, key 0), and one empty writable Standard Data file -
 // enough for a DESFire reader/writer to authenticate against and WriteData into during
