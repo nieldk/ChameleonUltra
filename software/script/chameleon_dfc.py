@@ -194,6 +194,8 @@ class DfcCredential:
     uid: bytes = b""
     generation: int = 1
     storage: int = DEFAULT_CARD_STORAGE
+    hardware_version: bytes = b""   # v5: 7-byte GetVersion HW frame override
+    software_version: bytes = b""   # v5: 7-byte GetVersion SW frame override
     uid_provenance: int = 2
     picc_key_settings_1: int = 0x0F
     picc_key_settings_2: int = 0x01
@@ -222,12 +224,12 @@ class DfcCredential:
         if filetype != DFC_FILETYPE:
             raise DfcError(f"not a DESFire credential file (Filetype: {filetype!r})")
         version = _parse_int(fields.get("Version", "0"))
-        if version != DFC_VERSION:
+        if version not in (DFC_VERSION, 5):
             # Earlier versions carried no card record, no PICC keys beyond the
             # master, and no declared file size. Reading one means inventing
             # those, and inventing them is what this format exists to stop.
             raise DfcError(
-                f"unsupported .dfc version {version}, expected {DFC_VERSION}",
+                f"unsupported .dfc version {version}, expected {DFC_VERSION} or 5",
                 DfcErrorClass.UNSUPPORTED,
             )
         _validate_text_keys(fields)
@@ -435,6 +437,10 @@ def der_encode(cred: DfcCredential) -> bytes:
         + _tlv(0x82, cred.uid)
         + _int(0x83, cred.uid_provenance)
     )
+    if cred.hardware_version:
+        card += _tlv(0x85, cred.hardware_version)
+    if cred.software_version:
+        card += _tlv(0x86, cred.software_version)
     picc = (
         _tlv(0x80, bytes([cred.picc_key_settings_1]))
         + _tlv(0x81, bytes([cred.picc_key_settings_2]))
@@ -460,7 +466,8 @@ def der_encode(cred: DfcCredential) -> bytes:
         _encode_app(cred, i, app) for i, app in enumerate(cred.apps)
     )
 
-    body = _int(0x80, DFC_VERSION) + _tlv(0xA1, card) + _tlv(0xA2, picc) + _tlv(0xA3, apps)
+    ver = 5 if (cred.hardware_version or cred.software_version) else DFC_VERSION
+    body = _int(0x80, ver) + _tlv(0xA1, card) + _tlv(0xA2, picc) + _tlv(0xA3, apps)
     out = _tlv(0x60, body)
     if len(out) > DER_MAX_SIZE:
         raise DfcError(f"credential encodes to {len(out)} bytes, the limit is {DER_MAX_SIZE}")
@@ -468,6 +475,9 @@ def der_encode(cred: DfcCredential) -> bytes:
 
 
 def _validate(cred: DfcCredential) -> None:
+    for _n, _v in (("hardware", cred.hardware_version), ("software", cred.software_version)):
+        if _v and len(_v) != 7:
+            raise DfcError(f"Card {_n} version must be 7 bytes, got {len(_v)}")
     if len(cred.uid) not in UID_LENGTHS:
         raise DfcError(f"UID must be 4 or 7 bytes, got {len(cred.uid)}")
     if cred.generation not in GENERATIONS.values():
@@ -794,7 +804,7 @@ def der_decode(blob: bytes, cls=DfcCredential) -> "DfcCredential":
 
     got = _fields(body, (0x80, 0xA1, 0xA2, 0xA3))
     version = _read_uint(_req(got, 0x80), 0xFF)
-    if version != DFC_VERSION:
+    if version not in (DFC_VERSION, 5):
         raise DfcError(
             f"credential encoding version {version} is not supported",
             DfcErrorClass.UNSUPPORTED,
@@ -802,7 +812,7 @@ def der_decode(blob: bytes, cls=DfcCredential) -> "DfcCredential":
 
     cred = cls()
 
-    card = _fields(_req(got, 0xA1), (0x80, 0x81, 0x82, 0x83, 0x84))
+    card = _fields(_req(got, 0xA1), (0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86))
     if 0x84 in card:
         raise DfcError(
             "card static signatures are represented by DFC v4 but are not emulated",
@@ -822,6 +832,10 @@ def der_decode(blob: bytes, cls=DfcCredential) -> "DfcCredential":
     if len(cred.uid) not in UID_LENGTHS:
         raise DfcError(f"UID must be 4 or 7 bytes, got {len(cred.uid)}")
     cred.uid_provenance = _read_uint(_req(card, 0x83), 0xFF)
+    if 0x85 in card:
+        cred.hardware_version = card[0x85]
+    if 0x86 in card:
+        cred.software_version = card[0x86]
     if cred.uid_provenance not in PROVENANCES.values():
         raise DfcError(f"unknown UID provenance {cred.uid_provenance}")
 
@@ -932,6 +946,8 @@ _STATIC_TEXT_KEYS = {
     "Version",
     "Card Generation",
     "Card Storage",
+    "Card Hardware Version",
+    "Card Software Version",
     "UID",
     "UID Provenance",
     "PICC Key Settings 1",
@@ -1129,6 +1145,8 @@ def _parse_v4(cls, fields: dict[str, str]) -> "DfcCredential":
     cred.generation = GENERATIONS[generation]
     cred.storage = _parse_decimal(
         fields.get("Card Storage", str(DEFAULT_CARD_STORAGE)), "Card Storage")
+    cred.hardware_version = _parse_hex(fields.get("Card Hardware Version", ""))
+    cred.software_version = _parse_hex(fields.get("Card Software Version", ""))
     cred.uid = _parse_uid(fields)
     provenance = fields.get("UID Provenance", "")
     if provenance not in PROVENANCES:
