@@ -6,6 +6,8 @@
 #include "dfc_credential.h"
 #include "dfc_emulator.h"
 
+#define DFC_VIRTUAL_PICC_MAX_BLOCK_SIZE 51
+
 typedef enum {
     DfcVirtualPiccStatusOk = 0,
     DfcVirtualPiccStatusNoCard,
@@ -41,13 +43,19 @@ typedef struct {
     uint8_t random_uid[DFC_RANDOM_UID_LEN];
     bool random_uid_valid;
     bool iso_dep_selected;
+    uint8_t iso_dep_cid;
     uint8_t expected_pcd_sequence;
     uint8_t picc_sequence;
+    // Native command capacity plus wrapped APDU header and Le.
+    uint8_t pending_command[DFC_WORKER_MAX_BUFFER_SIZE + 6];
+    size_t pending_command_len;
     uint8_t pending_response[DFC_WORKER_MAX_BUFFER_SIZE];
     size_t pending_response_len;
     size_t pending_response_offset;
     uint8_t pending_response_prefix[3];
     size_t pending_response_prefix_len;
+    uint8_t last_picc_block[DFC_VIRTUAL_PICC_MAX_BLOCK_SIZE];
+    size_t last_picc_block_len;
     bool iso_file_selected;
     size_t iso_file_index;
 } DfcVirtualPiccSession;

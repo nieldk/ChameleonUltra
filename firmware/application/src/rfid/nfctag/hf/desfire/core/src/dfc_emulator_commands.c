@@ -304,7 +304,31 @@ static uint8_t file_effective_comm_settings(const DfcFile* file, bool write) {
 }
 
 static size_t allocated_file_bytes(const DfcCredential* credential) {
-    return credential->file_pool_used;
+    size_t used = 0;
+    for(size_t i = 0; i < credential->num_files; i++) {
+        const DfcFile* file = &credential->files[i];
+        if(file->type == DFC_FILE_TYPE_STANDARD_DATA ||
+           file->type == DFC_FILE_TYPE_BACKUP_DATA) {
+            used += file->declared_size;
+        } else if(file->type == DFC_FILE_TYPE_LINEAR_RECORD ||
+                  file->type == DFC_FILE_TYPE_CYCLIC_RECORD) {
+            used += (size_t)file->record_size * file->max_records;
+        }
+    }
+    return used;
+}
+
+static size_t card_file_capacity_bytes(const DfcCard* card) {
+    if(card->generation == DfcGenerationEv3 && card->storage == DfcStorage4KByteCount)
+        return DFC_EV3_4K_FREE_MEMORY_BYTES;
+    // A zeroed card has no configured storage. Keep the legacy EV1 fallback.
+    return card->storage ? card->storage : DFC_EV1_PICC_STORAGE_BYTES;
+}
+
+static bool has_card_file_capacity(const DfcCredential* credential, size_t allocation) {
+    size_t capacity = card_file_capacity_bytes(&credential->card);
+    size_t used = allocated_file_bytes(credential);
+    return used <= capacity && allocation <= capacity - used;
 }
 
 static void clear_pending_chain(DfcEmulator* emulator) {
@@ -410,21 +434,14 @@ static void handle_pending_chain_continuation(DfcEmulator* emulator, DfcByteBuf*
 }
 
 static void handle_free_mem(DfcEmulator* emulator, DfcByteBuf* tx_buffer) {
-    // Report remaining shared pool (device-bound), capped by advertised EV1 capacity.
-    size_t pool_free = dfc_credential_file_pool_free(emulator->credential);
+    // Report the same logical capacity used to admit file allocations.
     size_t used = allocated_file_bytes(emulator->credential);
-    size_t advertised_capacity =
-        emulator->credential->card.generation == DfcGenerationEv3 &&
-                emulator->credential->card.storage == DfcStorage4KByteCount ?
-            DFC_EV3_4K_FREE_MEMORY_BYTES :
-            DFC_EV1_PICC_STORAGE_BYTES;
-    size_t capacity =
-        DFC_FILE_POOL_SIZE < advertised_capacity ? DFC_FILE_POOL_SIZE : advertised_capacity;
-    uint32_t free_bytes = (uint32_t)pool_free;
-    if(used >= capacity) {
+    size_t advertised_capacity = card_file_capacity_bytes(&emulator->credential->card);
+    uint32_t free_bytes = 0;
+    if(used >= advertised_capacity) {
         free_bytes = 0;
-    } else if(capacity - used < free_bytes) {
-        free_bytes = (uint32_t)(capacity - used);
+    } else {
+        free_bytes = (uint32_t)(advertised_capacity - used);
     }
     uint8_t free_mem[3] = {
         (uint8_t)(free_bytes & 0xFF),
@@ -1035,49 +1052,79 @@ static void
     dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OK);
 }
 
-// DESFire GetVersion storage-size byte: encodes 2^n octets of user memory,
-// LSB 0 = exact size. 2K -> 0x16, 4K -> 0x18, 8K -> 0x1A. Derived from the
-// credential so the advertised size matches the emulated card.
-static uint8_t dfc_version_storage_byte(size_t storage_bytes) {
-    if(storage_bytes <= 2048u) return 0x16;
-    if(storage_bytes <= 4096u) return 0x18;
-    return 0x1A;
+static bool storage_version_code(const DfcCard* card, uint8_t* code) {
+    // Match the legacy 8 KiB capacity of a zeroed, not yet configured card.
+    uint32_t storage = card->storage ? card->storage : DFC_EV1_PICC_STORAGE_BYTES;
+    // EV3 Tables 108 and 112 list only 2, 4, and 8 KiB devices.
+    if(card->generation == DfcGenerationEv3 &&
+       storage != 2048 && storage != 4096 && storage != 8192) {
+        return false;
+    }
+    switch(storage) {
+        case 1024: *code = 0x14; return true;
+        case 2048: *code = 0x16; return true;
+        case 4096: *code = 0x18; return true;
+        case 8192: *code = 0x1A; return true;
+        case 16384: *code = 0x1C; return true;
+        case 32768: *code = 0x1E; return true;
+        case 65536: *code = 0x20; return true;
+        case 131072: *code = 0x22; return true;
+        default: return false;
+    }
+}
+
+static bool build_default_version_frame(const DfcCard* card, bool software, uint8_t frame[7]) {
+    static const uint8_t version[3][2][2] = {
+        {{0x01, 0x00}, {0x01, 0x03}},
+        {{0x12, 0x00}, {0x02, 0x01}},
+        {{0x33, 0x00}, {0x03, 0x00}},
+    };
+    size_t generation = 0;
+    if(card->generation == DfcGenerationEv2) generation = 1;
+    if(card->generation == DfcGenerationEv3) generation = 2;
+    frame[0] = 0x04;
+    frame[1] = 0x01;
+    frame[2] = 0x01;
+    frame[3] = version[generation][software ? 1 : 0][0];
+    frame[4] = version[generation][software ? 1 : 0][1];
+    if(!storage_version_code(card, &frame[5])) return false;
+    frame[6] = 0x05;
+    return true;
 }
 
 static void handle_get_version(DfcEmulator* emulator, DfcByteBuf* tx_buffer) {
-    static const uint8_t ev1_hardware_version[] = {0x04, 0x01, 0x01, 0x01, 0x00, 0x1A, 0x05};
-    static const uint8_t ev2_hardware_version[] = {0x04, 0x01, 0x01, 0x12, 0x00, 0x18, 0x05};
-    static const uint8_t ev3_hardware_version[] = {0x04, 0x01, 0x01, 0x33, 0x00, 0x18, 0x05};
-    const uint8_t* hardware_version =
-        emulator->credential->card.generation == DfcGenerationEv3 ? ev3_hardware_version :
-        emulator->credential->card.generation == DfcGenerationEv2 ? ev2_hardware_version :
-                                                                    ev1_hardware_version;
-    uint8_t hw[7];
-    memcpy(hw, hardware_version, sizeof(hw));
-    hw[5] = dfc_version_storage_byte(emulator->credential->card.storage);
+    uint8_t default_version[7];
+    const DfcCard* card = &emulator->credential->card;
     clear_pending_chain(emulator);
+    emulator->get_version_frame = 0;
+    if(!card->has_hardware_version && !build_default_version_frame(card, false, default_version)) {
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PARAMETER_ERROR);
+        return;
+    }
+    const uint8_t* hardware_version = card->has_hardware_version ? card->hardware_version :
+                                                                   default_version;
     emulator->get_version_frame = 1;
     dfc_bytebuf_append_byte(tx_buffer, DFC_CMD_ADDITIONAL_FRAME);
-    dfc_bytebuf_append_bytes(tx_buffer, hw, sizeof(hw));
+    dfc_bytebuf_append_bytes(tx_buffer, hardware_version, sizeof(default_version));
 }
 
 static void handle_get_version_continuation(DfcEmulator* emulator, DfcByteBuf* tx_buffer) {
-    static const uint8_t ev1_software_version[] = {0x04, 0x01, 0x01, 0x01, 0x03, 0x1A, 0x05};
-    static const uint8_t ev2_software_version[] = {0x04, 0x01, 0x01, 0x02, 0x01, 0x18, 0x05};
-    static const uint8_t ev3_software_version[] = {0x04, 0x01, 0x01, 0x03, 0x00, 0x18, 0x05};
-    static const uint8_t production[] = {0xCF, 0x69, 0x98, 0x59, 0x60, 0x03, 0x22};
+    static const uint8_t production_legacy[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x24};
+    static const uint8_t production_ev3[] = {0x00, 0x00, 0x00, '0', '0', 0x01, 0x24};
 
     if(emulator->get_version_frame == 1) {
-        const uint8_t* software_version =
-            emulator->credential->card.generation == DfcGenerationEv3 ? ev3_software_version :
-            emulator->credential->card.generation == DfcGenerationEv2 ? ev2_software_version :
-                                                                        ev1_software_version;
-        uint8_t sw[7];
-        memcpy(sw, software_version, sizeof(sw));
-        sw[5] = dfc_version_storage_byte(emulator->credential->card.storage);
+        uint8_t default_version[7];
+        const DfcCard* card = &emulator->credential->card;
+        if(!card->has_software_version && !build_default_version_frame(card, true, default_version)) {
+            emulator->get_version_frame = 0;
+            dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PARAMETER_ERROR);
+            return;
+        }
+        const uint8_t* software_version = card->has_software_version ? card->software_version :
+                                                                        default_version;
         emulator->get_version_frame = 2;
         dfc_bytebuf_append_byte(tx_buffer, DFC_CMD_ADDITIONAL_FRAME);
-        dfc_bytebuf_append_bytes(tx_buffer, sw, sizeof(sw));
+        dfc_bytebuf_append_bytes(tx_buffer, software_version, sizeof(default_version));
         return;
     }
 
@@ -1093,7 +1140,10 @@ static void handle_get_version_continuation(DfcEmulator* emulator, DfcByteBuf* t
         } else {
             dfc_bytebuf_append_bytes(tx_buffer, emulator->credential->uid, DFC_DESFIRE_UID_LEN);
         }
-        dfc_bytebuf_append_bytes(tx_buffer, production, sizeof(production));
+        const uint8_t* production = emulator->credential->card.generation == DfcGenerationEv3 ?
+                                        production_ev3 :
+                                        production_legacy;
+        dfc_bytebuf_append_bytes(tx_buffer, production, sizeof(production_legacy));
         return;
     }
 
@@ -1887,7 +1937,8 @@ static void handle_create_std_data_file(
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OUT_OF_EEPROM);
         return;
     }
-    if(file_size > dfc_credential_file_pool_free(credential)) {
+    if(file_size > dfc_credential_file_pool_free(credential) ||
+       !has_card_file_capacity(credential, file_size)) {
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OUT_OF_EEPROM);
         return;
     }
@@ -1904,7 +1955,7 @@ static void handle_create_std_data_file(
         file->has_iso_file_id = true;
         file->iso_file_id = iso_file_id;
     }
-    if(!dfc_file_resize(credential, file, file_size)) {
+    if(!dfc_file_set_data_size(credential, file, file_size)) {
         (void)dfc_credential_delete_file(credential, emulator->selected_app_index, file_no);
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OUT_OF_EEPROM);
         return;
@@ -1959,7 +2010,8 @@ static void handle_create_record_file(
     uint32_t max_records = read_uint24_le(apdu + settings_offset + 6);
     uint64_t allocation = (uint64_t)record_size * max_records;
     if(record_size == 0 || max_records == 0 || allocation > DFC_MAX_FILE_DATA ||
-       allocation > dfc_credential_file_pool_free(credential)) {
+       allocation > dfc_credential_file_pool_free(credential) ||
+       !has_card_file_capacity(credential, (size_t)allocation)) {
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OUT_OF_EEPROM);
         return;
     }
@@ -3968,7 +4020,13 @@ bool dfc_emulator_handle_command(
         handle_change_key_settings(emulator, buffer, buffer_len, tx_buffer);
         return true;
     case DFC_CMD_GET_VERSION:
+        if(buffer_len != 1) {
+            dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
+            apply_ev1_response_secure_messaging(emulator, cmd, tx_buffer);
+            return true;
+        }
         handle_get_version(emulator, tx_buffer);
+        apply_ev1_response_secure_messaging(emulator, cmd, tx_buffer);
         return true;
     case DFC_CMD_GET_CARD_UID:
         handle_get_card_uid(emulator, tx_buffer);
@@ -4214,7 +4272,13 @@ bool dfc_emulator_handle_command(
             emulator->awaiting_step2) {
             handle_authenticate_step2(emulator, buffer, buffer_len, tx_buffer, dfc);
         } else if(emulator->get_version_frame != 0) {
-            handle_get_version_continuation(emulator, tx_buffer);
+            if(buffer_len != 1) {
+                clear_pending_chain(emulator);
+                dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
+            } else {
+                handle_get_version_continuation(emulator, tx_buffer);
+                apply_ev1_response_secure_messaging(emulator, DFC_CMD_GET_VERSION, tx_buffer);
+            }
         } else if(emulator->pending_chain_len > emulator->pending_chain_offset) {
             handle_pending_chain_continuation(emulator, tx_buffer);
         } else {
