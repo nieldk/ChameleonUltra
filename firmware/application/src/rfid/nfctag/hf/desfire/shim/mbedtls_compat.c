@@ -199,33 +199,43 @@ int mbedtls_aes_crypt_cbc(
     if (!ctx->has_key) return MBEDTLS_ERR_AES_INVALID_KEY_LENGTH;
     if (length == 0) return 0;
 
-    /* mbedTLS updates `iv` in place to the trailing ciphertext block. Compute it
-       ourselves so the contract holds regardless of whether nrf_crypto writes
-       the iv back. For decrypt the trailing ciphertext is the last INPUT block,
-       captured before any in-place overwrite. */
-    uint8_t next_iv[16];
-    if (mode == MBEDTLS_AES_DECRYPT) {
-        memcpy(next_iv, input + length - AES_SHIM_BLOCK, AES_SHIM_BLOCK);
+    /* CC310's AES DMA requires non-overlapping input/output (nfc_seos.c always
+       passes distinct buffers). dfc-core may call this in place (input == output),
+       so never hand nrf_crypto an aliased pair: stage each block-aligned chunk
+       through separate local buffers, carrying the CBC IV forward between chunks.
+       Chunked CBC with a running IV is identical to a single-shot CBC. */
+    uint8_t inbuf[64];   /* up to 4 AES blocks per nrf_crypto call */
+    uint8_t outbuf[64];
+    uint8_t iv_run[16];
+    memcpy(iv_run, iv, 16);
+
+    for (size_t off = 0; off < length; off += sizeof(inbuf)) {
+        size_t chunk = length - off;
+        if (chunk > sizeof(inbuf)) chunk = sizeof(inbuf);
+
+        memcpy(inbuf, input + off, chunk);  /* read first: input may alias output */
+        uint8_t next_iv[16];
+        if (mode == MBEDTLS_AES_DECRYPT) {
+            memcpy(next_iv, inbuf + chunk - AES_SHIM_BLOCK, AES_SHIM_BLOCK);
+        }
+
+        size_t out_len = chunk;
+        ret_code_t rc = nrf_crypto_aes_crypt(
+            &s_aes_ctx, &g_nrf_crypto_aes_cbc_128_info,
+            (mode == MBEDTLS_AES_ENCRYPT) ? NRF_CRYPTO_ENCRYPT : NRF_CRYPTO_DECRYPT,
+            ctx->key, iv_run,
+            inbuf, chunk,
+            outbuf, &out_len);
+        if (rc != NRF_SUCCESS) return MBEDTLS_ERR_AES_INVALID_INPUT_LENGTH;
+
+        memcpy(output + off, outbuf, chunk);
+        if (mode == MBEDTLS_AES_ENCRYPT) {
+            memcpy(iv_run, outbuf + chunk - AES_SHIM_BLOCK, AES_SHIM_BLOCK);
+        } else {
+            memcpy(iv_run, next_iv, AES_SHIM_BLOCK);
+        }
     }
 
-    /* Operate on `output`; give nrf_crypto its own iv copy. */
-    if (output != input) memcpy(output, input, length);
-    uint8_t iv_local[16];
-    memcpy(iv_local, iv, 16);
-
-    size_t out_len = length;
-    ret_code_t rc = nrf_crypto_aes_crypt(
-        &s_aes_ctx, &g_nrf_crypto_aes_cbc_128_info,
-        (mode == MBEDTLS_AES_ENCRYPT) ? NRF_CRYPTO_ENCRYPT : NRF_CRYPTO_DECRYPT,
-        ctx->key, iv_local,
-        output, length,
-        output, &out_len);
-    if (rc != NRF_SUCCESS) return MBEDTLS_ERR_AES_INVALID_INPUT_LENGTH;
-
-    if (mode == MBEDTLS_AES_ENCRYPT) {
-        memcpy(iv, output + length - AES_SHIM_BLOCK, AES_SHIM_BLOCK);
-    } else {
-        memcpy(iv, next_iv, AES_SHIM_BLOCK);
-    }
+    memcpy(iv, iv_run, AES_SHIM_BLOCK);  /* mbedTLS: iv -> trailing ciphertext block */
     return 0;
 }

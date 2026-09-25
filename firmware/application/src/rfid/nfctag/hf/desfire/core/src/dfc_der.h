@@ -32,6 +32,10 @@ typedef enum {
 // Human-readable name of a status, for logs and test failures.
 const char* dfc_der_status_name(DfcDerStatus status);
 
+// Length of the first credential in a padded buffer, or zero for a bad header.
+// Checks framing only; use dfc_der_decode to validate the credential.
+size_t dfc_der_length(const uint8_t* data, size_t capacity);
+
 // Encode `credential` into `out`. On success writes the length to `*len`.
 // Returns DfcDerCapacity when `cap` or DFC_DER_MAX_SIZE is too small, and
 // DfcDerMalformed when the model itself violates a section 2.2.4 rule, so a

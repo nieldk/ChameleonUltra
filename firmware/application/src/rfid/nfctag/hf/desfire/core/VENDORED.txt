@@ -1,4 +1,0 @@
-Vendored from https://github.com/cindersocket/dfc-core
-License: GPL-2.0-or-later (compatible with this project GPLv3).
-Pinned copy, no submodule. Firmware port is provided by ../desfire_shim.c;
-dfc-core port/host and tests are intentionally not vendored.
