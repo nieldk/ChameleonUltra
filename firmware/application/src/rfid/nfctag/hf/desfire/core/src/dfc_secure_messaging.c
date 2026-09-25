@@ -136,11 +136,15 @@ void dfc_secure_messaging_update_ev1_command(
     uint8_t cmd,
     const uint8_t* data,
     size_t data_len) {
-    if(!dfc_secure_messaging_applies_ev1(sm, cmd)) return;
+    // AdditionalFrame is normally excluded because it also carries auth steps.
+    // A caller may explicitly advance the IV for a GetVersion continuation.
+    if(sm->cipher == DFC_CMD_AUTHENTICATE_LEGACY ||
+       (cmd != DFC_CMD_ADDITIONAL_FRAME && !dfc_secure_messaging_applies_ev1(sm, cmd)))
+        return;
 
     uint8_t* mac_input = sm->mac_input_scratch;
     mac_input[0] = cmd;
-    memcpy(mac_input + 1, data, data_len);
+    if(data_len) memcpy(mac_input + 1, data, data_len);
 
     uint8_t full_mac[16];
     size_t full_mac_len = compute_full_cmac(sm, mac_input, data_len + 1, full_mac);

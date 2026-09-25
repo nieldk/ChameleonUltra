@@ -422,19 +422,19 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
     $(DESFIRE_DIR)/core/src/aes_cmac.c \
     $(DESFIRE_DIR)/core/src/des_cmac.c \
     $(TINY_DES_DIR)/des.c \
-    $(TINY_AES_NRF_DIR)/aes_nrf_crypto.c \
+    $(DESFIRE_DIR)/shim/mbedtls_compat.c \
 
   INC_FOLDERS +=\
     ${DESFIRE_DIR} \
     ${DESFIRE_DIR}/core/src \
     ${DESFIRE_DIR}/core/port \
     ${TINY_DES_DIR} \
-    ${TINY_AES_NRF_DIR} \
+    ${DESFIRE_DIR}/shim \
 
   CFLAGS += -DDFC_BUILD_PROFILE=DFC_PROFILE_FULL_EV2
-# "TINY" here selects dfc-core's mbedTLS-shim crypto seam (shim/mbedtls_compat.c),
-  # which routes AES to nrf_crypto and DES/3DES to the vendored tiny-DES-c.
-  CFLAGS += -DDFC_CRYPTO_BACKEND_TINY=1
+  # dfc-core's mbedTLS backend calls shim/mbedtls_compat.c, which routes AES to
+  # nrf_crypto (CC310) and DES/3DES to the vendored tiny-DES-c.
+  CFLAGS += -DDFC_CRYPTO_BACKEND_MBEDTLS=1
   CFLAGS += -DDES_ENABLE_ECB=1 -DDES_ENABLE_CBC=1
   CFLAGS += -DDES_ENABLE_CTR=0 -DDES_ENABLE_TDES=1
   # The device emulates; it does not read or write credential files, so neither
