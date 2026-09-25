@@ -381,11 +381,7 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
     ${PROJ_DIR}/rfid/reader/hf \
     ${PROJ_DIR}/rfid/reader/lf \
 
-  CFLAGS += -DPROJECT_CHAMELEON_ULTRA \
-            -DCU_BISECT_ATQA_STOCK \
-            -DCU_BISECT_NO_FIELD_RESET \
-            -DCU_BISECT_NO_TXEND_FDT \
-            -DCU_BISECT_NO_PPS
+  CFLAGS += -DPROJECT_CHAMELEON_ULTRA
 
 # DESFire EV1 tag emulation. Crypto comes from tiny-DES-c and tiny-AES-c behind
 # an mbedTLS-compatible shim, so no mbedTLS or OpenSSL dependency is added.
