@@ -637,25 +637,28 @@ void nfc_tag_14a_data_process(uint8_t *p_data) {
             //
             // Only 106 kbit/s is acknowledged, which is all the NFCT does. A faster
             // request goes unanswered rather than accepted and not honoured.
-            if ((szDataBits == 32 || szDataBits == 40) && (p_data[0] & 0xF0) == 0xD0) {
+            if ((auto_coll_res->sak[0] & 0x20) &&
+                (szDataBits == 32 || szDataBits == 40) && (p_data[0] & 0xF0) == 0xD0) {
                 uint8_t frame_len = szDataBits / 8;
                 bool pps1_present = (p_data[1] & 0x10) != 0;
                 if (nfc_tag_14a_checks_crc(p_data, frame_len) && frame_len == (pps1_present ? 5 : 4)) {
-                    // DRI is PPS1 bits 1..0 and DSI bits 3..2; all zero is 106 kbit/s.
                     uint8_t pps1 = pps1_present ? p_data[2] : 0x00;
                     if ((pps1 & 0x0F) == 0x00) {
                         uint8_t ppss = p_data[0];
                         nfc_tag_14a_tx_bytes(&ppss, 1, true);
                     }
+                    return;                 // valid PPS handled
                 }
-                return;
+                /* not a valid PPS -> fall through to cb_state, don't swallow it */
             }
+
             // No processing is successful, it may be some other data. You need to re-post processing
             if (m_tag_handler.cb_state != NULL) {    //Activation status, transfer the message to other registered processor processing
                 m_tag_handler.cb_state(p_data, szDataBits);
             }
             break;
         }
+
         case NFC_TAG_STATE_14A_PROPRIETARY: {
             if (m_tag_handler.cb_state != NULL) {
                 m_tag_handler.cb_state(p_data, szDataBits);
