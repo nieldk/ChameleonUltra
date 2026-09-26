@@ -2616,9 +2616,30 @@ class HFMFStaticEncryptedNested(ReaderRequiredUnit):
 class HFMFAutopwn(ReaderRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
-        parser.description = "Mifare Classic auto recovery tool"
+        parser.description = (
+            "MIFARE Classic auto recovery (PM3-style): detect PRNG, check known "
+            "keys, then escalate darkside -> nested -> hardnested -> staticnested, "
+            "propagating each recovered key. Finishes by dumping the card and "
+            "optionally loading it straight into an emulation slot."
+        )
         parser.add_argument(
-            "-k", "--key", type=str, required=False, metavar="<hex>", help="Known key"
+            "-k", "--key", type=str, required=False, metavar="<hex>", help="Known key (12 hex)"
+        )
+        parser.add_argument(
+            "-f", "--file", type=str, default=None,
+            help="Write recovered card here. .json -> Proxmark3 'mfc v2', .bin -> raw. "
+                 "Keys go to <base>.dic and <base>.key. Non-interactive when set."
+        )
+        parser.add_argument(
+            "-s", "--slot", type=int, choices=range(1, 9), default=None,
+            help="Load the recovered card into this emulation slot (1-8)."
+        )
+        parser.add_argument(
+            "--dict", type=str, default=None,
+            help="Extra key dictionary file (one 12-hex key per line) to try first."
+        )
+        parser.add_argument(
+            "--no-dump", action="store_true", help="Recover keys only; skip the card dump."
         )
         return parser
 
@@ -2816,6 +2837,13 @@ class HFMFAutopwn(ReaderRequiredUnit):
         current_keys_found = self.merge_found_sector_keys(
             current_keys_found, self.try_key(bytes.fromhex("FFFFFFFFFFFF"), bytes(10))
         )
+        # user-supplied dictionary (--dict): try each key across all still-unknown sectors
+        for dk in (getattr(self, "_extra_dict", None) or []):
+            if len(current_keys_found) >= max_sectors_num * 2:
+                break
+            current_keys_found = self.merge_found_sector_keys(
+                current_keys_found, self.try_key(bytes.fromhex(dk), full_mask)
+            )
 
         if not current_keys_found:
             print(f" {CR}[!]{C0}  No keys found yet, trying darkside..")
@@ -2975,16 +3003,9 @@ class HFMFAutopwn(ReaderRequiredUnit):
                 f.write(extracted_keys.get(sector_no * 2 + 1, unknownkey))
         print(f" {CG}[+]{C0}  Keys saved to {key_path} (as .key format)")
 
-    def dump_card_to_file(self, extracted_keys, max_sectors_num):
-        if input(f" {CY}[?]{C0}  Dump card to file? [y/n]: ").lower() != "y":
-            return
-        filename = input(
-            f" {C0}[+]{C0}  Enter dump filename (without extension): "
-        ).strip()
-        if not filename:
-            print(f" {CR}[!]{C0}  No filename provided, skipping.")
-            return
-        dump_path = filename + ".bin"
+    def read_all_blocks(self, extracted_keys, max_sectors_num):
+        """Read every block with the recovered keys -> {block_num: 16 bytes}."""
+        blocks = {}
         buffer = bytearray()
         for s in range(max_sectors_num):
             key_a = extracted_keys.get(s * 2)
@@ -3014,20 +3035,115 @@ class HFMFAutopwn(ReaderRequiredUnit):
                         f" {CR}[!]{C0}  Block {block_num} unreadable, filling with zeros"
                     )
                     block_data = bytes(16)
+                blocks[block_num] = bytes(block_data)
                 buffer.extend(block_data)
-        with open(dump_path, "wb") as f:
-            f.write(buffer)
-        print(f" {CG}[+]{C0}  Card dumped to {dump_path}")
+        return blocks, bytes(buffer)
+
+    def _card_meta(self):
+        """UID / ATQA / SAK from a fresh scan, for the mfc v2 Card block."""
+        resp = self.cmd.hf14a_scan()
+        if resp:
+            t = resp[0]
+            return t["uid"], t["atqa"], t["sak"][0]
+        return b"", b"", 0
+
+    def write_dump(self, blocks, raw, path):
+        if path.lower().endswith(".json"):
+            import json
+            uid, atqa, sak = self._card_meta()
+            obj = chameleon_pm3.mfc_blocks_to_json(uid, atqa, sak, blocks)
+            with open(path, "w") as fh:
+                fh.write(json.dumps(obj, indent=4))
+            print(f" {CG}[+]{C0}  Card dumped to {path} (Proxmark3 'mfc v2')")
+        else:
+            with open(path, "wb") as fh:
+                fh.write(raw)
+            print(f" {CG}[+]{C0}  Card dumped to {path} (raw .bin)")
+
+    def load_into_slot(self, raw, slot):
+        """Push the recovered dump straight into an MF1 emulation slot (like eload)."""
+        try:
+            fwslot = SlotNumber(slot)
+            block_count = len(raw) // 16
+            tag = (TagSpecificType.MIFARE_4096 if block_count > 64
+                   else TagSpecificType.MIFARE_1024)
+            self.cmd.set_slot_tag_type(fwslot, tag)
+            self.cmd.set_slot_enable(fwslot, TagSenseType.HF, True)
+            self.cmd.set_active_slot(fwslot)
+            # chunked write, same as hf mf eload
+            max_blocks = (self.device_com.data_max_length - 1) // 16
+            index = block = 0
+            while index < len(raw):
+                chunk = raw[index: index + 16 * max_blocks]
+                self.cmd.mf1_write_emu_block_data(block, chunk)
+                n = len(chunk) // 16
+                index += 16 * n
+                block += n
+            self.cmd.slot_data_config_save()
+            print(f" {CG}[+]{C0}  Loaded recovered card into slot {slot} "
+                  f"({block_count} blocks) — ready to emulate")
+        except Exception as e:
+            print(f" {CR}[!]{C0}  Slot load failed: {e}")
+
+    def _save_keys(self, extracted_keys, max_sectors_num, base):
+        uniq = set(v for v in extracted_keys.values() if isinstance(v, (bytes, bytearray)))
+        with open(base + ".dic", "w") as fh:
+            for k in sorted(uniq):
+                fh.write(k.hex().upper() + "\n")
+        with open(base + ".key", "wb") as fh:
+            for s in range(max_sectors_num):
+                fh.write(extracted_keys.get(s * 2, bytes(6)))
+                fh.write(extracted_keys.get(s * 2 + 1, bytes(6)))
+        print(f" {CG}[+]{C0}  Keys saved to {base}.dic and {base}.key")
+
+    def dump_card_to_file(self, extracted_keys, max_sectors_num):
+        # interactive path (bare `autopwn`, no -f/-s)
+        if input(f" {CY}[?]{C0}  Dump card to file? [y/n]: ").lower() != "y":
+            return
+        filename = input(
+            f" {C0}[+]{C0}  Enter dump filename (base, or name.json / name.bin): "
+        ).strip()
+        if not filename:
+            print(f" {CR}[!]{C0}  No filename provided, skipping.")
+            return
+        path = filename if filename.lower().endswith((".json", ".bin")) else filename + ".bin"
+        blocks, raw = self.read_all_blocks(extracted_keys, max_sectors_num)
+        self.write_dump(blocks, raw, path)
 
     def on_exec(self, args: argparse.Namespace):
         key_known: str = args.key
         if key_known is not None and not re.match(r"^[a-fA-F0-9]{12}$", key_known):
             print("key must include 12 HEX symbols")
             return
+        self._extra_dict = None
+        if args.dict:
+            try:
+                with open(args.dict) as fh:
+                    self._extra_dict = [k.strip() for k in fh
+                                        if re.fullmatch(r"[A-Fa-f0-9]{12}", k.strip())]
+                print(f" {CG}[+]{C0}  Loaded {len(self._extra_dict)} keys from {args.dict}")
+            except Exception as e:
+                print(f" {CR}[!]{C0}  Could not read dict {args.dict}: {e}")
+
         extracted_keys, max_sectors_num = self.autopwn(key_known)
         self.print_key_table(extracted_keys, max_sectors_num)
-        self.save_keys_to_file(extracted_keys, max_sectors_num)
-        self.dump_card_to_file(extracted_keys, max_sectors_num)
+
+        non_interactive = bool(args.file or args.slot)
+        if non_interactive:
+            # keys: always alongside the dump when -f given
+            if args.file:
+                base = re.sub(r"\.(json|bin)$", "", args.file, flags=re.I)
+                self._save_keys(extracted_keys, max_sectors_num, base)
+            if not args.no_dump and (args.file or args.slot):
+                blocks, raw = self.read_all_blocks(extracted_keys, max_sectors_num)
+                if args.file:
+                    self.write_dump(blocks, raw, args.file)
+                if args.slot:
+                    self.load_into_slot(raw, args.slot)
+        else:
+            self.save_keys_to_file(extracted_keys, max_sectors_num)
+            if not args.no_dump:
+                self.dump_card_to_file(extracted_keys, max_sectors_num)
 
 
 @hf_mf.command("fchk")
