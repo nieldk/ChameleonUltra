@@ -26,6 +26,7 @@ import hardnested_utils
 from fdxb_country import describe_country_code
 
 from chameleon_dfc import DfcCredential, DfcError
+import chameleon_pm3
 import chameleon_com
 import chameleon_cmd
 import chameleon_dfu
@@ -4236,6 +4237,8 @@ class HFMFELoad(SlotIndexArgsAndGoUnit, DeviceRequiredUnit):
                 content_type = "bin"
             elif file.endswith(".eml"):
                 content_type = "hex"
+            elif file.endswith(".json"):
+                content_type = "json"
             else:
                 raise Exception(
                     "Unknown file format, Specify content type with -t option"
@@ -4244,11 +4247,25 @@ class HFMFELoad(SlotIndexArgsAndGoUnit, DeviceRequiredUnit):
             content_type = args.type
         buffer = bytearray()
 
-        with open(file, mode="rb") as fd:
-            if content_type == "bin":
-                buffer.extend(fd.read())
-            if content_type == "hex":
-                buffer.extend(bytearray.fromhex(fd.read().decode()))
+        # Proxmark3 'mfc v2' dump JSON -> block buffer (sniffed by content)
+        if content_type not in ("bin", "hex") or file.endswith(".json"):
+            with open(file, "r") as fd:
+                text = fd.read()
+            if '"mfc' in text and '"blocks"' in text:
+                import json
+                _card, blocks = chameleon_pm3.mfc_json_to_blocks(json.loads(text))
+                for n in range(max(blocks) + 1 if blocks else 0):
+                    buffer.extend(blocks.get(n, bytes(16)))
+                content_type = "bin"  # already materialized
+            elif content_type not in ("bin", "hex"):
+                raise Exception("Unknown file format, Specify content type with -t option")
+
+        if not buffer:
+            with open(file, mode="rb") as fd:
+                if content_type == "bin":
+                    buffer.extend(fd.read())
+                if content_type == "hex":
+                    buffer.extend(bytearray.fromhex(fd.read().decode()))
 
         if len(buffer) % 16 != 0:
             raise Exception("Data block not align for 16 bytes")
@@ -4294,6 +4311,8 @@ class HFMFESave(SlotIndexArgsAndGoUnit, DeviceRequiredUnit):
                 content_type = "bin"
             elif file.endswith(".eml"):
                 content_type = "hex"
+            elif file.endswith(".json"):
+                content_type = "json"
             else:
                 raise Exception(
                     "Unknown file format, Specify content type with -t option"
@@ -4327,13 +4346,24 @@ class HFMFESave(SlotIndexArgsAndGoUnit, DeviceRequiredUnit):
             block_count -= chunk_count
             print("." * chunk_count, end="")
 
-        with open(file, "wb") as fd:
-            if content_type == "hex":
-                for i in range(len(data) // 16):
-                    fd.write(binascii.hexlify(data[i * 16: (i + 1) * 16]) + b"\n")
-            else:
-                fd.write(data)
-        print("\n - Read success")
+        if file.endswith(".json") or content_type == "json":
+            import json
+            uid = bytes(data[0:4])                       # block 0: UID(4) BCC SAK ATQA...
+            sak = bytes([data[5]])
+            atqa = bytes(data[6:8])                      # wire order in block 0
+            blocks = {i: bytes(data[i * 16:(i + 1) * 16]) for i in range(len(data) // 16)}
+            obj = chameleon_pm3.mfc_blocks_to_json(uid, atqa, data[5], blocks)
+            with open(file, "w") as fd:
+                fd.write(json.dumps(obj, indent=4))
+            print(f"\n - Wrote Proxmark3 'mfc v2' dump ({len(blocks)} blocks) to {file}")
+        else:
+            with open(file, "wb") as fd:
+                if content_type == "hex":
+                    for i in range(len(data) // 16):
+                        fd.write(binascii.hexlify(data[i * 16: (i + 1) * 16]) + b"\n")
+                else:
+                    fd.write(data)
+            print("\n - Read success")
 
 
 @hf_mf.command("eview")
@@ -12688,7 +12718,13 @@ def dfc_read_credential_file(path: str) -> DfcCredential:
         raw = fh.read()
     if raw[:1] == b"\x60":
         return DfcCredential.from_wire(raw)
-    return DfcCredential.parse_text(raw.decode("utf-8", errors="replace"))
+    text = raw.decode("utf-8", errors="replace")
+    # Proxmark3 'mfdes v1' dump JSON -> DfcCredential (contents sniffed, not ext)
+    stripped = text.lstrip()
+    if stripped[:1] == "{" and '"mfdes v1"' in text:
+        import json
+        return chameleon_pm3.mfdes_json_to_dfc(json.loads(text))
+    return DfcCredential.parse_text(text)
 
 
 @hf_des.command("parse")
@@ -12732,8 +12768,8 @@ class HfDesELoad(SlotIndexArgsAndGoUnit):
         )
         self.add_slot_args(parser)
         parser.add_argument("-f", "--file", required=True,
-                            help="path to a .dfc or .dfcb file")
-        parser.epilog = ("examples:\n  hf des eload -f card.dfc\n"
+                            help="path to a .dfc, .dfcb, or Proxmark3 mfdes-v1 .json file")
+        parser.epilog = ("examples:\n  hf des eload -f card.dfc\n"                 "  hf des eload -f hf-mfdes-<UID>-dump.json\n"
                          "  hf des eload -f card.dfcb -s 2\n")
         return parser
 
@@ -12788,8 +12824,9 @@ class HfDesEDump(SlotIndexArgsAndGoUnit):
         parser = ArgumentParserNoExit()
         parser.description = "Read a DESFire emulation slot's credential back."
         self.add_slot_args(parser)
-        parser.add_argument("-f", "--file", help="write the raw .dfcb blob to this path")
-        parser.epilog = "examples:\n  hf des edump\n  hf des edump -f slot.dfcb\n"
+        parser.add_argument("-f", "--file", help="write the credential here; .json -> Proxmark3 mfdes-v1 dump, else raw .dfcb")
+        parser.epilog = ("examples:\n  hf des edump\n  hf des edump -f slot.dfcb\n"
+                         "  hf des edump -f hf-mfdes-dump.json\n")
         return parser
 
     def on_exec(self, args: argparse.Namespace):
@@ -12805,9 +12842,18 @@ class HfDesEDump(SlotIndexArgsAndGoUnit):
             return
         print(cred.describe())
         if args.file:
-            with open(args.file, "wb") as fh:
-                fh.write(blob)
-            print(f" - Wrote {len(blob)} bytes to {args.file}")
+            if args.file.lower().endswith(".json"):
+                import json
+                obj = chameleon_pm3.dfc_to_mfdes_json(cred)
+                with open(args.file, "w") as fh:
+                    fh.write(json.dumps(obj, indent=4))
+                napps = len(obj.get("Applications", {}))
+                print(f" - Wrote Proxmark3 'mfdes v1' dump to {args.file} "
+                      f"({napps} application record(s) incl. PICC)")
+            else:
+                with open(args.file, "wb") as fh:
+                    fh.write(blob)
+                print(f" - Wrote {len(blob)} bytes to {args.file}")
 
 
 @hf_des.command("einfo")
