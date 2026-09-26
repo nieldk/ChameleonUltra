@@ -55,9 +55,6 @@ def _compose_banner(badge, anchor=13):
             rows[r][c] = ch
     return "\n".join("".join(r).rstrip() for r in rows)
 
-print("=== badge right under CHAMELEON (anchor=13) ===\n")
-print(_compose_banner(ULTRA, 13))
-
 ICEMAN = r"""
 ██╗ ██████╗███████╗███╗   ███╗ █████╗ ███╗   ██╗
 ██║██╔════╝██╔════╝████╗ ████║██╔══██╗████╗  ██║
