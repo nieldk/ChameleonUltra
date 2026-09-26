@@ -12736,10 +12736,12 @@ class HfDesParse(BaseCLIUnit):
             "Needs no device, so it is the quickest way to check a file before loading it."
         )
         parser.add_argument("-f", "--file", required=True,
-                            help="path to a .dfc or .dfcb file")
+                            help="path to a .dfc, .dfcb, or Proxmark3 mfdes-v1 .json file")
         parser.add_argument("--hexdump", action="store_true",
                             help="also print the .dfcb octets the device would receive")
-        parser.epilog = "examples:\n  hf des parse -f card.dfc\n  hf des parse -f card.dfcb\n"
+        parser.epilog = ("examples:\n  hf des parse -f card.dfc\n"
+                         "  hf des parse -f card.dfcb\n"
+                         "  hf des parse -f hf-mfdes-<UID>-dump.json\n")
         return parser
 
     def on_exec(self, args: argparse.Namespace):
