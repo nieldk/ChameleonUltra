@@ -3573,8 +3573,6 @@ class HFMFClone(MF1AuthArgsUnit):
                 self.cmd.mf1_write_one_block(4 * s + b, MfcKeyType.A, keyA, block_data)
 
 
-@hf_mf.command("value")
-
 @lf_fdxb.command("read")
 class LFFdxbRead(ReaderRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
@@ -3703,6 +3701,7 @@ class LFFdxbClone(LFFdxbWriteT55xx):
         print(f" - FDX-B clone complete: {data_bytes.hex().upper()}")
 
 
+@hf_mf.command("value")
 class HFMFVALUE(ReaderRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
@@ -9633,7 +9632,6 @@ class LFSniff(ReaderRequiredUnit):
                 print(f"{CR}Failed to save: {e}{C0}")
 
 
-@hf_14a.command("info")
 @hf_14a.command('sniff')
 class HF14ASniff(BaseCLIUnit):
     def args_parser(self) -> ArgumentParserNoExit:
