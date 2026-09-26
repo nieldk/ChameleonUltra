@@ -436,6 +436,17 @@ void nfc_tag_14a_data_process(uint8_t *p_data) {
             }
             // Only in the case that can provide anti -collision resources,
             if (auto_coll_res != NULL) {
+#ifdef CU_BISECT_ATQA_STOCK
+                /* Stock (RRG) ordering: reset higher-layer state, mark READY,
+                 * then send ATQA. Kept behind a switch to bisect an MFC
+                 * activation regression; DESFire is unaffected because cb_reset
+                 * runs in both orderings. */
+                if (m_tag_handler.cb_reset != NULL) m_tag_handler.cb_reset();
+                m_tag_state_14a = NFC_TAG_STATE_14A_READY;
+                if (!m_sniff_passive) {
+                    nfc_tag_14a_tx_bytes(auto_coll_res->atqa, 2, false);
+                }
+#else
                 if (!m_sniff_passive) {
                     /* Arm the time-critical reply before resetting higher-layer
                      * protocol state. The NFCT copies from m_nfc_tx_buffer. */
@@ -444,6 +455,7 @@ void nfc_tag_14a_data_process(uint8_t *p_data) {
                 }
                 if (m_tag_handler.cb_reset != NULL) m_tag_handler.cb_reset();
                 m_tag_state_14a = NFC_TAG_STATE_14A_READY;
+#endif
             } else {
                 m_tag_state_14a = NFC_TAG_STATE_14A_IDLE;
                 NRF_LOG_INFO("Auto anti-collision resource no exists.");
