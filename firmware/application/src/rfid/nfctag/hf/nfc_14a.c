@@ -637,18 +637,31 @@ void nfc_tag_14a_data_process(uint8_t *p_data) {
             //
             // Only 106 kbit/s is acknowledged, which is all the NFCT does. A faster
             // request goes unanswered rather than accepted and not honoured.
-            if ((szDataBits == 32 || szDataBits == 40) && (p_data[0] & 0xF0) == 0xD0) {
+            //
+            // Two guards keep this from eating other protocols' frames:
+            //  - only tags that claim ISO14443-4 (SAK bit6) can be PPS'd. Mifare
+            //    Classic (SAK 0x08/0x18/0x09) never answers PPS.
+            //  - the frame is only consumed if it really is a valid PPS. After
+            //    MF Classic auth every frame is Crypto1-encrypted, so a 4/5 byte
+            //    command (READ, HALT, ...) has a random first byte and lands on
+            //    0xDx one time in 16; it must still reach cb_state.
+            /* Only ISO14443-4 tags (SAK bit6) can be PPS'd, and consume the
+             * frame only if it is a valid PPS. After MIFARE Classic auth every
+             * frame is Crypto1-encrypted, so a 4/5-byte command lands on 0xDx
+             * ~1/16 of the time and must still reach cb_state. */
+            if ((auto_coll_res->sak[0] & 0x20) &&
+                (szDataBits == 32 || szDataBits == 40) && (p_data[0] & 0xF0) == 0xD0) {
                 uint8_t frame_len = szDataBits / 8;
                 bool pps1_present = (p_data[1] & 0x10) != 0;
-                if (nfc_tag_14a_checks_crc(p_data, frame_len) && frame_len == (pps1_present ? 5 : 4)) {
+                if (frame_len == (pps1_present ? 5 : 4) && nfc_tag_14a_checks_crc(p_data, frame_len)) {
                     // DRI is PPS1 bits 1..0 and DSI bits 3..2; all zero is 106 kbit/s.
                     uint8_t pps1 = pps1_present ? p_data[2] : 0x00;
                     if ((pps1 & 0x0F) == 0x00) {
                         uint8_t ppss = p_data[0];
                         nfc_tag_14a_tx_bytes(&ppss, 1, true);
                     }
+                    return;
                 }
-                return;
             }
             // No processing is successful, it may be some other data. You need to re-post processing
             if (m_tag_handler.cb_state != NULL) {    //Activation status, transfer the message to other registered processor processing
@@ -835,9 +848,12 @@ void nfc_tag_14a_event_callback(nrfx_nfct_evt_t const *p_event) {
              * The relay's multi-round exchange means the very next frame may be
              * another WTX/response that needs the long window, and clamping to
              * 302us here would let the nRF abandon that next response slot. */
-            if (!m_relay_hold_fdt_max) {
-                nrf_nfct_frame_delay_max_set(0x00001000UL);
-            }
+            /* Do NOT clamp FRAMEDELAYMAX here. It ran only for non-relay TX
+             * (the relay holds the wide window via m_relay_hold_fdt_max), i.e.
+             * for normal MIFARE/DESFire emulation, where clamping to 302us right
+             * after the auth response made the encrypted READ reply fall outside
+             * the window -> 0-byte reads. RRG has no such rewrite; nfc_fdt_reset()
+             * in the RX path restores 302us when a frame goes unanswered. */
             // After the transmission is over, you need to be able to receive it
             NRFX_NFCT_RX_BYTES
             break;
