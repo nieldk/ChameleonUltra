@@ -316,9 +316,13 @@ MIFARE Classic commands
 
 #### `hf mf autopwn`
 
-Mifare Classic auto recovery tool
+MIFARE Classic auto recovery (PM3-style): detect PRNG, check known keys, then escalate darkside -> nested -> hardnested -> staticnested, propagating each recovered key. Finishes by dumping the card and optionally loading it straight into an emulation slot.
 
-- `-k`, `--key` — Known key
+- `-k`, `--key` — Known key (12 hex)
+- `-f`, `--file` — Write recovered card here. .json -> Proxmark3 'mfc v2', .bin -> raw. Keys go to <base>.dic and <base>.key. Non-interactive when set.
+- `-s`, `--slot` — Load the recovered card into this emulation slot (1-8). (choices: 1, 2, 3, 4, 5, 6, 7, 8)
+- `--dict` — Extra key dictionary file (one 12-hex key per line) to try first.
+- `--no-dump` — Recover keys only; skip the card dump.
 
 #### `hf mf clone`
 
