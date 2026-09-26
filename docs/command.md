@@ -1,6 +1,6 @@
 # Phreakbyte CLI Command Reference
 
-Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 27 command groups, 142 commands.
+Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 27 command groups, 143 commands.
 
 Notation: `<...>` are values you supply. Each option lists its flags, help, allowed `choices`, whether it is `required`, and its `default`. Run any command with `-h` in the client for the same information live.
 
@@ -322,6 +322,7 @@ MIFARE Classic auto recovery (PM3-style): detect PRNG, check known keys, then es
 - `-f`, `--file` — Write recovered card here. .json -> Proxmark3 'mfc v2', .bin -> raw. Keys go to <base>.dic and <base>.key. Non-interactive when set.
 - `-s`, `--slot` — Load the recovered card into this emulation slot (1-8). (choices: 1, 2, 3, 4, 5, 6, 7, 8)
 - `--dict` — Extra key dictionary file (one 12-hex key per line) to try first.
+- `--keyfile` — Resume: seed known keys from a Proxmark3 .key (A||B per sector) or .dic file, so already-recovered sectors are skipped.
 - `--no-dump` — Recover keys only; skip the card dump.
 
 #### `hf mf clone`
@@ -455,6 +456,14 @@ Mifare Classic static encrypted recover key via backdoor
 - `--key`, `-k` — Backdoor key (as hex[12] format), currently known: A396EFA4E24F (default), A31667A8CEC1, 518B3354E760. See https://eprint.iacr.org/2024/1275 (default: A396EFA4E24F)
 - `--sectors`, `-s` — Sector count (default: 16)
 - `--starting-sector` — Start recovery from this sector
+
+#### `hf mf sim`
+
+Emulate a MIFARE Classic dump: load a Proxmark3 'mfc v2' .json, raw .bin, or .eml into a slot and leave that slot active. One-shot crack-file -> live tag.
+
+- `-f`, `--file` — Dump file: .json (PM3 mfc v2), .bin, or .eml (required)
+- `-s`, `--slot` — Target slot 1-8 (default: active slot) (choices: 1, 2, 3, 4, 5, 6, 7, 8)
+- `-t`, `--type` — Force content type for non-.json files (choices: bin, hex)
 
 #### `hf mf value`
 
