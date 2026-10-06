@@ -36,7 +36,13 @@ bool psk_generic_read(const protocol *p, uint8_t *data, uint32_t timeout_ms, boo
     p->decoder.start(codec, 0);
 
     start_lf_125khz_radio();
-    bsp_delay_ms(10);  // T55XX POR: let tag power up before sampling
+    // T55XX POR + antenna settle. 10ms was enough from a cold/idle field
+    // (standalone command), but inside lf_search's sweep this runs back-to-
+    // back with other protocols at machine speed, with the field having just
+    // been switched off milliseconds earlier. PSK1 phase correlation is far
+    // more sensitive to residual antenna ringing from that than an ASK/FSK
+    // envelope decoder is, so give it more margin.
+    bsp_delay_ms(40);
     if (!cb_init(&cb, PSK_READER_BUFFER_SIZE, sizeof(uint16_t))) {
         NRF_LOG_ERROR("PSK: cb_init failed (heap exhaustion)");
         stop_lf_125khz_radio();
