@@ -40,18 +40,37 @@ static void uninit_saadc_hw(void) {
     lf_125khz_radio_saadc_disable();
 }
 
+/* TIMER3-triggered 166.67kHz capture: completely decoupled from the local
+ * carrier PWM (see lf_125khz_radio.c). Used for passive=true captures below,
+ * since the normal path's SAADC trigger is a PPI event wired to the local
+ * PWM's own period-end -- if that PWM never starts (field off), there is no
+ * trigger source at all and nothing gets sampled. This path samples
+ * regardless of whether this device's own field is running. */
+static void init_saadc_hw_passive(void) {
+    lf_125khz_radio_saadc166_enable(saadc_cb);
+}
+
+static void uninit_saadc_hw_passive(void) {
+    lf_125khz_radio_saadc166_disable();
+}
+
 bool raw_read_to_buffer_ex(uint8_t *data, size_t maxlen, uint32_t timeout_ms, size_t *outlen, bool manage_field) {
     *outlen = 0;
 
     cb_init(&cb, CIRCULAR_BUFFER_SIZE, sizeof(uint16_t));
-    init_saadc_hw();
+
     if (manage_field) {
+        init_saadc_hw();
         start_lf_125khz_radio();
 
         /* Wait for antenna to settle before capturing.
          * The LC circuit rings for ~400µs on field startup, then takes
          * another ~800µs to reach steady state. Skip 2ms to be safe. */
         bsp_delay_ms(2);
+    } else {
+        /* Passive: field stays off, sampling driven by the independent
+         * TIMER3 166.67kHz path instead of the field PWM's own trigger. */
+        init_saadc_hw_passive();
     }
 
     autotimer *p_at = bsp_obtain_timer(0);
@@ -68,8 +87,10 @@ bool raw_read_to_buffer_ex(uint8_t *data, size_t maxlen, uint32_t timeout_ms, si
     bsp_return_timer(p_at);
     if (manage_field) {
         stop_lf_125khz_radio();
+        uninit_saadc_hw();
+    } else {
+        uninit_saadc_hw_passive();
     }
-    uninit_saadc_hw();
     cb_free(&cb);
 
     return true;
