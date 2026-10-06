@@ -2410,16 +2410,26 @@ static data_frame_tx_t *cmd_processor_em4x05_scan(uint16_t cmd, uint16_t status,
 }
 
 static data_frame_tx_t *cmd_processor_lf_sniff(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    /* Optional 2-byte big-endian timeout in ms from host (default 2000ms) */
+    /* Optional 2-byte big-endian timeout in ms from host (default 2000ms),
+     * followed by an optional 1-byte "passive" flag (0=field-managed, the
+     * original/default behavior for sniffing a passive tag against this
+     * device's own field; 1=field off, for observing another ACTIVE
+     * transmitter -- e.g. another Chameleon in emulation mode -- without
+     * this device's own independently-clocked ~125kHz carrier beating
+     * against it and dominating/contaminating the capture). */
     uint32_t timeout_ms = 2000;
+    bool manage_field = true;
     if (length >= 2) {
         timeout_ms = ((uint32_t)data[0] << 8) | data[1];
         if (timeout_ms == 0 || timeout_ms > 10000) timeout_ms = 2000;
     }
+    if (length >= 3) {
+        manage_field = (data[2] == 0);
+    }
 
     static uint8_t sniff_buf[LF_SNIFF_MAX_SAMPLES];
     size_t outlen = 0;
-    raw_read_to_buffer(sniff_buf, LF_SNIFF_MAX_SAMPLES, timeout_ms, &outlen);
+    raw_read_to_buffer_ex(sniff_buf, LF_SNIFF_MAX_SAMPLES, timeout_ms, &outlen, manage_field);
 
     if (outlen == 0) {
         return data_frame_make(cmd, STATUS_LF_TAG_NO_FOUND, 0, NULL);
