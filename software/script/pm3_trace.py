@@ -132,6 +132,62 @@ def sniff_buf_to_pm3_trace(buf: bytes) -> bytes:
     return frames_to_pm3_trace(parse_14a_sniff_buf(buf))
 
 
+# --- Proxmark3 .trace blob -> frames (inverse of frames_to_pm3_trace) ------
+# tracelog_hdr_t (real PM3 struct, include/pm3_cmd.h, verified against
+# RfidResearchGroup/proxmark3's own doc/trace_notes.md):
+#     u32 timestamp                       (LE)
+#     u16 duration                        (LE)
+#     u16 data_len:15 | isResponse<<15    (LE)   -- data_len is BYTES, not bits
+#     u8  data[data_len]
+#     u8  parity[ceil(data_len/8)]
+# A .trace file is these records concatenated, no header/magic -- same as
+# what frames_to_pm3_trace() writes, so this reads back any PM3-produced
+# trace, not just one CU itself exported.
+#
+# Short frames (REQA/WUPA, 7 bits) have no separate bit-length field in this
+# format -- PM3's own trace log is byte-granular at this layer too, so a
+# genuine PM3 capture stores REQA as a 1-byte frame exactly like CU's
+# exporter does. Recovered here the same way PM3's own decoder must: by
+# content, not by a length field that was never there to begin with.
+def pm3_trace_to_frames(blob: bytes):
+    """Return a list of (szBits, data, is_tx, parity_bits) from a PM3 .trace blob."""
+    frames = []
+    off = 0
+    n = len(blob)
+    while off + 8 <= n:
+        ts, duration, meta = struct.unpack_from("<IHH", blob, off)
+        off += 8
+        data_len = meta & 0x7FFF
+        is_tx = bool(meta & 0x8000)
+        if data_len == 0 or off + data_len > n:
+            break
+        data = blob[off:off + data_len]
+        off += data_len
+        parity_len = (data_len + 7) // 8
+        if off + parity_len > n:
+            break
+        pbytes = blob[off:off + parity_len]
+        off += parity_len
+
+        parity_bits = []
+        for j in range(data_len):
+            bit = (pbytes[j >> 3] >> (7 - (j & 7))) & 1
+            parity_bits.append(bit)
+
+        szBits = data_len * 8
+        if (not is_tx) and data_len == 1 and data[0] in (0x26, 0x52):
+            szBits = 7  # REQA / WUPA: spec-mandated 7-bit short frame
+
+        frames.append((szBits, data, is_tx, parity_bits))
+    return frames
+
+
+def pm3_trace_file_to_frames(path: str):
+    """One-shot: read a .trace file from disk and parse it into frames."""
+    with open(path, "rb") as f:
+        return pm3_trace_to_frames(f.read())
+
+
 # --- Standalone tap-sniff session buffer -----------------------------------
 # Drained result buffer is a run of session records:
 #   u8 session_num, u8 status, u16 trace_len (LE), u8 trace[trace_len]
