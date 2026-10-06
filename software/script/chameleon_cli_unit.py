@@ -4664,11 +4664,17 @@ def authtrace_pretty_dump(sessions):
         out.append(
             f"  {'---':>3}  {'---':<3}  {'----':>4}  {'-'*42}  {'-'*35}"
         )
-        expect_nt     = False
-        expect_nr_ar  = False
-        expect_at     = False
+        # Exact next-frame-index slots, not sticky booleans: a slot only
+        # applies to the ONE frame right after the event that armed it. If
+        # that frame is missing or garbled, the slot is simply never hit
+        # again -- unlike a boolean flag, it can't stay "stuck" open and
+        # mislabel some unrelated later frame (e.g. a fresh SELECT cycle's
+        # response, with no new AUTH in between) as a leftover NT/NR||AR/AT.
         last_keytype  = None
         last_block    = None
+        nt_slot       = -1
+        nr_ar_slot    = -1
+        at_slot       = -1
         for n, (sz_bits, data, is_tx) in enumerate(frames):
             hex_str = ' '.join(f'{b:02x}' for b in data)
             decoded_ctx = None
@@ -4677,27 +4683,25 @@ def authtrace_pretty_dump(sessions):
             if not is_tx and sz_bits == 32 and len(data) == 4 and data[0] in (0x60, 0x61):
                 last_keytype = 'A' if data[0] == 0x60 else 'B'
                 last_block   = data[1]
-                expect_nt    = True
-                expect_nr_ar = False
+                nt_slot      = n + 1
+                nr_ar_slot   = -1
+                at_slot      = -1
                 decoded_ctx  = f"MIFARE AUTH Key{last_keytype} block=0x{last_block:02X} ({last_block})"
                 col_ctx      = CG
-            elif is_tx and expect_nt and sz_bits == 32 and len(data) == 4:
+            elif is_tx and n == nt_slot and sz_bits == 32 and len(data) == 4:
                 decoded_ctx  = f"NT (card nonce) = {data.hex().upper()}"
                 col_ctx      = CG
-                expect_nt    = False
-                expect_nr_ar = True
-            elif not is_tx and expect_nr_ar and sz_bits == 64 and len(data) == 8:
+                nr_ar_slot   = n + 1
+            elif not is_tx and n == nr_ar_slot and sz_bits == 64 and len(data) == 8:
                 nr = data[:4].hex().upper()
                 ar = data[4:].hex().upper()
                 decoded_ctx  = f"NR={nr}  AR={ar}  (mfkey32 input)"
                 col_ctx      = CG
-                expect_nr_ar = False
-                expect_at    = True
+                at_slot      = n + 1
 
-            elif is_tx and expect_at and sz_bits == 32 and len(data) == 4:
+            elif is_tx and n == at_slot and sz_bits == 32 and len(data) == 4:
                 decoded_ctx  = f"AT (auth ack, encrypted) = {data.hex().upper()}"
                 col_ctx      = CG
-                expect_at    = False
 
             if decoded_ctx is None:
                 decoded, col, _ = _decode_14a_frame_col(data, sz_bits)
