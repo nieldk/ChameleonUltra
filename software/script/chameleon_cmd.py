@@ -814,7 +814,7 @@ class ChameleonCMD:
             resp.parsed = struct.unpack(">BBH8sBBBB", resp.data[:16])
         return resp
 
-    def lf_sniff(self, timeout_ms: int = 2000):
+    def lf_sniff(self, timeout_ms: int = 2000, passive: bool = False):
         """
         Capture raw LF field ADC samples.
 
@@ -822,10 +822,16 @@ class ChameleonCMD:
         Each byte is an 8-bit ADC value: ~0x80 = field on, lower = gap/no field.
 
         :param timeout_ms: Capture duration in ms (1-10000, default 2000)
+        :param passive: If True, this device's own LF field stays OFF during
+            capture, for observing another ACTIVE transmitter (e.g. another
+            Chameleon in emulation mode) without this device's own
+            independently-clocked carrier beating against it and dominating
+            the capture. If False (default), this device's own field is on,
+            for sniffing a passive tag the normal way.
         :return: Raw response object — check .status and .data
         """
         timeout_ms = max(1, min(10000, timeout_ms))
-        payload = bytes([(timeout_ms >> 8) & 0xFF, timeout_ms & 0xFF])
+        payload = bytes([(timeout_ms >> 8) & 0xFF, timeout_ms & 0xFF, 1 if passive else 0])
         timeout_s = (timeout_ms // 1000) + 2
         return self.device.send_cmd_sync(Command.LF_SNIFF, payload, timeout=timeout_s)
 
