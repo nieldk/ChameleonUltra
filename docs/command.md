@@ -14,7 +14,7 @@ Several commands read and write **Proxmark3-compatible** files, sniffed by conte
 | DESFire | `hf des eload` / `hf des edump` / `hf des parse` | `.dfc`, `.dfcb`, PM3 `mfdes v1` `.json` | `.dfcb`, PM3 `mfdes v1` `.json` |
 | EMV | `emv scan` / `emv load` | PM3 `emv scan` `.json` | PM3 `emv scan` `.json` |
 | Keys | `hf mf fchk` | `.dic`, `.key` | `.dic`, `.key` |
-| Traces | `hf 14a sniff -o` / `standalone get-result --pm3` | — | PM3 `.trace` |
+| Traces | `hf 14a sniff -o` / `standalone get-result --pm3` / `data pm3import` | PM3 `.trace` | PM3 `.trace` |
 
 Round-trips are validated against Proxmark3's own tooling: a `hf des edump -f x.json` file loads in `hf mfdes view`, and a `hf mfdes dump` file loads via `hf des eload`. Absent DESFire keys/files are preserved honestly (version-only keys carry no key bytes; unread files carry no data), per PM3's `mfdes v1` spec.
 
@@ -466,7 +466,7 @@ Mifare Classic fast key check on sectors
 - `--1k` — MIFARE Classic 1k / S50 (default) (default: 16)
 - `--2k` — MIFARE Classic/Plus 2k (default: 16)
 - `--4k` — MIFARE Classic 4k / S70 (default: 16)
-- `keys` — Key (as hex[12] format)
+- `keys` — Key (as hex[12] format) (required)
 - `--key` — Read keys from .key format file
 - `--dic` — Read keys from .dic format file
 - `--export-key` — Export result as .key format, file will be OVERWRITTEN if exists
@@ -1433,7 +1433,7 @@ Write Viking id to t55xx
 
 Timestamped comment
 
-- `comment` — Your comment
+- `comment` — Your comment (required)
 
 ## `standalone`
 
@@ -1497,5 +1497,3 @@ Show standalone subsystem state
 ### `standalone trigger`
 
 Trigger active standalone mode
-
-
