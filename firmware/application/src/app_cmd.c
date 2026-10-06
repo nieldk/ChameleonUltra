@@ -506,6 +506,43 @@ static data_frame_tx_t *cmd_processor_mf1_auth_one_key_block(uint16_t cmd, uint1
     return data_frame_make(cmd, status, 0, NULL);
 }
 
+// Authenticate with an arbitrary auth command byte (reuses auth_key_use_522_hw,
+// same as mf1_auth_one_key_block, which only ever passes 0x60/0x61 through it --
+// the RC522 PCD_AUTHENT path and the function itself place no restriction on the
+// byte). Needed for magic-card "WUPA + magic auth" backdoor wakeups (e.g. GDM's
+// 0x80), which use the same Crypto1 3-pass handshake against a special key
+// rather than a real sector key. Unlike mf1_auth_one_key_block (before_hf_reader_run
+// / after_hf_reader_run, which unconditionally drops the field after), this command
+// manages its own field lifecycle so a caller can keep the session open across a
+// subsequent hf14a_raw backdoor read/write -- mirroring the gen1a/gdm-alt wakeup
+// helpers, which already do this via hf14a_raw's own keep_rf_field option.
+static data_frame_tx_t *cmd_processor_mf1_magic_auth(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    typedef struct {
+        uint8_t type;        // raw auth command byte, e.g. 0x80 for GDM magic auth
+        uint8_t block;
+        uint8_t key[6];
+        uint8_t keep_field;  // nonzero: leave the antenna on after auth for a follow-up raw command
+    } PACKED payload_t;
+    if (length != sizeof(payload_t)) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+
+    payload_t *payload = (payload_t *)data;
+
+    pcd_14a_reader_reset();
+    pcd_14a_reader_antenna_on();
+    bsp_delay_ms(8);
+
+    status = auth_key_use_522_hw(payload->block, payload->type, payload->key);
+    pcd_14a_reader_mf1_unauth();
+
+    if (!payload->keep_field) {
+        pcd_14a_reader_antenna_off();
+    }
+
+    return data_frame_make(cmd, status, 0, NULL);
+}
+
 static data_frame_tx_t *cmd_processor_mf1_check_keys_of_sectors(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     if (length < 16 || (length - 10) % 6 != 0) {
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
@@ -4415,6 +4452,11 @@ static cmd_data_map_t m_data_cmd_map[] = {
 #if defined(PROJECT_DESFIRE_EMULATION)
     {    DATA_CMD_MFPLUS_GET_INFO,                NULL,                      cmd_processor_mfplus_get_info,               NULL                   },
     {    DATA_CMD_MFPLUS_SET_KEY,                 NULL,                      cmd_processor_mfplus_set_key,                NULL                   },
+#endif
+#if defined(PROJECT_CHAMELEON_ULTRA)
+    // cmd_processor_mf1_magic_auth uses RC522 reader functions (auth_key_use_522_hw
+    // et al.), which only exist on Ultra -- Lite has no RC522 reader hardware.
+    {    DATA_CMD_MF1_MAGIC_AUTH,                 before_reader_run,         cmd_processor_mf1_magic_auth,                NULL                   },
 #endif
 
     /* ISO14443-4 T=CL emulation */

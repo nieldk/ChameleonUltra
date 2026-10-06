@@ -193,6 +193,7 @@
 #define DATA_CMD_ST25TA_SET_CONFIG              (4048)
 #define DATA_CMD_MFPLUS_GET_INFO                (4049)
 #define DATA_CMD_MFPLUS_SET_KEY                 (4050)
+#define DATA_CMD_MF1_MAGIC_AUTH                 (4051)
 //
 // ******************************************************************
 

@@ -2538,6 +2538,19 @@ class ChameleonCMD:
             raise ValueError("MIFARE Plus key must be 16 bytes")
         return self.device.send_cmd_sync(Command.MFPLUS_SET_KEY, key)
 
+    @expect_response([Status.HF_TAG_OK, Status.MF_ERR_AUTH])
+    def mf1_magic_auth(self, auth_type: int, block: int, key: bytes, keep_field: bool):
+        """Authenticate with an arbitrary auth command byte (e.g. 0x80 for GDM
+        magic auth), keeping the antenna field on afterward on success so a
+        follow-up hf14a_raw backdoor command can reuse the same RF session --
+        unlike mf1_auth_one_key_block, which always drops the field."""
+        if len(key) != 6:
+            raise ValueError("key must be 6 bytes")
+        data = struct.pack('!BB6sB', auth_type, block, key, 1 if keep_field else 0)
+        resp = self.device.send_cmd_sync(Command.MF1_MAGIC_AUTH, data)
+        resp.parsed = resp.status == Status.HF_TAG_OK
+        return resp
+
 
 def test_fn():
     # connect to chameleon

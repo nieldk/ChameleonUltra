@@ -2380,7 +2380,7 @@ def identify_magic_gen(cmd):
     """Best-effort, read-only probe for the common MIFARE Classic magic-card
     backdoors. Call with a card already selectable on the antenna.
 
-    Returns "gen1a", "gen3", "gen4-gtu", or None.
+    Returns "gen1a", "gen3", "gen4-gtu", "gen4-gdm", or None.
 
     No gen2/CUID probe: documented gen2 behavior is that it does NOT answer
     unauthenticated commands at all - its only tell is that block 0 accepts
@@ -2389,12 +2389,15 @@ def identify_magic_gen(cmd):
     write. A gen2 card reads as None here and gets picked up by the normal
     autopwn/dump path instead, same as a genuine card.
 
-    No gen4-GDM probe either: GDM is a newer, distinct Gen4 variant with its
-    own protocol (closer to the gen1a backdoor than to GTU's CF-prefixed
-    frames); only GTU is covered below. A GDM card also reads as None.
+    GDM ("USCUID") is probed read-only below via its raw-wakeup backdoor
+    (0x20(7) "GDM alt" stage 1 only, same non-destructive single-ACK check as
+    the gen1a probe). A card that only answers the WUPA-magic-auth flavour
+    (no raw-wakeup backdoor enabled) is not caught here and reads as None --
+    distinguishing that from a genuine card would mean attempting an auth
+    with a guessed key, which this read-only probe deliberately does not do.
 
-    Every probe below only reads or attempts an auth handshake; nothing
-    writes a block.
+    Every probe below only reads, or attempts a single-step wakeup/auth
+    handshake; nothing writes a block.
     """
     # Gen1a: the 7-bit 0x40 "unlock stage 1" command. A real card ignores
     # or NAKs it; a gen1a magic card answers with the 4-bit ACK (0x0a).
@@ -2406,6 +2409,22 @@ def identify_magic_gen(cmd):
         r = cmd.hf14a_raw(options=opt_raw, resp_timeout_ms=500, data=[0x40], bitlen=7)
         if r and bytes(r)[:1] == b"\x0a":
             return "gen1a"
+    except (UnexpectedResponseError, TimeoutError):
+        pass
+    finally:
+        try:
+            cmd.hf14a_raw(options={**opt_raw, "keep_rf_field": 0, "wait_response": 0},
+                          resp_timeout_ms=200, data=[])  # drop the field
+        except Exception:
+            pass
+
+    # GDM alt: same non-destructive shape as the gen1a probe above, just the
+    # 0x20(7) stage-1 byte instead of 0x40 -- stop right after the single ACK
+    # read, never send stage-2 0x23 or any write.
+    try:
+        r = cmd.hf14a_raw(options=opt_raw, resp_timeout_ms=500, data=[0x20], bitlen=7)
+        if r and bytes(r)[:1] == b"\x0a":
+            return "gen4-gdm"
     except (UnexpectedResponseError, TimeoutError):
         pass
     finally:
@@ -2514,6 +2533,297 @@ def _gen1a_read_dump(cmd, nblocks):
     finally:
         _gen1a_drop_field(cmd, opt)
     return bytes(buf)
+
+
+# --- Gen4 GDM ("USCUID") magic card backdoor -------------------------------
+# v1 scope: config get/set (raw hex only -- see note below) and public block
+# get/set, with auto-detecting wakeup across the three known styles. Hidden
+# blocks, signature, UID-set, and wipe are deferred: those touch areas where
+# even PM3's own current implementation has open, unresolved bugs on some
+# card variants, and config field-level semantics (shadow mode, CUID bit,
+# etc, as opposed to the wakeup-style byte) vary by vendor batch in ways not
+# independently verified here -- see gdmsetcfg's docstring.
+#
+# Wakeup bytes and opcodes verified against RRG proxmark3 (GPLv3): client-side
+# structure from client/src/cmdhfmf.c's gdm_* helpers, wire-level wakeup
+# sequences and command framing from armsrc/mifarecmd.c's mifare_wakeup_auth()
+# and the gen4gdm* raw-frame examples (whose literal CRC-A bytes independently
+# confirm the opcode values 0xE0/0x38/0x80, cross-checked by computing CRC-A
+# myself rather than trusting the symbol names alone). GDM-alt's 0x20(7)/0x23
+# wakeup bytes come from a debug string literal in that same cmdhfmf.c
+# (parse_gdm_cfg's "GDM 20(7)/23" vs "Gen1a 40(7)/43" message).
+GDM_WUPC1       = 0x20
+GDM_WUPC2       = 0x23
+GDM_AUTH_KEY    = 0x80
+GDM_READ_CFG    = 0xE0
+GDM_WRITE_CFG   = 0xE1
+GDM_READBLOCK   = 0x30  # public block: the standard MIFARE read/write opcodes
+GDM_WRITEBLOCK  = 0xA0  # work once ANY backdoor wakeup has unlocked the card
+GDM_DEFAULT_KEY = bytes(6)  # 00 00 00 00 00 00, PM3's own default magic-auth key
+
+
+def _gdm_unlock_altwake(cmd, opt):
+    """Backdoor stage1 (0x20) + stage2 (0x23): GDM-alt wakeup. Identical framing
+    to _gen1a_unlock's 0x40/0x43, different bytes -- same card family of trick,
+    different command set."""
+    r = _gen1a_raw(cmd, opt, [GDM_WUPC1], bitlen=7, timeout_ms=1000)
+    if not r or r[0] != 0x0a:
+        raise Exception("gdm-alt unlock failed (not a GDM-alt magic card?)")
+    r = _gen1a_raw(cmd, opt, [GDM_WUPC2], timeout_ms=1000)
+    if not r or r[0] != 0x0a:
+        raise Exception("gdm-alt unlock failed (stage 2)")
+    opt["append_crc"] = 1
+
+
+def _gdm_wakeup(cmd, style, key, auth_block=0):
+    """Perform one wakeup style; return an hf14a_raw opt dict ready for a
+    follow-up raw backdoor command on the SAME RF session (field held open --
+    dropping it between wakeup and backdoor command loses the unlock on a
+    real card, matching how PM3's own mifare_wakeup_auth() never drops the
+    field between the two steps either).
+    style: 'gen1a' | 'gdm' | 'wupa'. key only used for 'wupa'.
+    """
+    if style == 'gen1a':
+        opt = _gen1a_new_session()
+        _gen1a_unlock(cmd, opt)
+        return opt
+    if style == 'gdm':
+        opt = _gen1a_new_session()
+        _gdm_unlock_altwake(cmd, opt)
+        return opt
+    if style == 'wupa':
+        resp = cmd.mf1_magic_auth(GDM_AUTH_KEY, auth_block, key, keep_field=True)
+        if not resp.parsed:
+            raise Exception("WUPA magic auth failed (wrong key, or not a GDM card)")
+        # Field is already on, card already selected+authed by mf1_magic_auth;
+        # a follow-up hf14a_raw must not reactivate the field or reselect.
+        return {"activate_rf_field": 0, "wait_response": 1, "append_crc": 1,
+                "auto_select": 0, "keep_rf_field": 1, "check_response_crc": 0}
+    raise ValueError(f"unknown GDM wakeup style {style!r}")
+
+
+def _gdm_read_with_wakeup(cmd, opt, read_cmd, block):
+    r = _gen1a_raw(cmd, opt, [read_cmd, block])
+    r = bytes(r) if r else b""
+    if len(r) < 16:
+        raise Exception(f"backdoor read NAK at block {block}")
+    return r[:16]
+
+
+def _gdm_write_with_wakeup(cmd, opt, write_cmd, block, data16):
+    r = _gen1a_raw(cmd, opt, [write_cmd, block])
+    if not r or r[0] != 0x0a:
+        raise Exception(f"write command NAK at block {block}")
+    r = _gen1a_raw(cmd, opt, list(data16))
+    if not r or r[0] != 0x0a:
+        raise Exception(f"write data NAK at block {block}")
+
+
+def _gdm_resolve_wakeup(cmd, read_cmd, block, gen1a, gdm, wupa, key, prefer_auth=False):
+    """Explicit --gen1a/--gdm/--wupa (or a key, which implies --wupa): single
+    attempt, no probing. Otherwise auto-detect by probing `block` with
+    `read_cmd` across all three styles in turn (config reads try WUPA auth
+    first since that path is the one most likely to work read-only even on a
+    sealed/custom card; block reads try the two raw-wakeup backdoors first).
+    Returns (opt, data16, style_name). Raises if nothing works.
+    """
+    explicit = [s for s, f in (('gen1a', gen1a), ('gdm', gdm), ('wupa', wupa)) if f]
+    if len(explicit) > 1:
+        raise ValueError("specify only one of --gen1a / --gdm / --wupa")
+
+    if explicit or key:
+        style = explicit[0] if explicit else 'wupa'
+        if style != 'wupa' and key:
+            raise ValueError("cannot use a key in combination with --gen1a or --gdm wakeup")
+        opt = _gdm_wakeup(cmd, style, key or GDM_DEFAULT_KEY, block)
+        try:
+            data = _gdm_read_with_wakeup(cmd, opt, read_cmd, block)
+        except Exception:
+            _gen1a_drop_field(cmd, opt)
+            raise
+        return opt, data, style
+
+    order = ('wupa', 'gen1a', 'gdm') if prefer_auth else ('gen1a', 'gdm', 'wupa')
+    for style in order:
+        try:
+            opt = _gdm_wakeup(cmd, style, GDM_DEFAULT_KEY, block)
+        except Exception:
+            continue
+        try:
+            data = _gdm_read_with_wakeup(cmd, opt, read_cmd, block)
+            return opt, data, style
+        except Exception:
+            _gen1a_drop_field(cmd, opt)
+    raise Exception("Could not find a working wakeup (tried gen1a/gdm-alt/WUPA default "
+                     "key); card may be sealed or use a non-default magic auth key")
+
+
+def _gdm_print_cfg(data: bytes):
+    print(f" Raw config: {color_string((CY, data.hex().upper()))}")
+    # Verified against cmdhfmf.c's own parse_gdm_cfg(): byte[2] literally
+    # selects which raw-wakeup backdoor the card answers to (0x85=GDM-alt,
+    # anything else=gen1a); this does not affect the WUPA magic-auth path.
+    style = "GDM 20(7)/23" if len(data) > 2 and data[2] == 0x85 else "Gen1a 40(7)/43"
+    print(f" Raw-wakeup backdoor style: {color_string((CY, style))}")
+    print(color_string((CY,
+        "Other config bits (shadow mode, CUID, signature sector, etc.) vary by "
+        "vendor batch and are not decoded here -- use the raw hex above.")))
+
+
+@hf_mf.command("gdmgetcfg")
+class HFMFGdmGetCfg(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = ("Get configuration data from a GDM ('USCUID') card. "
+                              "With no wakeup flag, auto-detects (tries WUPA magic "
+                              "auth, then gen1a, then gdm alt).")
+        parser.add_argument("--gen1a", action="store_true", help="force gen1a (40/43) magic wakeup")
+        parser.add_argument("--gdm", action="store_true", help="force gdm alt (20/23) magic wakeup")
+        parser.add_argument("--wupa", action="store_true", help="force WUPA + magic auth wakeup")
+        parser.add_argument("-k", "--key", type=str, default=None, metavar="<hex12>",
+                            help="6-byte magic auth key for --wupa (default 000000000000)")
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        key = bytes.fromhex(args.key) if args.key else None
+        if key is not None and len(key) != 6:
+            print(color_string((CR, "key must be 6 bytes (12 hex chars)")))
+            return
+        try:
+            opt, data, style = _gdm_resolve_wakeup(
+                self.cmd, GDM_READ_CFG, 0, args.gen1a, args.gdm, args.wupa, key, prefer_auth=True)
+        except Exception as e:
+            print(color_string((CR, f"gdmgetcfg failed: {e}")))
+            return
+        _gen1a_drop_field(self.cmd, opt)
+        if not (args.gen1a or args.gdm or args.wupa or key):
+            print(color_string((CY, f"Auto-detected wakeup: {style}")))
+        _gdm_print_cfg(data)
+
+
+@hf_mf.command("gdmsetcfg")
+class HFMFGdmSetCfg(ReaderRequiredUnit):
+    """v1: raw hex only, no field-level flags (--cuid/--shadow/etc. from PM3's
+    own gdmsetcfg). Those toggle specific bits at specific byte offsets whose
+    exact positions genuinely vary by vendor batch per an open PM3 issue
+    (RfidResearchGroup/proxmark3#2073) -- getting one wrong is a write, not a
+    read, so this stays at raw-hex-in/raw-hex-out until that's verified
+    independently rather than taken on faith from one vendor's sample."""
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Set configuration data on a GDM ('USCUID') card (raw hex)"
+        parser.add_argument("-d", "--data", type=str, required=True, metavar="<hex32>",
+                            help="16-byte config block (32 hex chars)")
+        parser.add_argument("--gen1a", action="store_true", help="force gen1a (40/43) magic wakeup")
+        parser.add_argument("--gdm", action="store_true", help="force gdm alt (20/23) magic wakeup")
+        parser.add_argument("--wupa", action="store_true", help="force WUPA + magic auth wakeup")
+        parser.add_argument("-k", "--key", type=str, default=None, metavar="<hex12>",
+                            help="6-byte magic auth key for --wupa (default 000000000000)")
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        cfg = bytes.fromhex(args.data)
+        if len(cfg) != 16:
+            print(color_string((CR, "config data must be 16 bytes (32 hex chars)")))
+            return
+        key = bytes.fromhex(args.key) if args.key else None
+        if key is not None and len(key) != 6:
+            print(color_string((CR, "key must be 6 bytes (12 hex chars)")))
+            return
+        try:
+            opt, _old, style = _gdm_resolve_wakeup(
+                self.cmd, GDM_READ_CFG, 0, args.gen1a, args.gdm, args.wupa, key, prefer_auth=True)
+        except Exception as e:
+            print(color_string((CR, f"gdmsetcfg failed: {e}")))
+            return
+        if not (args.gen1a or args.gdm or args.wupa or key):
+            print(color_string((CY, f"Auto-detected wakeup: {style}")))
+        try:
+            _gdm_write_with_wakeup(self.cmd, opt, GDM_WRITE_CFG, 0, cfg)
+        except Exception as e:
+            print(color_string((CR, f"gdmsetcfg failed: {e}")))
+            return
+        finally:
+            _gen1a_drop_field(self.cmd, opt)
+        print(color_string((CG, "GDM config written")))
+        print(color_string((CY, "Hint: run `hf mf gdmgetcfg` to verify")))
+
+
+@hf_mf.command("gdmgetblk")
+class HFMFGdmGetBlk(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = ("Read a public block from a GDM ('USCUID') card. "
+                              "With no wakeup flag, auto-detects (tries gen1a, "
+                              "then gdm alt, then WUPA default-key auth).")
+        parser.add_argument("--blk", type=int, required=True, help="Block number")
+        parser.add_argument("--gen1a", action="store_true", help="force gen1a (40/43) magic wakeup")
+        parser.add_argument("--gdm", action="store_true", help="force gdm alt (20/23) magic wakeup")
+        parser.add_argument("--wupa", action="store_true", help="force WUPA + magic auth wakeup")
+        parser.add_argument("-k", "--key", type=str, default=None, metavar="<hex12>",
+                            help="6-byte magic auth key for --wupa (default 000000000000)")
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        key = bytes.fromhex(args.key) if args.key else None
+        if key is not None and len(key) != 6:
+            print(color_string((CR, "key must be 6 bytes (12 hex chars)")))
+            return
+        try:
+            opt, data, style = _gdm_resolve_wakeup(
+                self.cmd, GDM_READBLOCK, args.blk, args.gen1a, args.gdm, args.wupa, key)
+        except Exception as e:
+            print(color_string((CR, f"gdmgetblk failed: {e}")))
+            return
+        _gen1a_drop_field(self.cmd, opt)
+        if not (args.gen1a or args.gdm or args.wupa or key):
+            print(color_string((CY, f"Auto-detected wakeup: {style}")))
+        print(f" block {args.blk:3d}: {color_string((CY, data.hex().upper()))}")
+
+
+@hf_mf.command("gdmsetblk")
+class HFMFGdmSetBlk(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = ("Write a public block on a GDM ('USCUID') card. "
+                              "With no wakeup flag, auto-detects (tries gen1a, "
+                              "then gdm alt, then WUPA default-key auth).")
+        parser.add_argument("--blk", type=int, required=True, help="Block number")
+        parser.add_argument("-d", "--data", type=str, required=True, metavar="<hex32>",
+                            help="16 bytes of block data (32 hex chars)")
+        parser.add_argument("--gen1a", action="store_true", help="force gen1a (40/43) magic wakeup")
+        parser.add_argument("--gdm", action="store_true", help="force gdm alt (20/23) magic wakeup")
+        parser.add_argument("--wupa", action="store_true", help="force WUPA + magic auth wakeup")
+        parser.add_argument("-k", "--key", type=str, default=None, metavar="<hex12>",
+                            help="6-byte magic auth key for --wupa (default 000000000000)")
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        data16 = bytes.fromhex(args.data)
+        if len(data16) != 16:
+            print(color_string((CR, "data must be 16 bytes (32 hex chars)")))
+            return
+        key = bytes.fromhex(args.key) if args.key else None
+        if key is not None and len(key) != 6:
+            print(color_string((CR, "key must be 6 bytes (12 hex chars)")))
+            return
+        try:
+            opt, _old, style = _gdm_resolve_wakeup(
+                self.cmd, GDM_READBLOCK, args.blk, args.gen1a, args.gdm, args.wupa, key)
+        except Exception as e:
+            print(color_string((CR, f"gdmsetblk failed: {e}")))
+            return
+        if not (args.gen1a or args.gdm or args.wupa or key):
+            print(color_string((CY, f"Auto-detected wakeup: {style}")))
+        try:
+            _gdm_write_with_wakeup(self.cmd, opt, GDM_WRITEBLOCK, args.blk, data16)
+        except Exception as e:
+            print(color_string((CR, f"gdmsetblk failed: {e}")))
+            return
+        finally:
+            _gen1a_drop_field(self.cmd, opt)
+        print(color_string((CG, f"block {args.blk} written")))
 
 
 @hf_mf.command("cgetblk")

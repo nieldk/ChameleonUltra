@@ -175,6 +175,7 @@ class Command(enum.IntEnum):
     ST25TA_SET_CONFIG = 4048
     MFPLUS_GET_INFO = 4049
     MFPLUS_SET_KEY = 4050
+    MF1_MAGIC_AUTH = 4051
 
     # ISO14443-4 T=CL emulation
     HF14A_4_APDU_RECV = 6000
