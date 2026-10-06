@@ -2186,11 +2186,13 @@ class LFSniff(ReaderRequiredUnit):
         import chameleon_cli_unit as _self_mod
 
         data = bytes(resp.data)
+        rate_us = 6 if args.passive else 8  # TIMER3 166.67kHz vs field-PWM 125kHz
         _self_mod._last_capture = data
+        _self_mod._last_capture_rate_us = rate_us
 
         n = len(data)
-        duration_ms = n * 8 / 1000
-        print(f" Captured : {CG}{n}{C0} bytes ({duration_ms:.1f}ms)")
+        duration_ms = n * rate_us / 1000
+        print(f" Captured : {CG}{n}{C0} bytes ({duration_ms:.1f}ms @ {1000//rate_us}kHz)")
 
         mn = min(data)
         mx = max(data)
