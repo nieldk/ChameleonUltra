@@ -1,6 +1,6 @@
 # Phreakbyte CLI Command Reference
 
-Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 29 command groups, 164 commands.
+Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 29 command groups, 165 commands.
 
 Notation: `<...>` are values you supply. Each option lists its flags, help, allowed `choices`, whether it is `required`, and its `default`. Run any command with `-h` in the client for the same information live.
 
@@ -53,6 +53,13 @@ Graphical waveform plot of last LF sniff capture (PyQt5 or matplotlib)
 - `--start` — Start sample (default: 0)
 - `--len` — Number of samples to plot (default: all) (default: 4000)
 - `--ascii` — Force ASCII plot even if GUI is available
+
+### `data pm3import`
+
+Import and decode a Proxmark3 .trace file (offline, no device needed)
+
+- `file` — Proxmark3 .trace file (from `trace save` or CU's --pm3 export) (required)
+- `--json` — emit the parsed frames as JSON instead of a pretty dump
 
 ## `dump_help`
 
