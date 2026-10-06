@@ -2967,7 +2967,8 @@ def _extract_sniff_nonces(frames):
     nonces = []
     uid_hex = None
 
-    for i, (szBits, data, is_tx) in enumerate(frames):
+    for i, frame in enumerate(frames):
+        szBits, data, is_tx = frame[0], frame[1], frame[2]  # tolerate an optional 4th (parity) element
         if not data:
             continue
 
@@ -3000,7 +3001,7 @@ def _extract_sniff_nonces(frames):
             # frame i+1: card→reader, exactly 4 bytes = nt (tag nonce)
             if i + 1 >= len(frames):
                 continue
-            _, d1, tx1 = frames[i + 1]
+            d1, tx1 = frames[i + 1][1], frames[i + 1][2]
             if not tx1 or len(d1) != 4:
                 continue
             nt_hex = ''.join(f'{b:02X}' for b in d1)
@@ -3008,7 +3009,7 @@ def _extract_sniff_nonces(frames):
             # frame i+2: reader→card, exactly 8 bytes = {nr} || {ar}
             if i + 2 >= len(frames):
                 continue
-            _, d2, tx2 = frames[i + 2]
+            d2, tx2 = frames[i + 2][1], frames[i + 2][2]
             if tx2 or len(d2) != 8:
                 continue
             nr_hex = ''.join(f'{b:02X}' for b in d2[:4])
@@ -3017,7 +3018,7 @@ def _extract_sniff_nonces(frames):
             # frame i+3: card→reader, exactly 4 bytes = {at} (tag answer), optional
             at_hex = None
             if i + 3 < len(frames):
-                _, d3, tx3 = frames[i + 3]
+                d3, tx3 = frames[i + 3][1], frames[i + 3][2]
                 if tx3 and len(d3) == 4:
                     at_hex = ''.join(f'{b:02X}' for b in d3)
 
@@ -3278,6 +3279,58 @@ def _get_capture_rate_us():
     """Return the sample period (µs) of the last capture."""
     import chameleon_cli_unit as _m
     return getattr(_m, '_last_capture_rate_us', 8)
+
+
+@data.command('pm3import')
+class DataPm3Import(BaseCLIUnit):
+    """Import a Proxmark3 .trace file and decode it with CU's own 14A
+    annotator (ANTICOLL/SELECT/AUTH/HALT, NT/NR||AR/AT nonce tracking,
+    parity-flagged hex) -- the reverse of `standalone get-result --pm3`.
+
+    Works offline: no device connection needed, and the file doesn't have
+    to have come from CU originally -- any genuine PM3 trace (`trace save`)
+    parses the same way, since this reads the real tracelog_hdr_t layout.
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Import and decode a Proxmark3 .trace file (offline, no device needed)'
+        parser.add_argument('file', type=str, metavar='<path>',
+                            help='Proxmark3 .trace file (from `trace save` or CU\'s --pm3 export)')
+        parser.add_argument('--json', action='store_true',
+                            help='emit the parsed frames as JSON instead of a pretty dump')
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        import pm3_trace
+        try:
+            frames = pm3_trace.pm3_trace_file_to_frames(args.file)
+        except OSError as e:
+            print(color_string((CR, f"Could not read {args.file}: {e}")))
+            return
+
+        if not frames:
+            print(color_string((CR, f"No frames parsed from {args.file} -- "
+                                     "not a recognizable PM3 .trace, or empty")))
+            return
+
+        if args.json:
+            import json as jsonlib
+            recs = [
+                {"bits": sz, "data": data.hex(), "is_tx": is_tx,
+                 "parity": parity}
+                for sz, data, is_tx, parity in frames
+            ]
+            print(jsonlib.dumps(recs, indent=2))
+            return
+
+        sessions = [{
+            "session_num": 0,
+            "status_name": "imported",
+            "frames": frames,
+        }]
+        print(f" Imported : {color_string((CG, args.file))}  ({len(frames)} frame(s))")
+        print(authtrace_pretty_dump(sessions))
 
 
 @data.command('hexsamples')
@@ -4633,7 +4686,7 @@ def authtrace_summarise(sessions):
     out = []
     for s in sessions:
         frames = s["frames"]
-        tx  = sum(1 for _, _, is_tx in frames if is_tx)
+        tx  = sum(1 for f in frames if f[2]) # tolerate an optional 4th (parity) element
         rx  = len(frames) - tx
         nonces = _extract_sniff_nonces(frames)
         nonce_info = f"  {CG}{len(nonces)} nonce pair(s){C0}" if nonces else ""
@@ -4650,7 +4703,7 @@ def authtrace_pretty_dump(sessions):
     out = []
     for s in sessions:
         frames = s["frames"]
-        tx_count = sum(1 for _, _, is_tx in frames if is_tx)
+        tx_count = sum(1 for f in frames if f[2])  # tolerate an optional 4th (parity) element
         rx_count = len(frames) - tx_count
         out.append(
             f"\n{CG}=== session #{s['session_num']}  "
@@ -4675,8 +4728,23 @@ def authtrace_pretty_dump(sessions):
         nt_slot       = -1
         nr_ar_slot    = -1
         at_slot       = -1
-        for n, (sz_bits, data, is_tx) in enumerate(frames):
-            hex_str = ' '.join(f'{b:02x}' for b in data)
+        for n, frame in enumerate(frames):
+            # Backward compatible: existing callers pass 3-tuples (no parity
+            # captured/relevant); imported PM3 traces carry real parity as an
+            # optional 4th element, shown as '!' after a byte on mismatch --
+            # same convention as the live --dump parity-flagged hex column.
+            if len(frame) == 4:
+                sz_bits, data, is_tx, parity_bits = frame
+            else:
+                sz_bits, data, is_tx = frame
+                parity_bits = []
+            if parity_bits and len(parity_bits) == len(data):
+                hex_str = ' '.join(
+                    f"{b:02x}{'!' if odd_parity_byte(b) != p else ' '}"
+                    for b, p in zip(data, parity_bits)
+                )
+            else:
+                hex_str = ' '.join(f'{b:02x}' for b in data)
             decoded_ctx = None
             col_ctx     = None
 
