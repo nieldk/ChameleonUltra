@@ -23,21 +23,17 @@ NRF_LOG_MODULE_REGISTER();
 // The modulator builds a PWM-format array that is converted to a simple 0/1
 // timer pattern by psk_build_pattern() in lf_tag_em.c.
 // Timer3 ISR plays back the pattern at exactly 125 kHz (8us per entry).
-// Real Indala PSK1 keeps a continuous ~125kHz carrier going (matching the
-// RF/32 bit duration: 32 FULL carrier cycles = 256us/bit) and flips its
-// phase at bit boundaries -- it does NOT drop to a sustained half-rate
-// (62.5kHz) square wave for each bit. Confirmed against the reader's own
-// sampling math: 166.667kHz sampling aliasing the signal to 41.67kHz (see
-// lf_125khz_radio.c) only works out arithmetically if the carrier being
-// sampled is actually 125kHz (166.667-125=41.667); a 62.5kHz subcarrier
-// would alias to a different bin entirely. The previous version here drove
-// a literal 62.5kHz wave for each bit's full duration, which transmits
-// energy at the wrong frequency for a 125kHz-tuned receive antenna
-// (including our own) to couple efficiently -- "no tag found", consistently,
-// independent of any digital timing/duty-cycle correctness.
-#define INDALA_PSK_CYCLES_PER_BIT (32)   // 32 full 125kHz carrier cycles/bit
+// REVERTED: the 125kHz-continuous-carrier theory was wrong -- it was based
+// on a comment in lf_125khz_radio.c ("aliases the carrier to 41.67kHz")
+// that is directly contradicted by the comment next to the actual working
+// DFT lookup table in pskdemod.c: "At fs=166.67kHz, DFT bin k=3 of N=8 ->
+// 3x166.67/8 = 62.5kHz ... not an aliased 125kHz carrier phase." The
+// decoder that successfully reads real T55xx Indala cards is built around
+// a genuine 62.5kHz fc/2 subcarrier (AM envelope), not a phase-tracked
+// 125kHz carrier. Back to 16 fc/2 cycles/bit, counter_top=8 (8us/entry).
+#define INDALA_PSK_CYCLES_PER_BIT (16)
 #define INDALA_PSK_ENTRIES_PER_CYCLE (2)
-#define INDALA_PSK_COUNTER_TOP (4)   // 4us/entry at 1MHz PWM base -> 8us/cycle = 125kHz
+#define INDALA_PSK_COUNTER_TOP (8)   // 8us/entry at 1MHz PWM base -> 16us/cycle = 62.5kHz fc/2
 
 #define INDALA_T55XX_BLOCK_COUNT (3) // config + 2 data blocks
 
@@ -202,12 +198,10 @@ static bool indala_decoder_feed(indala_codec *d, uint16_t val) {
 };
 
 // PSK1 modulator: fc/2 carrier at RF/32 (1 MHz PWM clock, counter_top=8)
-// Each 125kHz carrier cycle uses 2 PWM entries with counter_top=4 (4us each):
-//   Phase A (bit=0): {ch0=CT-1,ct=CT},{ch0=0,ct=CT} -> ON 4us, OFF 4us
-//   Phase B (bit=1): {ch0=0,ct=CT},{ch0=CT-1,ct=CT} -> OFF 4us, ON 4us (180 shifted)
-// 32 full carrier cycles per bit = 64 PWM entries per bit (256us/bit, same
-// bit rate as before -- only the carrier frequency within each bit changed,
-// from a sustained 62.5kHz wave to a continuous 125kHz one).
+// Each fc/2 cycle uses 2 PWM entries with counter_top=8 (8us each):
+//   Phase A (bit=0): {ch0=CT-1,ct=CT},{ch0=0,ct=CT} -> ON 8us, OFF 8us
+//   Phase B (bit=1): {ch0=0,ct=CT},{ch0=CT-1,ct=CT} -> OFF 8us, ON 8us (180 shifted)
+// 16 fc/2 cycles per bit = 32 PWM entries per bit.
 static const nrf_pwm_sequence_t *indala_modulator(indala_codec *d, uint8_t *buf) {
     int k = 0;
 
