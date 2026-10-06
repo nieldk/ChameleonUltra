@@ -3259,12 +3259,24 @@ def _print_14a_sniff_summary(frames):
         print(f"   is all that's needed to crack.")
 
 
+# Sample period of the last `lf sniff` capture, in microseconds. 8 for a
+# normal (field-managed, 125kHz) capture; 6 for a --passive (TIMER3,
+# 166.67kHz) capture. Set by cli_lf.py's LFSniff on every successful sniff.
+_last_capture_rate_us = 8
+
+
 def _get_capture():
     """Return last capture buffer or print error."""
     import chameleon_cli_unit as _m
     if not _m._last_capture:
         return None
     return _m._last_capture
+
+
+def _get_capture_rate_us():
+    """Return the sample period (µs) of the last capture."""
+    import chameleon_cli_unit as _m
+    return getattr(_m, '_last_capture_rate_us', 8)
 
 
 @data.command('hexsamples')
@@ -3332,8 +3344,8 @@ class DataPlot(BaseCLIUnit):
         view = list(buf[start:end])
         n = len(view)
 
-        # X axis: time in µs (1 sample = 8µs)
-        xs = [((start + i) * 8) for i in range(n)]
+        rate_us = _get_capture_rate_us()
+        xs = [((start + i) * rate_us) for i in range(n)]
 
         mean = sum(view) // n
         threshold = mean // 2
@@ -3567,7 +3579,8 @@ class DataManrawdecode(BaseCLIUnit):
         bits_str = ''.join(str(b) for b in decoded_bits)
         hex_str = hex(int(bits_str, 2))[2:] if decoded_bits else ''
 
-        print(f" Clock    : RF/{args.clock}  ({args.clock} Tc = {args.clock*8}µs/bit)")
+        rate_us = _get_capture_rate_us()
+        print(f" Clock    : RF/{args.clock}  ({args.clock} Tc = {args.clock*rate_us}µs/bit)")
         print(f" Threshold: 0x{threshold:02x}  Inverted: {args.invert}")
         print(f" Bits     : {CG}{len(decoded_bits)}{C0}")
         print()
@@ -3598,7 +3611,8 @@ class DataModulation(BaseCLIUnit):
         mx = max(buf)
         threshold = mean // 2
 
-        print(f" Samples  : {CG}{n}{C0}  ({n*8}µs)")
+        rate_us = _get_capture_rate_us()
+        print(f" Samples  : {CG}{n}{C0}  ({n*rate_us}µs)")
         print(f" Range    : 0x{mn:02x} – 0x{mx:02x}  mean: 0x{mean:02x}")
         print()
 
@@ -3640,13 +3654,13 @@ class DataModulation(BaseCLIUnit):
 
         # Map to nearest standard RF divider
         half_samples = most_common_run
-        full_period_us = half_samples * 2 * 8  # us
+        full_period_us = half_samples * 2 * rate_us
 
         rf_dividers = [8, 16, 32, 40, 50, 64, 100, 128]
-        tc_us = 8  # 1 Tc = 8µs at 125kHz
+        tc_us = rate_us  # 1 Tc = 1 sample period
         best_div = min(rf_dividers, key=lambda d: abs(d*tc_us - full_period_us))
 
-        print(f" Half-period : ~{most_common_run} samples = {most_common_run*8}µs")
+        print(f" Half-period : ~{most_common_run} samples = {most_common_run*rate_us}µs")
         print(f" Full period : ~{full_period_us}µs")
         print(f" Nearest RF  : {CG}RF/{best_div}{C0}  ({best_div*tc_us}µs/bit)")
         print()
