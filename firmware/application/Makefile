@@ -49,7 +49,6 @@ SRC_FILES += \
   $(PROJ_DIR)/rfid/nfctag/hf/nfc_mf0_ntag.c \
   $(PROJ_DIR)/rfid/nfctag/hf/nfc_seos.c \
   $(PROJ_DIR)/rfid/nfctag/hf/nfc_st25ta.c \
-  $(PROJ_DIR)/rfid/nfctag/hf/nfc_mfplus.c \
   $(PROJ_DIR)/rfid/nfctag/lf/lf_tag_em.c \
   $(PROJ_DIR)/rfid/nfctag/lf/utils/fskdemod.c \
   $(PROJ_DIR)/rfid/nfctag/lf/utils/circular_buffer.c \
@@ -410,6 +409,7 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
   SRC_FILES +=\
     $(DESFIRE_DIR)/desfire_shim.c \
     $(DESFIRE_DIR)/nfc_desfire.c \
+    $(PROJ_DIR)/rfid/nfctag/hf/nfc_mfplus.c \
     $(DESFIRE_DIR)/src/dfc_virtual_picc.c \
     $(DESFIRE_DIR)/src/dfc_emulator.c \
     $(DESFIRE_DIR)/src/dfc_emulator_commands.c \

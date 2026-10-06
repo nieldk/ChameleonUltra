@@ -1581,6 +1581,11 @@ static data_frame_tx_t *cmd_processor_st25ta_set_config(uint16_t cmd, uint16_t s
     return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
 }
 
+// MIFARE Plus SL3 depends on the DESFire crypto module (dfc_crypto.h,
+// aes_cmac.h), which is Ultra-only -- see nfc_mfplus.c's own include of
+// those headers, and the same guard on nfc_mfplus.h's inclusion elsewhere
+// in this codebase (rfid_main.h, tag_emulation.c).
+#if defined(PROJECT_DESFIRE_EMULATION)
 static nfc_tag_mfplus_information_t *mfplus_active_info(void) {
     tag_slot_specific_type_t tag_types;
     tag_emulation_get_specific_types_by_slot(tag_emulation_get_slot(), &tag_types);
@@ -1610,6 +1615,7 @@ static data_frame_tx_t *cmd_processor_mfplus_set_key(uint16_t cmd, uint16_t stat
     memcpy(info->default_key, data, NFC_TAG_MFPLUS_KEY_SIZE);
     return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
 }
+#endif // PROJECT_DESFIRE_EMULATION
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
 // T55xx clone is only available on Chameleon Ultra; the Lite firmware
@@ -1720,10 +1726,12 @@ static nfc_tag_14a_coll_res_reference_t *get_coll_res_data(bool write) {
         case TAG_TYPE_MIFARE_Mini:
             info = write ? get_mifare_coll_res() : get_saved_mifare_coll_res();
             break;
+#if defined(PROJECT_DESFIRE_EMULATION)
         case TAG_TYPE_MIFARE_PLUS_S2K_SL3:
         case TAG_TYPE_MIFARE_PLUS_S4K_SL3:
             info = nfc_tag_mfplus_get_coll_res();
             break;
+#endif
         case TAG_TYPE_MF0ICU1:
         case TAG_TYPE_MF0ICU2:
         case TAG_TYPE_MF0UL11:
@@ -4404,8 +4412,10 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_ST25TA_READ_NDEF,               NULL,                      cmd_processor_st25ta_read_ndef,              NULL                   },
     {    DATA_CMD_ST25TA_WRITE_NDEF,              NULL,                      cmd_processor_st25ta_write_ndef,             NULL                   },
     {    DATA_CMD_ST25TA_SET_CONFIG,              NULL,                      cmd_processor_st25ta_set_config,             NULL                   },
+#if defined(PROJECT_DESFIRE_EMULATION)
     {    DATA_CMD_MFPLUS_GET_INFO,                NULL,                      cmd_processor_mfplus_get_info,               NULL                   },
     {    DATA_CMD_MFPLUS_SET_KEY,                 NULL,                      cmd_processor_mfplus_set_key,                NULL                   },
+#endif
 
     /* ISO14443-4 T=CL emulation */
 #if defined(PROJECT_CHAMELEON_ULTRA)
