@@ -811,6 +811,17 @@ static data_frame_tx_t *cmd_processor_lf_search(uint16_t cmd, uint16_t status, u
 
     set_scan_tag_timeout(LF_SEARCH_PER_PROTO_MS);
 
+    // DIAGNOSTIC: Indala moved to run FIRST in the sweep, before anything
+    // else gets a turn, to test whether failure is specifically caused by
+    // running after other protocol scans within this same command, or
+    // happens regardless of position. Not a proposed permanent fix.
+    set_scan_tag_timeout(LF_SEARCH_DEFAULT_MS);
+    if (st != STATUS_LF_TAG_OK && scan_indala(buf + 2) == STATUS_LF_TAG_OK) {
+        buf[0] = (uint8_t)(TAG_TYPE_INDALA >> 8); buf[1] = (uint8_t)TAG_TYPE_INDALA;
+        out_len = 2 + LF_INDALA_TAG_ID_SIZE; st = STATUS_LF_TAG_OK;
+    }
+    set_scan_tag_timeout(LF_SEARCH_PER_PROTO_MS);
+
     /* --- readers that already prefix [tag_type, id] --- */
 #if defined(PROJECT_CHAMELEON_ULTRA)
     if (st != STATUS_LF_TAG_OK && scan_fdxb(buf) == STATUS_LF_TAG_OK) {
@@ -838,18 +849,6 @@ static data_frame_tx_t *cmd_processor_lf_search(uint16_t cmd, uint16_t status, u
         buf[0] = (uint8_t)(TAG_TYPE_VIKING >> 8); buf[1] = (uint8_t)TAG_TYPE_VIKING;
         out_len = 2 + LF_VIKING_TAG_ID_SIZE; st = STATUS_LF_TAG_OK;
     }
-    // PSK1 (Indala) needs buffer fill + settle time + an offset correlation
-    // search; the shared LF_SEARCH_PER_PROTO_MS budget that's generous enough
-    // for the other decoders isn't reliably enough for this one (confirmed:
-    // lf indala read, which uses the full LF_SEARCH_DEFAULT_MS, locks
-    // consistently; this sweep's shortened budget did not). Give it the same
-    // budget the standalone command uses instead of shortchanging it.
-    set_scan_tag_timeout(LF_SEARCH_DEFAULT_MS);
-    if (st != STATUS_LF_TAG_OK && scan_indala(buf + 2) == STATUS_LF_TAG_OK) {
-        buf[0] = (uint8_t)(TAG_TYPE_INDALA >> 8); buf[1] = (uint8_t)TAG_TYPE_INDALA;
-        out_len = 2 + LF_INDALA_TAG_ID_SIZE; st = STATUS_LF_TAG_OK;
-    }
-    set_scan_tag_timeout(LF_SEARCH_PER_PROTO_MS);
     /* em410x reader prefixes [tag_type, id] itself; EM410x last (loosest match). */
     if (st != STATUS_LF_TAG_OK && scan_em410x(buf) == STATUS_LF_TAG_OK) {
         tag_specific_type_t tt = (buf[0] << 8) | buf[1];
