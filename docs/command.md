@@ -1339,6 +1339,7 @@ Capture raw LF field ADC samples (125kHz, 8µs/sample). ~0x80 = field on, lower 
 - `--timeout` — Capture duration in milliseconds (default: 2000, max: 10000, firmware blocks for full duration) (default: 2000)
 - `--out` — Save raw samples to binary file (for offline analysis)
 - `--hex` — Print hex dump of samples to screen
+- `--passive` — Keep this device's own LF field OFF during capture — use when observing another ACTIVE transmitter (e.g. another Chameleon in emulation mode) facing this one, so this device's own carrier doesn't beat against / dominate the capture.
 
 ### `lf t55xx`
 
