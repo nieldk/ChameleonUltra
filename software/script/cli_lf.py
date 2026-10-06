@@ -2164,12 +2164,20 @@ class LFSniff(ReaderRequiredUnit):
         parser.add_argument(
             "--hex", action="store_true", help="Print hex dump of samples to screen"
         )
+        parser.add_argument(
+            "--passive", action="store_true",
+            help="Keep this device's own LF field OFF during capture — use when "
+                 "observing another ACTIVE transmitter (e.g. another Chameleon in "
+                 "emulation mode) facing this one, so this device's own carrier "
+                 "doesn't beat against / dominate the capture.",
+        )
         return parser
 
     def on_exec(self, args: argparse.Namespace):
         timeout = max(1, min(10000, args.timeout))
-        print(f" Capturing LF field for {timeout}ms at 125kHz (8µs/sample)...")
-        resp = self.cmd.lf_sniff(timeout_ms=timeout)
+        mode_str = "passively (own field off)" if args.passive else "at 125kHz (8µs/sample)"
+        print(f" Capturing LF field for {timeout}ms {mode_str}...")
+        resp = self.cmd.lf_sniff(timeout_ms=timeout, passive=args.passive)
 
         if resp.status != Status.LF_TAG_OK or not resp.data:
             print(f"{CR}No samples captured{C0}")
