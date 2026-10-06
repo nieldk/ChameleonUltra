@@ -669,6 +669,11 @@ class LFSearch(ReaderRequiredUnit):
                 f" PAC/Stanley - CN: {color_string((CG, card_id_ascii))} | Raw: {raw.hex().upper()}"
             )
             return
+        # Indala hands back the raw 64-bit frame; show the decoded FC/CN
+        # alongside it rather than only the raw hex, same as 'lf indala read'.
+        if tag_type == TagSpecificType.Indala and len(id_bytes) == 8:
+            print(f" {indala_format_output(bytes(id_bytes[:8]))}")
+            return
         print(
             f"{color_string((CG, str(tag_type)))}: {color_string((CG, id_bytes.hex()))}"
         )
