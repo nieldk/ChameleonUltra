@@ -173,6 +173,8 @@ class Command(enum.IntEnum):
     ST25TA_READ_NDEF = 4046
     ST25TA_WRITE_NDEF = 4047
     ST25TA_SET_CONFIG = 4048
+    MFPLUS_GET_INFO = 4049
+    MFPLUS_SET_KEY = 4050
 
     # ISO14443-4 T=CL emulation
     HF14A_4_APDU_RECV = 6000
@@ -394,6 +396,11 @@ class TagSpecificType(enum.IntEnum):
     MIFARE_PLUS_S2K = 1004
     MIFARE_PLUS_S4K = 1005
 
+    # MIFARE Plus SL3 (AES) -- v1: AuthenticateFirst, ReadBlock, WriteBlock,
+    # GetVersion only. All sectors share one configurable key (set via econfig).
+    MIFARE_PLUS_S2K_SL3 = 1006
+    MIFARE_PLUS_S4K_SL3 = 1007
+
     # MFUL / NTAG series     1100
     NTAG_213 = 1100
     NTAG_215 = 1101
@@ -487,6 +494,10 @@ class TagSpecificType(enum.IntEnum):
             return "Mifare Plus S 2K (SL1)"
         elif self == TagSpecificType.MIFARE_PLUS_S4K:
             return "Mifare Plus S 4K (SL1)"
+        elif self == TagSpecificType.MIFARE_PLUS_S2K_SL3:
+            return "Mifare Plus S 2K (SL3)"
+        elif self == TagSpecificType.MIFARE_PLUS_S4K_SL3:
+            return "Mifare Plus S 4K (SL3)"
         elif self == TagSpecificType.NTAG_213:
             return "NTAG 213"
         elif self == TagSpecificType.NTAG_215:

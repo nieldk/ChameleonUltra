@@ -79,9 +79,12 @@ typedef enum {
     TAG_TYPE_MIFARE_1024,
     TAG_TYPE_MIFARE_2048,
     TAG_TYPE_MIFARE_4096,
-    // MIFARE Plus (SL1 / Classic-compatible mode only; SL3 AES not implemented)
+    // MIFARE Plus (SL1 / Classic-compatible mode only)
     TAG_TYPE_MIFARE_PLUS_S2K,
     TAG_TYPE_MIFARE_PLUS_S4K,
+    // MIFARE Plus SL3 (AES) -- see nfc_mfplus.h for v1 scope/limitations
+    TAG_TYPE_MIFARE_PLUS_S2K_SL3,
+    TAG_TYPE_MIFARE_PLUS_S4K_SL3,
     // MFUL / NTAG series        1100
     TAG_TYPE_NTAG_213 = 1100,
     TAG_TYPE_NTAG_215,
@@ -135,7 +138,8 @@ typedef enum {
 #define TAG_SPECIFIC_TYPE_HF_VALUES                                   \
     TAG_TYPE_MIFARE_Mini, TAG_TYPE_MIFARE_1024, TAG_TYPE_MIFARE_2048, \
         TAG_TYPE_MIFARE_4096, TAG_TYPE_MIFARE_PLUS_S2K,                \
-        TAG_TYPE_MIFARE_PLUS_S4K, TAG_TYPE_NTAG_213, TAG_TYPE_NTAG_215, \
+        TAG_TYPE_MIFARE_PLUS_S4K, TAG_TYPE_MIFARE_PLUS_S2K_SL3,          \
+        TAG_TYPE_MIFARE_PLUS_S4K_SL3, TAG_TYPE_NTAG_213, TAG_TYPE_NTAG_215, \
         TAG_TYPE_NTAG_216, TAG_TYPE_MF0ICU1, TAG_TYPE_MF0ICU2,        \
         TAG_TYPE_MF0UL11, TAG_TYPE_MF0UL21, TAG_TYPE_NTAG_210,        \
         TAG_TYPE_NTAG_212, TAG_TYPE_HF14A_4, TAG_TYPE_SEOS, TAG_TYPE_ST25TA, \

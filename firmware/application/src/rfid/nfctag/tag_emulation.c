@@ -10,6 +10,7 @@
 #include "nfc_14a_4.h"
 #include "nfc_seos.h"
 #include "nfc_st25ta.h"
+#include "nfc_mfplus.h"
 #if defined(PROJECT_DESFIRE_EMULATION)
 #include "desfire/nfc_desfire.h"
 #endif
@@ -111,6 +112,8 @@ static tag_base_handler_map_t tag_base_map[] = {
     {TAG_SENSE_HF, TAG_TYPE_MIFARE_4096, nfc_tag_mf1_data_loadcb,      nfc_tag_mf1_data_savecb,      nfc_tag_mf1_data_factory,      &m_tag_data_hf},
     {TAG_SENSE_HF, TAG_TYPE_MIFARE_PLUS_S2K, nfc_tag_mf1_data_loadcb,  nfc_tag_mf1_data_savecb,      nfc_tag_mf1_data_factory,      &m_tag_data_hf},
     {TAG_SENSE_HF, TAG_TYPE_MIFARE_PLUS_S4K, nfc_tag_mf1_data_loadcb,  nfc_tag_mf1_data_savecb,      nfc_tag_mf1_data_factory,      &m_tag_data_hf},
+    {TAG_SENSE_HF, TAG_TYPE_MIFARE_PLUS_S2K_SL3, nfc_tag_mfplus_data_loadcb, nfc_tag_mfplus_data_savecb, nfc_tag_mfplus_data_factory, &m_tag_data_hf},
+    {TAG_SENSE_HF, TAG_TYPE_MIFARE_PLUS_S4K_SL3, nfc_tag_mfplus_data_loadcb, nfc_tag_mfplus_data_savecb, nfc_tag_mfplus_data_factory, &m_tag_data_hf},
     // NTAG tag emulation
     {TAG_SENSE_HF, TAG_TYPE_NTAG_210,    nfc_tag_mf0_ntag_data_loadcb, nfc_tag_mf0_ntag_data_savecb, nfc_tag_mf0_ntag_data_factory, &m_tag_data_hf},
     {TAG_SENSE_HF, TAG_TYPE_NTAG_212,    nfc_tag_mf0_ntag_data_loadcb, nfc_tag_mf0_ntag_data_savecb, nfc_tag_mf0_ntag_data_factory, &m_tag_data_hf},

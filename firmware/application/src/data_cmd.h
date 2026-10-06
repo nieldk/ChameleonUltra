@@ -191,6 +191,8 @@
 #define DATA_CMD_ST25TA_READ_NDEF               (4046)
 #define DATA_CMD_ST25TA_WRITE_NDEF              (4047)
 #define DATA_CMD_ST25TA_SET_CONFIG              (4048)
+#define DATA_CMD_MFPLUS_GET_INFO                (4049)
+#define DATA_CMD_MFPLUS_SET_KEY                 (4050)
 //
 // ******************************************************************
 

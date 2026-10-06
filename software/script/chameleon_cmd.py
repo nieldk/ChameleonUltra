@@ -2522,6 +2522,22 @@ class ChameleonCMD:
         payload = struct.pack("!HBB", ndef_size, read_access, write_access) + pwd_read + pwd_write
         return self.device.send_cmd_sync(Command.ST25TA_SET_CONFIG, payload)
 
+    @expect_response(Status.SUCCESS)
+    def mfplus_get_info(self):
+        resp = self.device.send_cmd_sync(Command.MFPLUS_GET_INFO, None)
+        if resp.status == Status.SUCCESS:
+            resp.parsed = {
+                "block_max": resp.data[0],
+                "default_key": resp.data[1:17],
+            }
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def mfplus_set_key(self, key: bytes):
+        if len(key) != 16:
+            raise ValueError("MIFARE Plus key must be 16 bytes")
+        return self.device.send_cmd_sync(Command.MFPLUS_SET_KEY, key)
+
 
 def test_fn():
     # connect to chameleon
