@@ -2575,14 +2575,11 @@ def _gdm_unlock_altwake(cmd, opt):
     opt["append_crc"] = 1
 
 
-def _gdm_wakeup(cmd, style, key, auth_block=0):
-    """Perform one wakeup style; return an hf14a_raw opt dict ready for a
-    follow-up raw backdoor command on the SAME RF session (field held open --
-    dropping it between wakeup and backdoor command loses the unlock on a
-    real card, matching how PM3's own mifare_wakeup_auth() never drops the
-    field between the two steps either).
-    style: 'gen1a' | 'gdm' | 'wupa'. key only used for 'wupa'.
-    """
+GDM_WAKEUP_RETRIES = 3
+GDM_WAKEUP_RETRY_DELAY_S = 0.06
+
+
+def _gdm_wakeup_once(cmd, style, key, auth_block):
     if style == 'gen1a':
         opt = _gen1a_new_session()
         _gen1a_unlock(cmd, opt)
@@ -2600,6 +2597,32 @@ def _gdm_wakeup(cmd, style, key, auth_block=0):
         return {"activate_rf_field": 0, "wait_response": 1, "append_crc": 1,
                 "auto_select": 0, "keep_rf_field": 1, "check_response_crc": 0}
     raise ValueError(f"unknown GDM wakeup style {style!r}")
+
+
+def _gdm_wakeup(cmd, style, key, auth_block=0):
+    """Perform one wakeup style; return an hf14a_raw opt dict ready for a
+    follow-up raw backdoor command on the SAME RF session (field held open --
+    dropping it between wakeup and backdoor command loses the unlock on a
+    real card, matching how PM3's own mifare_wakeup_auth() never drops the
+    field between the two steps either).
+    style: 'gen1a' | 'gdm' | 'wupa'. key only used for 'wupa'.
+
+    Retries GDM_WAKEUP_RETRIES times, each with a fresh RF session (field
+    cycled off/on) -- a magic unlock handshake failing once and succeeding
+    on an immediate identical retry is a known characteristic of these
+    backdoor sequences, not specific to any one card. A single miss here
+    used to fall straight through to styles that could never work on that
+    card, producing a worse error than the situation warranted.
+    """
+    last_err = None
+    for attempt in range(GDM_WAKEUP_RETRIES):
+        if attempt > 0:
+            time.sleep(GDM_WAKEUP_RETRY_DELAY_S)
+        try:
+            return _gdm_wakeup_once(cmd, style, key, auth_block)
+        except Exception as e:
+            last_err = e
+    raise last_err
 
 
 def _gdm_read_with_wakeup(cmd, opt, read_cmd, block):
