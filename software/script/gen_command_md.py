@@ -139,7 +139,7 @@ def main():
     )
     print("| Keys | `hf mf fchk` | `.dic`, `.key` | `.dic`, `.key` |")
     print(
-        "| Traces | `hf 14a sniff -o` / `standalone get-result --pm3` | — | PM3 `.trace` |\n"
+        "| Traces | `hf 14a sniff -o` / `standalone get-result --pm3` / `data pm3import` | PM3 `.trace` | PM3 `.trace` |\n"
     )
     print(
         "Round-trips are validated against Proxmark3's own tooling: a `hf des edump -f x.json` "
