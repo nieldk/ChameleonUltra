@@ -48,6 +48,9 @@
 #ifndef CONFIG_STANDALONE_HF14A_TAP_SNIFF
 #define CONFIG_STANDALONE_HF14A_TAP_SNIFF  1
 #endif
+#ifndef CONFIG_STANDALONE_RELAY
+#define CONFIG_STANDALONE_RELAY  1
+#endif
 
 /* -------------------------------------------------------------------------
  * FDS record keys (file ID FDS_STANDALONE_FILE_ID defined in fds_ids.h)
@@ -115,7 +118,7 @@ static const standalone_mode_iface_t *const m_modes[] = {
 #if CONFIG_STANDALONE_EMUL_TRACE
     &mode_emultrace_iface,
 #endif
-#if defined(PROJECT_CHAMELEON_ULTRA)
+#if CONFIG_STANDALONE_RELAY && defined(PROJECT_CHAMELEON_ULTRA)
     &mode_relay_iface,
 #endif
 #if CONFIG_STANDALONE_HF14A_TAP_SNIFF && defined(PROJECT_CHAMELEON_ULTRA)

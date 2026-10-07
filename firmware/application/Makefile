@@ -18,6 +18,7 @@ STANDALONE_DICT_CHECK      ?= 0   # disabled by default
 STANDALONE_EMUL_TRACE      ?= 0   # disabled by default
 STANDALONE_NFC_CANARY      ?= 0   # disabled by default
 STANDALONE_HF14A_TAP_SNIFF ?= 0   # disabled by default
+STANDALONE_RELAY           ?= 0   # enabled by default
 
 CFLAGS += -DCONFIG_STANDALONE_AUTHTRACE=$(STANDALONE_AUTHTRACE)
 CFLAGS += -DCONFIG_STANDALONE_SLOT_CYCLE=$(STANDALONE_SLOT_CYCLE)
@@ -27,6 +28,7 @@ CFLAGS += -DCONFIG_STANDALONE_DICT_CHECK=$(STANDALONE_DICT_CHECK)
 CFLAGS += -DCONFIG_STANDALONE_EMUL_TRACE=$(STANDALONE_EMUL_TRACE)
 CFLAGS += -DCONFIG_STANDALONE_NFC_CANARY=$(STANDALONE_NFC_CANARY)
 CFLAGS += -DCONFIG_STANDALONE_HF14A_TAP_SNIFF=$(STANDALONE_HF14A_TAP_SNIFF)
+CFLAGS += -DCONFIG_STANDALONE_RELAY=$(STANDALONE_RELAY)
 
 # Source files common to all targets
 SRC_FILES += \
@@ -40,9 +42,6 @@ SRC_FILES += \
   $(PROJ_DIR)/app_standalone.c \
   $(PROJ_DIR)/app_cmd_standalone.c \
   $(PROJ_DIR)/standalone_led.c \
-  $(PROJ_DIR)/standalone_modes/mode_relay.c \
-  $(PROJ_DIR)/ble_relay.c \
-  $(PROJ_DIR)/rfid/nfctag/hf/nfc_relay_tag.c \
   $(PROJ_DIR)/usb_main.c \
   $(PROJ_DIR)/rgb_marquee.c \
   $(PROJ_DIR)/bsp/bsp_delay.c \
@@ -213,36 +212,41 @@ SRC_FILES += \
   $(SDK_ROOT)/components/libraries/crypto/backend/oberon/oberon_backend_hash.c \
   $(SDK_ROOT)/components/libraries/crypto/backend/oberon/oberon_backend_hmac.c \
 
-ifeq ($(STANDALONE_AUTHTRACE),1)
+ifeq ($(strip $(STANDALONE_AUTHTRACE)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_authtrace.c
 endif
-ifeq ($(STANDALONE_SLOT_CYCLE),1)
+ifeq ($(strip $(STANDALONE_SLOT_CYCLE)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_slot_cycle.c
 endif
-ifeq ($(STANDALONE_EMUL_TRACE),1)
+ifeq ($(strip $(STANDALONE_EMUL_TRACE)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_emultrace.c
 endif
-ifeq ($(STANDALONE_HF14A_TAP_SNIFF),1)
+ifeq ($(strip $(STANDALONE_HF14A_TAP_SNIFF)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_hf14a_tap_sniff.c
 endif
-ifeq ($(STANDALONE_NFC_CANARY),1)
+ifeq ($(strip $(STANDALONE_NFC_CANARY)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/nfc_canary_core.c
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_nfc_canary.c
 endif
-ifeq ($(STANDALONE_AUTOCLONE),1)
+ifeq ($(strip $(STANDALONE_AUTOCLONE)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_autoclone.c
 endif
-ifeq ($(STANDALONE_READ_REPLAY),1)
+ifeq ($(strip $(STANDALONE_READ_REPLAY)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_read_replay.c
 endif
-ifeq ($(STANDALONE_DICT_CHECK),1)
+ifeq ($(strip $(STANDALONE_DICT_CHECK)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_dict_check.c
 endif
 # mf1_dict.c is shared between autoclone and dict_check -- include it if
 # either is enabled (ifneq-on-nonempty, not ifeq-on-"1": filter returns
 # "1 1" when BOTH are enabled, which would never match a plain "1").
-ifneq (,$(filter 1,$(STANDALONE_AUTOCLONE) $(STANDALONE_DICT_CHECK)))
+ifneq (,$(filter 1,$(strip $(STANDALONE_AUTOCLONE)) $(strip $(STANDALONE_DICT_CHECK))))
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mf1_dict.c
+endif
+ifeq ($(strip $(STANDALONE_RELAY)),1)
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_relay.c
+SRC_FILES += $(PROJ_DIR)/ble_relay.c
+SRC_FILES += $(PROJ_DIR)/rfid/nfctag/hf/nfc_relay_tag.c
 endif
 
 # Include folders common to all targets

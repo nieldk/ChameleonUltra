@@ -399,8 +399,14 @@ static void conn_params_init(void) {
  */
 static bool g_relay_adv_active = false;
 
-/* Declared in mode_relay.c — suppresses battery shutdown during relay */
+/* Declared in mode_relay.c — suppresses battery shutdown during relay.
+ * Relay excluded from the build: nothing to suppress for, so the
+ * low-battery shutdown check below just proceeds normally. */
+#if CONFIG_STANDALONE_RELAY
 extern bool g_is_standalone_armed;
+#else
+#define g_is_standalone_armed false
+#endif
 
 static void on_adv_evt(ble_adv_evt_t ble_adv_evt) {
     /* Relay mode owns the advertising handle — ignore module events */

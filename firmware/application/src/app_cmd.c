@@ -4491,7 +4491,9 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_STANDALONE_TRIGGER,             NULL,                        cmd_handler_standalone_trigger,              NULL                   },
     {    DATA_CMD_STANDALONE_DISARM,              NULL,                        cmd_handler_standalone_disarm,               NULL                   },
     {    DATA_CMD_STANDALONE_GET_SIZES,           NULL,                        cmd_handler_standalone_get_sizes,            NULL                   },
+#if CONFIG_STANDALONE_RELAY
     {    DATA_CMD_STANDALONE_RELAY_DIAG,          NULL,                        cmd_handler_standalone_relay_diag,           NULL                   },
+#endif
 };
 data_frame_tx_t *cmd_processor_get_device_capabilities(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     size_t count = ARRAYLEN(m_data_cmd_map);

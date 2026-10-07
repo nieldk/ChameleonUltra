@@ -277,7 +277,13 @@ data_frame_tx_t *cmd_handler_standalone_get_sizes(uint16_t cmd, uint16_t status,
  *             u8 sub_state, u8 card_found, u8 identity_rx,
  *             u8 uid_len, u8[7] uid,
  *             u8[2] atqa, u8 sak, u8 cascade }   (25 bytes)
+ *
+ * Only built when relay is -- it's the one caller of ble_relay.c/
+ * mode_relay.c outside those files themselves, so with relay excluded
+ * from the build (STANDALONE_RELAY=0) this whole handler has to go with
+ * it or the link fails on the calls below.
  */
+#if CONFIG_STANDALONE_RELAY
 extern void mode_relay_get_diag(uint8_t *out_sub, uint8_t *out_card_found,
                                 uint8_t *out_identity_rx,
                                 uint8_t *out_uid, uint8_t *out_uid_len);
@@ -315,3 +321,4 @@ data_frame_tx_t *cmd_handler_standalone_relay_diag(uint16_t cmd, uint16_t status
     for (int i = 0; i < 7; i++) resp[14 + i] = (i < uid_len) ? uid[i] : 0;
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(resp), resp);
 }
+#endif // CONFIG_STANDALONE_RELAY
