@@ -103,8 +103,11 @@ Use flash-dfu-sdbl.sh to install both stages.
 ==========================================================
 ```
 
-Standalone modes you don't use can be excluded to shrink the image — relay
-ships on by default, the rest off; opt in/out with an env var prefix, e.g.
+Standalone modes are excluded by default to shrink the image; opt in to
+the ones you want. Copy
+[`../standalone_modes.mk.sample`](../standalone_modes.mk.sample) to
+`../standalone_modes.mk` for a setting that persists across builds, or
+override just one build with an env var prefix, e.g.
 `STANDALONE_AUTOCLONE=1 ./build.sh`. See
 [`CONTRIBUTING STANDALONE.md`](../application/src/standalone_modes/CONTRIBUTING%20STANDALONE.md#3-add-to-the-makefile).
 A smaller app image is also the usual fix for serial-DFU stalling near

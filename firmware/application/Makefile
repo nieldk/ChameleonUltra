@@ -5,11 +5,18 @@ $(OUTPUT_DIRECTORY)/application.out: \
   LINKER_SCRIPT  := application.ld
 
 # ---------------------------------------------------------------------------
-# Standalone mode selection -- each of these 8 modes can be included to
-# shrink the image (each 0/1; default 0 = excluded.
+# Standalone mode selection -- each of these 9 modes can be included to
+# shrink the image (each 0/1; default 0 = excluded).
 #
-# `relay` is deliberately included by default
+# Persistent local config: copy ../standalone_modes.mk.sample to
+# ../standalone_modes.mk (gitignored, one level up -- shared by Ultra and
+# Lite) and edit it there -- values set in that file take effect on every
+# `./build.sh` / `make`, no need to pass STANDALONE_*=1 on the command line
+# each time. The include is silent (`-include`) if the file doesn't exist,
+# so a fresh clone still builds with the defaults below.
 # ---------------------------------------------------------------------------
+-include ../standalone_modes.mk
+
 STANDALONE_AUTHTRACE       ?= 0   # disabled by default
 STANDALONE_SLOT_CYCLE      ?= 0   # disabled by default
 STANDALONE_AUTOCLONE       ?= 0   # disabled by default
@@ -18,7 +25,7 @@ STANDALONE_DICT_CHECK      ?= 0   # disabled by default
 STANDALONE_EMUL_TRACE      ?= 0   # disabled by default
 STANDALONE_NFC_CANARY      ?= 0   # disabled by default
 STANDALONE_HF14A_TAP_SNIFF ?= 0   # disabled by default
-STANDALONE_RELAY           ?= 0   # enabled by default
+STANDALONE_RELAY           ?= 0   # disabled by default
 
 CFLAGS += -DCONFIG_STANDALONE_AUTHTRACE=$(STANDALONE_AUTHTRACE)
 CFLAGS += -DCONFIG_STANDALONE_SLOT_CYCLE=$(STANDALONE_SLOT_CYCLE)

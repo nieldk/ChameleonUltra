@@ -131,6 +131,15 @@ SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_my_mode.c
 endif
 ```
 
+This makes the mode's inclusion controllable persistently, too: anyone
+can copy `firmware/standalone_modes.mk.sample` to
+`firmware/standalone_modes.mk` (gitignored, one level up from
+`firmware/application/` — shared by Ultra and Lite) and set
+`STANDALONE_MY_MODE ?= 1` there — every subsequent `./build.sh` picks it
+up with no flags on the command line. Add your mode's line to the
+`.sample` file (commented out, matching its format) so it's discoverable
+there too.
+
 Use `$(strip ...)` in the `ifeq`, not a bare `$(STANDALONE_MY_MODE)` —
 a trailing-space comment on the default line (`?= 0   # disabled by
 default`) otherwise makes the variable's value `"0   "`, which an

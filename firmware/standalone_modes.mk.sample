@@ -1,0 +1,26 @@
+# Persistent standalone-mode build config.
+#
+# Copy this file to standalone_modes.mk (gitignored, same directory --
+# shared by Ultra and Lite builds) and uncomment/edit the lines you want.
+# Every `./build.sh` / `make` picks it up automatically from then on -- no
+# need to pass STANDALONE_*=1 on the command line each time. A one-off
+# override still wins over this file for a single build:
+#
+#   STANDALONE_AUTHTRACE=1 ./build.sh
+#
+# Each mode's own default (if this file is absent, or a line here stays
+# commented out) is set in firmware/application/Makefile. Currently: all
+# off.
+#
+# See CONTRIBUTING STANDALONE.md for what each mode does and the full
+# build-flag mechanics.
+
+# STANDALONE_AUTHTRACE       ?= 1   # reader-side auth capture (Ultra only)
+# STANDALONE_SLOT_CYCLE      ?= 1   # cycle emulation slots on a timer
+# STANDALONE_AUTOCLONE       ?= 1   # auto-clone a presented card (writes!)
+# STANDALONE_READ_REPLAY     ?= 1   # read now, replay later (writes!)
+# STANDALONE_DICT_CHECK      ?= 1   # dictionary key check against a card (Ultra only)
+# STANDALONE_EMUL_TRACE      ?= 1   # trace emulated-tag traffic
+# STANDALONE_NFC_CANARY      ?= 1   # alert on an unexpected reader field
+# STANDALONE_HF14A_TAP_SNIFF ?= 1   # passive HF14A tap sniff (Ultra only)
+# STANDALONE_RELAY           ?= 1   # BLE peer relay (Ultra only)
