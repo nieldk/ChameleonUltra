@@ -5436,29 +5436,19 @@ class StandaloneModes(DeviceRequiredUnit):
 @standalone.command('ls')
 class StandaloneLs(DeviceRequiredUnit):
     """
-    List stored result data for all standalone modes.
+    List every standalone mode: built into this firmware, and stored data.
 
-    Shows which modes have data in flash and how many bytes are stored.
+    A mode can have stored result data even when it's not currently built
+    in -- e.g. after rebuilding with different STANDALONE_* flags -- this
+    shows that rather than hiding it, flagged yellow since it's stale.
 
     Usage:
         standalone ls
     """
 
-    MODE_NAMES = {
-        0: 'disabled',
-        1: 'autoclone',
-        2: 'read_replay',
-        3: 'authtrace',
-        4: 'slot_cycle',
-        5: 'dict_check',
-        6: 'emul_trace',
-        7: 'relay',
-        8: 'hf14a_tap_sniff',
-    }
-
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
-        parser.description = 'List stored standalone result data'
+        parser.description = 'List standalone modes: built-in status and stored result data'
         return parser
 
     def on_exec(self, args):
@@ -5466,21 +5456,31 @@ class StandaloneLs(DeviceRequiredUnit):
         if not sizes:
             print(color_string((CR, "failed to read sizes from device")))
             return
+        avail = self.cmd.standalone_get_available()  # [] on firmware predating this command
 
-        has_data = [(i, sz) for i, sz in enumerate(sizes) if sz > 0]
-        if not has_data:
-            print(color_string((CY, "no stored result data on device")))
-            return
+        if avail:
+            print(f"  {'mode':<16}  {'built':>5}  {'stored':>8}  {'est. sessions':>14}")
+            print(f"  {'-'*16}  {'-'*5}  {'-'*8}  {'-'*14}")
+        else:
+            print(f"  {'mode':<16}  {'stored':>8}  {'est. sessions':>14}")
+            print(f"  {'-'*16}  {'-'*8}  {'-'*14}")
 
-        print(f"  {'mode':<14}  {'stored':>8}  {'est. sessions':>14}")
-        print(f"  {'-'*14}  {'-'*8}  {'-'*14}")
-        for mode_id, sz in enumerate(sizes):
-            if sz == 0:
+        for m in StandaloneMode:
+            if m == StandaloneMode.DISABLED:
                 continue
-            name = self.MODE_NAMES.get(mode_id, f"mode_{mode_id}")
+            name = m.name.lower().replace('_', '-')
+            sz = sizes[m] if m < len(sizes) else 0
+            stored_s = f"{sz:>7}B" if sz > 0 else "      -"
             # Rough session estimate: minimum session = 4 hdr + 20 trace = 24 bytes
             est = f"~{max(1, sz // 64)}" if sz > 0 else "-"
-            print(f"  {CG}{name:<14}{C0}  {sz:>7}B  {est:>14}")
+
+            if avail:
+                built = m < len(avail) and avail[m]
+                color = CY if (sz > 0 and not built) else (CG if sz > 0 else C0)
+                print(f"  {color}{name:<16}{C0}  {'yes' if built else 'no':>5}  {stored_s}  {est:>14}")
+            else:
+                color = CG if sz > 0 else C0
+                print(f"  {color}{name:<16}{C0}  {stored_s}  {est:>14}")
 
 
 @standalone.command('clear-result')
