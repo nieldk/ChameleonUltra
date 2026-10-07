@@ -26,7 +26,8 @@ CHAMELEON_LITE  := lite
 CURRENT_DEVICE_TYPE ?= ${CHAMELEON_ULTRA}
 
 # Versioning information
-# Derived automatically from the nearest git tag (vMAJOR.MINOR[.PATCH]).
+# Semver MAJOR.MINOR[.PATCH] from the nearest git tag -- tag-only, never
+# auto-bumps on its own, matching conventional semver.
 # Falls back to APP_FW_VER_FALLBACK when git or a matching tag is unavailable
 # (tarball / CI build), so those builds never hit the Makefile's version error.
 APP_FW_VER_FALLBACK := 2.3.0
@@ -35,11 +36,14 @@ APP_FW_SEMVER    := $(patsubst v%,%,$(or $(GIT_TAG),v$(APP_FW_VER_FALLBACK)))
 APP_FW_VER_MAJOR := $(word 1,$(subst ., ,$(APP_FW_SEMVER)))
 APP_FW_VER_MINOR := $(word 2,$(subst ., ,$(APP_FW_SEMVER)))
 APP_FW_VER_PATCH := $(or $(word 3,$(subst ., ,$(APP_FW_SEMVER))),0)
-# Human-readable build string: semver + short commit hash when git is available.
-# Uses the commit (never a tag) and degrades to bare semver in a tarball/CI build.
-GIT_REV     := $(shell git rev-parse --short=7 HEAD 2>/dev/null)
-GIT_DIRTY   := $(shell git diff --quiet 2>/dev/null || echo -dirty)
-GIT_VERSION := v$(APP_FW_SEMVER)$(if $(GIT_REV),-g$(GIT_REV)$(GIT_DIRTY))
+# Human-readable build string: semver + commits-since-tag + short commit
+# hash, so it advances every commit, not just every tag push. Degrades to
+# bare semver in a tarball/CI build (no git, or no tag reachable -- both
+# GIT_COMMITS and GIT_REV come back empty, same as before).
+GIT_REV       := $(shell git rev-parse --short=7 HEAD 2>/dev/null)
+GIT_DIRTY     := $(shell git diff --quiet 2>/dev/null || echo -dirty)
+GIT_COMMITS   := $(if $(GIT_TAG),$(shell git rev-list --count $(GIT_TAG)..HEAD 2>/dev/null))
+GIT_VERSION   := v$(APP_FW_SEMVER)$(if $(GIT_COMMITS),-$(GIT_COMMITS))$(if $(GIT_REV),-g$(GIT_REV)$(GIT_DIRTY))
 
 # Enable NRF_LOG on SWO pin as UART TX
 NRF_LOG_UART_ON_SWO_ENABLED := 0
