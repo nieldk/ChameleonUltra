@@ -213,6 +213,60 @@ data_frame_tx_t *cmd_handler_standalone_get_result(uint16_t cmd, uint16_t status
     return data_frame_make(cmd, STATUS_SUCCESS, 4 + chunk_len, resp);
 }
 
+/* 7012 GET_RESULT_FOR
+ * Request:  { u8 mode }
+ * Response: { u32 total_size_le, u8[] chunk }  -- same wire format and
+ *           chunked-read-until-empty protocol as 7004 GET_RESULT, just
+ *           against an explicit mode instead of whatever's active.
+ */
+data_frame_tx_t *cmd_handler_standalone_get_result_for(uint16_t cmd, uint16_t status,
+        uint16_t length, uint8_t *data) {
+    (void)status;
+    if (length != 1 || data == NULL) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    standalone_mode_t mode = (standalone_mode_t)data[0];
+
+    uint8_t resp[4 + STANDALONE_RESULT_CHUNK_MAX];
+    size_t  chunk_len = 0;
+
+    standalone_rc_t rc = app_standalone_read_result_mode(mode, resp + 4,
+        STANDALONE_RESULT_CHUNK_MAX, &chunk_len);
+    if (rc == STANDALONE_RC_NO_RESULT) {
+        memset(resp, 0, 4);
+        return data_frame_make(cmd, STATUS_SUCCESS, 4, resp);
+    }
+    if (rc != STANDALONE_RC_OK) {
+        return data_frame_make(cmd, rc_to_status(rc), 0, NULL);
+    }
+
+    uint32_t total = (uint32_t)chunk_len;
+    resp[0] = (uint8_t)(total);
+    resp[1] = (uint8_t)(total >>  8);
+    resp[2] = (uint8_t)(total >> 16);
+    resp[3] = (uint8_t)(total >> 24);
+
+    return data_frame_make(cmd, STATUS_SUCCESS, 4 + chunk_len, resp);
+}
+
+/* 7013 CLEAR_RESULT_FOR
+ * Request:  { u8 mode }
+ * Response: empty
+ */
+data_frame_tx_t *cmd_handler_standalone_clear_result_for(uint16_t cmd, uint16_t status,
+        uint16_t length, uint8_t *data) {
+    (void)status;
+    if (length != 1 || data == NULL) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    standalone_mode_t mode = (standalone_mode_t)data[0];
+    standalone_rc_t rc = app_standalone_clear_result_mode(mode);
+    if (rc != STANDALONE_RC_OK) {
+        return data_frame_make(cmd, rc_to_status(rc), 0, NULL);
+    }
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
 /* 7005 CLEAR_RESULT */
 data_frame_tx_t *cmd_handler_standalone_clear_result(uint16_t cmd, uint16_t status,
         uint16_t length, uint8_t *data) {

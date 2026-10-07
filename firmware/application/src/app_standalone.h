@@ -232,6 +232,9 @@ void                app_standalone_tick(uint32_t now_ms);
 standalone_rc_t     app_standalone_read_result(uint8_t *out, size_t out_max,
         size_t *out_len);
 standalone_rc_t     app_standalone_clear_result(void);
+standalone_rc_t     app_standalone_read_result_mode(standalone_mode_t mode,
+                            uint8_t *out, size_t out_max, size_t *out_len);
+standalone_rc_t     app_standalone_clear_result_mode(standalone_mode_t mode);
 
 /* Manual trigger - host-side equivalent of BOTH_SHORT. */
 standalone_rc_t     app_standalone_trigger(void);

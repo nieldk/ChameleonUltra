@@ -2379,6 +2379,44 @@ class ChameleonCMD:
         """Discard the active mode's result buffer."""
         return self.device.send_cmd_sync(Command.STANDALONE_CLEAR_RESULT, b'')
 
+    def standalone_get_result_for(self, mode):
+        """Pull one chunk of an explicit mode's result buffer, regardless
+        of which mode (if any) is currently active.
+
+        Same cursor/chunking contract as standalone_get_result(): call
+        repeatedly until the returned chunk is empty. Each mode keeps its
+        own cursor, so this doesn't disturb any other mode's.
+
+        Returns tuple (total_size: int, chunk: bytes).
+        """
+        resp = self.device.send_cmd_sync(Command.STANDALONE_GET_RESULT_FOR,
+                                         bytes([int(mode)]), timeout=5)
+        if resp.status != Status.SUCCESS:
+            raise UnexpectedResponseError(
+                f"STANDALONE_GET_RESULT_FOR failed: status={resp.status}"
+            )
+        if len(resp.data) < 4:
+            return (0, b'')
+        total_size = struct.unpack('<I', resp.data[:4])[0]
+        chunk      = bytes(resp.data[4:])
+        return (total_size, chunk)
+
+    def standalone_drain_result_for(self, mode) -> bytes:
+        """Loop standalone_get_result_for(mode) until the chunk is empty."""
+        out = bytearray()
+        while True:
+            total_size, chunk = self.standalone_get_result_for(mode)
+            if not chunk:
+                break
+            out.extend(chunk)
+        return bytes(out)
+
+    def standalone_clear_result_for(self, mode):
+        """Discard an explicit mode's result buffer, regardless of which
+        mode (if any) is currently active."""
+        return self.device.send_cmd_sync(Command.STANDALONE_CLEAR_RESULT_FOR,
+                                         bytes([int(mode)]))
+
     def standalone_trigger(self):
         """Fire the active mode's primary action (equivalent to BOTH_SHORT).
 

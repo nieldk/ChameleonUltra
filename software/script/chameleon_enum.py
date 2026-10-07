@@ -204,6 +204,8 @@ class Command(enum.IntEnum):
     STANDALONE_RELAY_DIAG       = 7008
     STANDALONE_CANARY_EVENT     = 7010   # device -> host BLE notification (nfc_canary)
     STANDALONE_GET_AVAILABLE    = 7011
+    STANDALONE_GET_RESULT_FOR   = 7012
+    STANDALONE_CLEAR_RESULT_FOR = 7013
 
     EM410X_SET_EMU_ID = 5000
     EM410X_GET_EMU_ID = 5001

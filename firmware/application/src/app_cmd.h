@@ -72,6 +72,8 @@ data_frame_tx_t *cmd_handler_standalone_get_config(uint16_t, uint16_t, uint16_t,
 data_frame_tx_t *cmd_handler_standalone_set_config(uint16_t, uint16_t, uint16_t, uint8_t *);
 data_frame_tx_t *cmd_handler_standalone_get_result(uint16_t, uint16_t, uint16_t, uint8_t *);
 data_frame_tx_t *cmd_handler_standalone_clear_result(uint16_t, uint16_t, uint16_t, uint8_t *);
+data_frame_tx_t *cmd_handler_standalone_get_result_for(uint16_t, uint16_t, uint16_t, uint8_t *);
+data_frame_tx_t *cmd_handler_standalone_clear_result_for(uint16_t, uint16_t, uint16_t, uint8_t *);
 data_frame_tx_t *cmd_handler_standalone_trigger(uint16_t, uint16_t, uint16_t, uint8_t *);
 data_frame_tx_t *cmd_handler_standalone_disarm(uint16_t, uint16_t, uint16_t, uint8_t *);
 data_frame_tx_t *cmd_handler_standalone_get_sizes(uint16_t, uint16_t, uint16_t, uint8_t *);

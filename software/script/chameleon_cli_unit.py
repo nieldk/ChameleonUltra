@@ -5218,6 +5218,177 @@ def dict_check_table(recs):
     return "\n".join(lines)
 
 
+def _standalone_result_args_parser(description: str) -> ArgumentParserNoExit:
+    """Shared arg set for both the current-mode and per-mode get-result
+    commands, so the two stay identical rather than drifting apart."""
+    parser = ArgumentParserNoExit()
+    parser.description = description
+    parser.add_argument('-f', '--file', default=None, metavar='<path>',
+                        help='write output to file instead of stdout')
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--raw',  action='store_true',
+                       help='dump raw bytes (no parsing)')
+    group.add_argument('--json', action='store_true',
+                       help='emit parsed sessions as JSON')
+    group.add_argument('--dump', action='store_true',
+                       help='dump every frame in each session')
+    group.add_argument('--pm3', default=None, metavar='<prefix>',
+                       help='write each session as a Proxmark3 .trace (<prefix>-NN.trace)')
+    return parser
+
+
+def _standalone_render_result(args, mode, raw: bytes):
+    """Parse and print already-drained result bytes for `mode`. Shared by
+    the current-mode 'standalone get-result' and every per-mode
+    'standalone <mode> get-result' -- this is the entire body of the old
+    single on_exec(), unchanged, just taking mode/raw as parameters
+    instead of resolving them itself."""
+    import json as jsonlib
+    from pathlib import Path
+
+    if not raw:
+        print(color_string((CY, "no result data")))
+        return
+
+    if args.pm3:
+        if mode != StandaloneMode.HF14A_TAP_SNIFF:
+            print(color_string((CY, f"--pm3 applies to hf14a_tap_sniff (mode={mode.name})")))
+            return
+        import pm3_trace
+        written = pm3_trace.export_tap_sniff_sessions_to_pm3(raw, args.pm3)
+        if not written:
+            print(color_string((CY, "no sessions to export")))
+        else:
+            for fn, nframes, status in written:
+                print(color_string((CG, f"  {fn}  ({nframes} frame(s), status 0x{status:02x})")))
+        return
+
+    if args.raw or (args.file and not (args.json or args.dump)):
+        if args.file:
+            Path(args.file).write_bytes(raw)
+            print(color_string((CG, f"{len(raw)} bytes -> {args.file}")))
+        else:
+            print(color_string((CY,
+                f"{len(raw)} raw bytes (use -f to save, or --json/--dump "
+                f"to format)")))
+        return
+
+    if mode == StandaloneMode.NFC_CANARY:
+        records = canary_log_parse(raw)
+        if args.json:
+            import json as _json
+            out = _json.dumps(records, indent=2)
+            if args.file:
+                Path(args.file).write_text(out)
+                print(color_string((CG, f"-> {args.file}")))
+            else:
+                print(out)
+        else:
+            print(color_string((CG, f"{len(records)} nfc-canary window(s)")))
+            print(canary_log_table(records))
+        return
+
+    for _m, _parse, _table, _hdr in (
+        (StandaloneMode.READ_REPLAY, parse_read_replay_buffer, read_replay_table, "clone(s)"),
+        (StandaloneMode.AUTOCLONE,   parse_autoclone_buffer,   autoclone_table,   "attempt(s)"),
+    ):
+        if mode == _m:
+            recs = _parse(raw)
+            if args.json:
+                out = jsonlib.dumps(recs, indent=2)
+                if args.file:
+                    Path(args.file).write_text(out)
+                    print(color_string((CG, f"-> {args.file}")))
+                else:
+                    print(out)
+            else:
+                print(color_string((CG, f"{len(recs)} {mode.name.lower().replace('_', '-')} {_hdr}")))
+                print(_table(recs))
+            return
+
+    if mode == StandaloneMode.DICT_CHECK:
+        recs = parse_dict_check_buffer(raw)
+        if args.json:
+            out = jsonlib.dumps(recs, indent=2)
+            if args.file:
+                Path(args.file).write_text(out)
+                print(color_string((CG, f"-> {args.file}")))
+            else:
+                print(out)
+        else:
+            found = sum(1 for r in recs if r['found_a'] or r['found_b'])
+            print(color_string((CG, f"dict-check: {found}/{len(recs)} sector(s) with a known key")))
+            print(dict_check_table(recs))
+        return
+
+    if mode not in (StandaloneMode.AUTHTRACE, StandaloneMode.EMUL_TRACE,
+                    StandaloneMode.RELAY, StandaloneMode.HF14A_TAP_SNIFF):
+        print(color_string((CY,
+            f"got {len(raw)} bytes; mode={mode.name} has no parser. "
+            f"use --raw -f <path> to dump.")))
+        return
+
+    if mode == StandaloneMode.RELAY:
+        sessions = parse_relay_result_buffer(raw)
+        print(color_string((CG, f"{len(sessions)} relay session(s)")))
+        if args.json:
+            import json as _json
+            # Strip display-only fields (col, decoded) from JSON output
+            def _clean(s):
+                c = dict(s)
+                c['frames'] = [
+                    {k: v for k, v in f.items() if k not in ('col', 'decoded')}
+                    for f in c.get('frames', [])
+                ]
+                return c
+            out = _json.dumps([_clean(s) for s in sessions], indent=2)
+            if args.file:
+                Path(args.file).write_text(out)
+                print(color_string((CG, f"-> {args.file}")))
+            else:
+                print(out)
+        else:
+            print(relay_result_summary(sessions))
+        return
+
+    sessions = parse_authtrace_buffer(raw)
+    mode_label = mode.name.lower().replace('_', '-')
+    print(color_string((CG, f"{len(sessions)} {mode_label} session(s)")))
+
+    if args.json:
+        # Convert frames tuples to JSON-serializable dicts
+        json_sessions = []
+        for s in sessions:
+            json_sessions.append({
+                "session_num": s["session_num"],
+                "status_name": s["status_name"],
+                "status_code": s["status_code"],
+                "frames": [
+                    {"bits": bits, "data": data.hex(), "is_tx": is_tx}
+                    for bits, data, is_tx in s["frames"]
+                ],
+            })
+        out = jsonlib.dumps(json_sessions, indent=2)
+        if args.file:
+            Path(args.file).write_text(out)
+            print(color_string((CG, f"-> {args.file}")))
+        else:
+            print(out)
+        return
+
+    if args.dump:
+        out = authtrace_pretty_dump(sessions)
+        if args.file:
+            Path(args.file).write_text(out + "\n")
+            print(color_string((CG, f"-> {args.file}")))
+        else:
+            print(out)
+        return
+
+    # default summary
+    print(authtrace_summarise(sessions))
+
+
 @standalone.command('get-result')
 class StandaloneGetResult(DeviceRequiredUnit):
     """
@@ -5227,171 +5398,78 @@ class StandaloneGetResult(DeviceRequiredUnit):
     a one-line summary per session; --dump prints every captured frame
     in Proxmark3 style; --json emits structured data; --raw dumps the
     binary blob (use with -f to save for external decoders).
+
+    To read a specific mode's data regardless of what's currently active,
+    use `standalone <mode> get-result` instead (e.g.
+    `standalone autoclone get-result`).
     """
 
     def args_parser(self) -> ArgumentParserNoExit:
-        parser = ArgumentParserNoExit()
-        parser.description = 'Read standalone result buffer'
-        parser.add_argument('-f', '--file', default=None, metavar='<path>',
-                            help='write output to file instead of stdout')
-        group = parser.add_mutually_exclusive_group()
-        group.add_argument('--raw',  action='store_true',
-                           help='dump raw bytes (no parsing)')
-        group.add_argument('--json', action='store_true',
-                           help='emit parsed sessions as JSON')
-        group.add_argument('--dump', action='store_true',
-                           help='dump every frame in each session')
-        group.add_argument('--pm3', default=None, metavar='<prefix>',
-                           help='write each session as a Proxmark3 .trace (<prefix>-NN.trace)')
-        return parser
+        return _standalone_result_args_parser('Read standalone result buffer')
 
     def on_exec(self, args):
-        import json as jsonlib
-        from pathlib import Path
-
         _state, mode, _flags, _fds = self.cmd.standalone_get_mode()
         raw = self.cmd.standalone_drain_result()
-        if not raw:
-            print(color_string((CY, "no result data")))
-            return
+        _standalone_render_result(args, mode, raw)
 
-        if args.pm3:
-            if mode != StandaloneMode.HF14A_TAP_SNIFF:
-                print(color_string((CY, f"--pm3 applies to hf14a_tap_sniff (mode={mode.name})")))
-                return
-            import pm3_trace
-            written = pm3_trace.export_tap_sniff_sessions_to_pm3(raw, args.pm3)
-            if not written:
-                print(color_string((CY, "no sessions to export")))
+
+def _make_mode_get_result_cls(mode: StandaloneMode):
+    """Build a get-result command class fixed to one mode, for the
+    `standalone <mode> get-result` subgroups below. Shares argument
+    parsing and rendering with the current-mode command above -- only
+    which mode's buffer gets drained differs."""
+    mode_label = mode.name.lower().replace('_', '-')
+
+    class _ModeGetResult(DeviceRequiredUnit):
+        __doc__ = (f"Pull the {mode_label} mode's result buffer, regardless of "
+                   f"whether it's currently active.")
+
+        def args_parser(self) -> ArgumentParserNoExit:
+            return _standalone_result_args_parser(f'Read {mode_label} result buffer')
+
+        def on_exec(self, args):
+            raw = self.cmd.standalone_drain_result_for(mode)
+            _standalone_render_result(args, mode, raw)
+
+    return _ModeGetResult
+
+
+def _make_mode_clear_result_cls(mode: StandaloneMode):
+    """Build a clear-result command class fixed to one mode, mirroring
+    _make_mode_get_result_cls above."""
+    mode_label = mode.name.lower().replace('_', '-')
+
+    class _ModeClearResult(DeviceRequiredUnit):
+        __doc__ = (f"Discard the {mode_label} mode's result buffer, regardless "
+                   f"of whether it's currently active.")
+
+        def args_parser(self) -> ArgumentParserNoExit:
+            parser = ArgumentParserNoExit()
+            parser.description = f'Clear {mode_label} result buffer'
+            return parser
+
+        def on_exec(self, args):
+            resp = self.cmd.standalone_clear_result_for(mode)
+            if resp.status == Status.SUCCESS:
+                print(color_string((CG, "cleared")))
             else:
-                for fn, nframes, status in written:
-                    print(color_string((CG, f"  {fn}  ({nframes} frame(s), status 0x{status:02x})")))
-            return
+                print(color_string((CR, f"clear failed: status={resp.status}")))
 
-        if args.raw or (args.file and not (args.json or args.dump)):
-            if args.file:
-                Path(args.file).write_bytes(raw)
-                print(color_string((CG, f"{len(raw)} bytes -> {args.file}")))
-            else:
-                print(color_string((CY,
-                    f"{len(raw)} raw bytes (use -f to save, or --json/--dump "
-                    f"to format)")))
-            return
+    return _ModeClearResult
 
-        if mode == StandaloneMode.NFC_CANARY:
-            records = canary_log_parse(raw)
-            if args.json:
-                import json as _json
-                out = _json.dumps(records, indent=2)
-                if args.file:
-                    Path(args.file).write_text(out)
-                    print(color_string((CG, f"-> {args.file}")))
-                else:
-                    print(out)
-            else:
-                print(color_string((CG, f"{len(records)} nfc-canary window(s)")))
-                print(canary_log_table(records))
-            return
 
-        for _m, _parse, _table, _hdr in (
-            (StandaloneMode.READ_REPLAY, parse_read_replay_buffer, read_replay_table, "clone(s)"),
-            (StandaloneMode.AUTOCLONE,   parse_autoclone_buffer,   autoclone_table,   "attempt(s)"),
-        ):
-            if mode == _m:
-                recs = _parse(raw)
-                if args.json:
-                    out = jsonlib.dumps(recs, indent=2)
-                    if args.file:
-                        Path(args.file).write_text(out)
-                        print(color_string((CG, f"-> {args.file}")))
-                    else:
-                        print(out)
-                else:
-                    print(color_string((CG, f"{len(recs)} {mode.name.lower().replace('_', '-')} {_hdr}")))
-                    print(_table(recs))
-                return
-
-        if mode == StandaloneMode.DICT_CHECK:
-            recs = parse_dict_check_buffer(raw)
-            if args.json:
-                out = jsonlib.dumps(recs, indent=2)
-                if args.file:
-                    Path(args.file).write_text(out)
-                    print(color_string((CG, f"-> {args.file}")))
-                else:
-                    print(out)
-            else:
-                found = sum(1 for r in recs if r['found_a'] or r['found_b'])
-                print(color_string((CG, f"dict-check: {found}/{len(recs)} sector(s) with a known key")))
-                print(dict_check_table(recs))
-            return
-
-        if mode not in (StandaloneMode.AUTHTRACE, StandaloneMode.EMUL_TRACE,
-                        StandaloneMode.RELAY, StandaloneMode.HF14A_TAP_SNIFF):
-            print(color_string((CY,
-                f"got {len(raw)} bytes; mode={mode.name} has no parser. "
-                f"use --raw -f <path> to dump.")))
-            return
-
-        if mode == StandaloneMode.RELAY:
-            sessions = parse_relay_result_buffer(raw)
-            print(color_string((CG, f"{len(sessions)} relay session(s)")))
-            if args.json:
-                import json as _json
-                # Strip display-only fields (col, decoded) from JSON output
-                def _clean(s):
-                    c = dict(s)
-                    c['frames'] = [
-                        {k: v for k, v in f.items() if k not in ('col', 'decoded')}
-                        for f in c.get('frames', [])
-                    ]
-                    return c
-                out = _json.dumps([_clean(s) for s in sessions], indent=2)
-                if args.file:
-                    Path(args.file).write_text(out)
-                    print(color_string((CG, f"-> {args.file}")))
-                else:
-                    print(out)
-            else:
-                print(relay_result_summary(sessions))
-            return
-
-        sessions = parse_authtrace_buffer(raw)
-        mode_label = mode.name.lower().replace('_', '-')
-        print(color_string((CG, f"{len(sessions)} {mode_label} session(s)")))
-
-        if args.json:
-            # Convert frames tuples to JSON-serializable dicts
-            json_sessions = []
-            for s in sessions:
-                json_sessions.append({
-                    "session_num": s["session_num"],
-                    "status_name": s["status_name"],
-                    "status_code": s["status_code"],
-                    "frames": [
-                        {"bits": bits, "data": data.hex(), "is_tx": is_tx}
-                        for bits, data, is_tx in s["frames"]
-                    ],
-                })
-            out = jsonlib.dumps(json_sessions, indent=2)
-            if args.file:
-                Path(args.file).write_text(out)
-                print(color_string((CG, f"-> {args.file}")))
-            else:
-                print(out)
-            return
-
-        if args.dump:
-            out = authtrace_pretty_dump(sessions)
-            if args.file:
-                Path(args.file).write_text(out + "\n")
-                print(color_string((CG, f"-> {args.file}")))
-            else:
-                print(out)
-            return
-
-        # default summary
-        print(authtrace_summarise(sessions))
+# standalone <mode> get-result / clear-result for every mode: a dedicated
+# subgroup per mode, each with the same two commands as above but fixed
+# to that mode regardless of what's currently armed. e.g.
+# `standalone autoclone get-result`, `standalone autoclone clear-result`.
+for _mode in StandaloneMode:
+    if _mode == StandaloneMode.DISABLED:
+        continue
+    _mode_grp = standalone.subgroup(
+        _mode.name.lower().replace('_', '-'),
+        f"Result data for the {_mode.name.lower().replace('_', '-')} mode")
+    _mode_grp.command('get-result')(_make_mode_get_result_cls(_mode))
+    _mode_grp.command('clear-result')(_make_mode_clear_result_cls(_mode))
 
 
 @standalone.command('modes')

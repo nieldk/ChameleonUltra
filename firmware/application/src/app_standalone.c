@@ -522,6 +522,32 @@ standalone_rc_t app_standalone_clear_result(void) {
     return STANDALONE_RC_OK;
 }
 
+/* Explicit-mode variants of the two above: find_mode() instead of
+ * active_mode(), so a specific mode's result buffer can be read/cleared
+ * regardless of which mode (if any) is currently armed. Safe to use on a
+ * non-active mode: each mode's read_result()/clear_result() keeps its own
+ * read cursor and FDS lazy-load as file-local state (see mode_authtrace.c
+ * m_st for the pattern), same as app_standalone_get_result_avail() already
+ * relies on via find_mode() for GET_SIZES. */
+standalone_rc_t app_standalone_read_result_mode(standalone_mode_t mode,
+        uint8_t *out, size_t out_max, size_t *out_len) {
+    if (out == NULL || out_len == NULL) return STANDALONE_RC_INVALID_CFG;
+
+    const standalone_mode_iface_t *m = find_mode(mode);
+    if (m == NULL || m->read_result == NULL) {
+        *out_len = 0;
+        return STANDALONE_RC_NO_RESULT;
+    }
+    return m->read_result(out, out_max, out_len);
+}
+
+standalone_rc_t app_standalone_clear_result_mode(standalone_mode_t mode) {
+    const standalone_mode_iface_t *m = find_mode(mode);
+    if (m == NULL || m->clear_result == NULL) return STANDALONE_RC_NO_RESULT;
+    m->clear_result();
+    return STANDALONE_RC_OK;
+}
+
 size_t app_standalone_get_stored_size(standalone_mode_t mode) {
     if (mode >= STANDALONE_MODE__COUNT) return 0;
     uint32_t hdr = 0;
