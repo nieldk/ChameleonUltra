@@ -180,6 +180,7 @@ standalone_mode_t   app_standalone_get_mode(void);
 uint8_t             app_standalone_get_flags(void);
 
 standalone_rc_t     app_standalone_set_mode(standalone_mode_t mode, uint8_t flags);
+bool                app_standalone_mode_available(standalone_mode_t mode);
 
 standalone_rc_t     app_standalone_set_config(standalone_mode_t mode,
         const uint8_t *cfg, size_t cfg_len);

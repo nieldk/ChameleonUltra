@@ -271,6 +271,26 @@ data_frame_tx_t *cmd_handler_standalone_get_sizes(uint16_t cmd, uint16_t status,
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(resp), resp);
 }
 
+/* 7011 GET_AVAILABLE
+ * Request:  empty
+ * Response: { u8 available } × STANDALONE_MODE__COUNT
+ *           One byte per mode_id (0..N), 1 = registered in this build
+ *           (compiled in, matches CONFIG_STANDALONE_*), 0 = not built.
+ *           Lets the host tell "not available here" from "available but
+ *           failed for another reason" before even trying set-mode.
+ */
+data_frame_tx_t *cmd_handler_standalone_get_available(uint16_t cmd, uint16_t status,
+        uint16_t length, uint8_t *data) {
+    (void)status;
+    (void)length;
+    (void)data;
+    uint8_t resp[STANDALONE_MODE__COUNT];
+    for (int m = 0; m < STANDALONE_MODE__COUNT; m++) {
+        resp[m] = app_standalone_mode_available((standalone_mode_t)m) ? 1 : 0;
+    }
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(resp), resp);
+}
+
 /* 7008 RELAY_DIAG
  * Request:  empty
  * Response: { u32 adv_reports, u32 relay_hits, u8 ble_state, u8 ble_role,

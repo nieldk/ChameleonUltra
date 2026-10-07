@@ -138,6 +138,13 @@ static const standalone_mode_iface_t *find_mode(standalone_mode_t id) {
     return NULL;
 }
 
+/* True if `id` is registered in this build (DISABLED is always "available",
+ * since it's the no-op exit state, not a compiled mode). Lets the host
+ * query build-time availability (CONFIG_STANDALONE_*) without guessing. */
+bool app_standalone_mode_available(standalone_mode_t id) {
+    return id == STANDALONE_MODE_DISABLED || find_mode(id) != NULL;
+}
+
 static const standalone_mode_iface_t *active_mode(void) {
     if (m_ctx.mode == STANDALONE_MODE_DISABLED) return NULL;
     return find_mode(m_ctx.mode);

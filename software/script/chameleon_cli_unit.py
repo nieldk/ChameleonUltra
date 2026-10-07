@@ -5038,6 +5038,15 @@ class StandaloneSetMode(DeviceRequiredUnit):
             mode = StandaloneMode.from_name(args.mode)
         except ValueError as e:
             print(color_string((CR, str(e))))
+            # from_name()'s "valid: ..." list is every known name, not what
+            # this specific firmware was built with. Add that separately so
+            # a typo doesn't look like every mode is available here.
+            avail = self.cmd.standalone_get_available()
+            if avail:
+                built = [m.name.lower().replace('_', '-') for m in StandaloneMode
+                         if m != StandaloneMode.DISABLED and m < len(avail) and avail[m]]
+                print(color_string((CY,
+                    "built into this firmware: " + (", ".join(built) or "(none)"))))
             return
 
         flags = StandaloneFlag.NONE
@@ -5383,6 +5392,45 @@ class StandaloneGetResult(DeviceRequiredUnit):
 
         # default summary
         print(authtrace_summarise(sessions))
+
+
+@standalone.command('modes')
+class StandaloneModes(DeviceRequiredUnit):
+    """
+    List standalone modes and whether each is built into this firmware.
+
+    Every mode is excluded by default at build time to keep the image
+    small (see CONTRIBUTING STANDALONE.md); this shows what the connected
+    device was actually built with, queried from the device itself rather
+    than assumed.
+
+    Usage:
+        standalone modes
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'List standalone modes and build-time availability'
+        return parser
+
+    def on_exec(self, args):
+        avail = self.cmd.standalone_get_available()
+        if not avail:
+            print(color_string((CR,
+                "failed to read mode availability from device "
+                "(older firmware without this command?)")))
+            return
+
+        print(f"  {'mode':<16}  available")
+        print(f"  {'-'*16}  ---------")
+        for m in StandaloneMode:
+            if m == StandaloneMode.DISABLED:
+                continue
+            name = m.name.lower().replace('_', '-')
+            if m < len(avail) and avail[m]:
+                print(f"  {CG}{name:<16}{C0}  yes")
+            else:
+                print(f"  {name:<16}  no")
 
 
 @standalone.command('ls')

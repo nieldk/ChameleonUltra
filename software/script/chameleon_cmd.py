@@ -2434,6 +2434,20 @@ class ChameleonCMD:
         import struct
         return [struct.unpack_from('<I', resp.data, i * 4)[0] for i in range(n)]
 
+    def standalone_get_available(self) -> list:
+        """Return build-time availability for each mode, indexed by mode_id.
+
+        Queries CMD 7011. Each element is True if that mode is compiled
+        into this firmware (CONFIG_STANDALONE_*), False otherwise. Empty
+        list on failure, including older firmware that predates this
+        command -- callers should treat that as "unknown, assume all
+        named modes are available" rather than "nothing is available".
+        """
+        resp = self.device.send_cmd_sync(Command.STANDALONE_GET_AVAILABLE, b'')
+        if resp.status != Status.SUCCESS or not resp.data:
+            return []
+        return [b != 0 for b in resp.data]
+
     @expect_response(Status.SUCCESS)
     def seos_read_emu_data(self):
         resp = self.device.send_cmd_sync(Command.SEOS_READ_EMU_DATA, None)
