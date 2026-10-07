@@ -5,27 +5,19 @@ $(OUTPUT_DIRECTORY)/application.out: \
   LINKER_SCRIPT  := application.ld
 
 # ---------------------------------------------------------------------------
-# Standalone mode selection -- each of these 8 modes can be excluded to
-# shrink the image (each 0/1; default 1 = included, matching prior
-# behavior). app_standalone.c's own CONFIG_STANDALONE_<NAME> macros already
-# default to 1 via #ifndef (see the comment there: "Disable a mode by
-# undef'ing its symbol in the build") -- this is that build-side wiring.
-# Excluding a mode here removes its .c file from the build entirely (real
-# size reduction), not just its entry in the mode registry.
+# Standalone mode selection -- each of these 8 modes can be included to
+# shrink the image (each 0/1; default 0 = excluded.
 #
-# `relay` is deliberately not included here: app_cmd_standalone.c's
-# RELAY_DIAG handler (cmd 0x7008) calls into ble_relay.c/mode_relay.c
-# unconditionally, so making it optional needs that handler guarded too --
-# a separate, more invasive change, not attempted here.
+# `relay` is deliberately included by default
 # ---------------------------------------------------------------------------
-STANDALONE_AUTHTRACE       ?= 0
-STANDALONE_SLOT_CYCLE      ?= 0
-STANDALONE_AUTOCLONE       ?= 0
-STANDALONE_READ_REPLAY     ?= 0
-STANDALONE_DICT_CHECK      ?= 0
-STANDALONE_EMUL_TRACE      ?= 0
-STANDALONE_NFC_CANARY      ?= 0
-STANDALONE_HF14A_TAP_SNIFF ?= 0
+STANDALONE_AUTHTRACE       ?= 0    // disabled by default
+STANDALONE_SLOT_CYCLE      ?= 0    // disabled by default
+STANDALONE_AUTOCLONE       ?= 0    // disabled by default
+STANDALONE_READ_REPLAY     ?= 0    // disabled by default
+STANDALONE_DICT_CHECK      ?= 0    // disabled by default
+STANDALONE_EMUL_TRACE      ?= 0    // disabled by default
+STANDALONE_NFC_CANARY      ?= 0    // disabled by default
+STANDALONE_HF14A_TAP_SNIFF ?= 0    // disabled by default
 
 CFLAGS += -DCONFIG_STANDALONE_AUTHTRACE=$(STANDALONE_AUTHTRACE)
 CFLAGS += -DCONFIG_STANDALONE_SLOT_CYCLE=$(STANDALONE_SLOT_CYCLE)
