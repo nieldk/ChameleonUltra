@@ -846,7 +846,7 @@ _T55_MOD = {
 _T55_BITRATE = [8, 16, 32, 40, 50, 64, 100, 128]  # 3-bit non-extended dbr index
 
 # Detected config from `lf t55xx detect`, used as the default RF for `read`.
-_T55_DETECTED = {"rf": None, "mod": "manchester"}
+_T55_DETECTED = {"rf": None, "mod": "manchester", "maxblock": 7, "pwd_set": False}
 
 
 def _t55_parse_block0(b0):
@@ -1138,6 +1138,8 @@ class LFT55xxDetect(ReaderRequiredUnit):
                     b0, f, inv = res
                     _T55_DETECTED["rf"] = rf
                     _T55_DETECTED["mod"] = modname
+                    _T55_DETECTED["maxblock"] = f["maxblock"] or 7
+                    _T55_DETECTED["pwd_set"] = f["pwd"]
                     print(f" - T55xx detected  (block 0 = {f['block0']:08X})")
                     print(f"     modulation : {f['mod_name']}")
                     print(f"     bit rate   : RF/{f['rf']}")
@@ -1296,6 +1298,71 @@ class LFT55xxRead(ReaderRequiredUnit):
                 print(
                     f"{CR} - verify MISMATCH: {args.expect.upper()} not in stream{C0}"
                 )
+
+
+@lf_t55xx.command("dump")
+class LFT55xxDump(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "Dump T55xx memory (page 0 and page 1) at the detected (or given) "
+            "rate/modulation -- run `lf t55xx detect` first, or pass --rf/--mod "
+            "explicitly. Each block is read and framed the same way as `read`; "
+            "a block that doesn't demodulate to a stable 32-bit word is shown "
+            "as unreadable rather than guessed at."
+        )
+        parser.add_argument("--rf", type=int, default=None, metavar="<n>",
+                            help="Bitrate divisor RF/n (default: from `detect`)")
+        parser.add_argument("--mod", choices=("auto", "manchester", "biphase"),
+                            default="auto",
+                            help="Demod (default: from `detect`)")
+        parser.add_argument("-p", "--pwd", type=str, default=None, metavar="<hex>",
+                            help="Password, 4 hex bytes")
+        parser.add_argument("--blk0", type=int, default=0, metavar="<n>",
+                            help="First block of page 0 to dump (default 0)")
+        parser.add_argument("--maxblock", type=int, default=None, metavar="<n>",
+                            help="Last block of page 0 to dump (default: from `detect`, else 7)")
+        parser.add_argument("--no-page1", action="store_true",
+                            help="Skip page 1 (default: dump page 1 blocks 0-3 too)")
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        rf = args.rf if args.rf is not None else (_T55_DETECTED["rf"] or 32)
+        modname = _T55_DETECTED["mod"] if args.mod == "auto" else args.mod
+        modulation = 1 if modname == "biphase" else 0
+        maxblock = args.maxblock if args.maxblock is not None else _T55_DETECTED["maxblock"]
+        pwd = _t55_hex4(args.pwd, "pwd") if args.pwd else None
+
+        if args.rf is None and _T55_DETECTED["rf"] is None:
+            print(f"{CY} - no `detect` run yet; defaulting to RF/32 manchester. "
+                  f"Run `lf t55xx detect` first for a reliable dump, or pass --rf/--mod.{C0}")
+        print(f"{CY} T55xx tag memory -- RF/{rf} ({modname}){C0}")
+
+        self._dump_page(args.blk0, maxblock, rf, pwd, modulation, page1=False)
+        if not args.no_page1:
+            self._dump_page(0, 3, rf, pwd, modulation, page1=True)
+
+    def _dump_page(self, blk0, maxblk, rf, pwd, modulation, page1):
+        print()
+        print(f" Page {1 if page1 else 0}")
+        print(" blk | hex data | binary                           | ascii")
+        print(" ----+----------+----------------------------------+-------")
+        for blk in range(blk0, maxblk + 1):
+            n, items = self.cmd.lf_t55xx_read(
+                blk, rf, pwd, page1, modulation=modulation, downlink=True
+            )
+            if not items:
+                print(f"  {blk:02d} | -------- | {'-' * 32} | (no response)")
+                continue
+            bits = "".join("1" if b else "0" for b in items)
+            val, _note = _t55_frame_block(bits)
+            if val is None:
+                print(f"  {blk:02d} | -------- | {'-' * 32} | (no stable block)")
+                continue
+            data = val.to_bytes(4, "big")
+            binary = f"{val:032b}"
+            ascii_repr = "".join(chr(b) if 32 <= b < 127 else "." for b in data)
+            print(f"  {blk:02d} | {val:08X} | {binary} | {ascii_repr}")
 
 
 @lf_hid_prox.command("read")
