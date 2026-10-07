@@ -62,6 +62,18 @@ NRF_LOG_MODULE_REGISTER();
 #define CMD_CHINESE_WIPE            0x41
 #define CMD_CHINESE_UNLOCK_RW       0x43
 
+// GDM ("USCUID") alt magic wakeup -- same two-step shape as the gen1a
+// backdoor above (7-bit stage1 ack, then a full-byte stage2 ack), different
+// bytes. Verified against RRG proxmark3's armsrc/mifarecmd.c wakeup table
+// and a debug string literal in client/src/cmdhfmf.c ("GDM 20(7)/23").
+#define CMD_GDM_UNLOCK               0x20
+#define CMD_GDM_UNLOCK_RW            0x23
+// GDM config block backdoor opcodes (separate from the public CMD_READ/
+// CMD_WRITE 0x30/0xA0, and from normal block memory -- real GDM silicon
+// keeps its config in its own storage, not aliased to block 0).
+#define CMD_GDM_READ_CFG             0xE0
+#define CMD_GDM_WRITE_CFG            0xE1
+
 /*
 Source: NXP: MF1S50YYX Product data sheet
 
@@ -238,6 +250,13 @@ static const uint8_t abDataAccessConditions[8][2] = {
 static nfc_tag_mf1_std_state_machine_t m_mf1_state = MF1_STATE_UNAUTHENTICATED;
 // Save the current GEN1A status
 static nfc_tag_mf1_gen1a_state_machine_t m_gen1a_state = GEN1A_STATE_DISABLE;
+// GDM-alt wakeup shares the same unlocked state as gen1a (either wakeup
+// style gets you the same read/write access) -- these two only track the
+// GDM-specific config-block backdoor on top of that.
+static uint8_t m_gdm_config[NFC_TAG_MF1_DATA_SIZE] = {
+    0x85, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x08
+};
+static bool m_gen1a_write_is_cfg = false;
 // Data structure pointer to the label information
 static nfc_tag_mf1_information_t *m_tag_information = NULL;
 // Define and use shadow anti -collision resources
@@ -587,6 +606,25 @@ void nfc_tag_mf1_state_handler(uint8_t *p_data, uint16_t szDataBits) {
                 } else {
                     m_gen1a_state = GEN1A_STATE_DISABLE;                // If you find that you have not taken the first step, directly reset the Gen1a status machine
                 }
+            } else if (szDataBits == 7 && p_data[0] == CMD_GDM_UNLOCK) {
+                // GDM-alt backdoor, stage 1 -- same shape as gen1a's stage 1,
+                // shares the same state machine (either wakeup reaches the
+                // same GEN1A_STATE_UNLOCKED_RW_WAIT).
+                m_gen1a_state = GEN1A_STATE_UNLOCKING;
+                nfc_tag_14a_tx_nbit(ACK_VALUE, 4);
+            } else if (szDataBits == 8 && p_data[0] == CMD_GDM_UNLOCK_RW) {
+                // GDM-alt backdoor, stage 2
+                if (m_gen1a_state == GEN1A_STATE_UNLOCKING) {
+                    nfc_tag_14a_set_state(NFC_TAG_STATE_14A_ACTIVE);
+                    m_gen1a_state = GEN1A_STATE_UNLOCKED_RW_WAIT;
+                    m_mf1_state = MF1_STATE_UNAUTHENTICATED;
+                    nfc_tag_14a_tx_nbit(ACK_VALUE, 4);
+#ifndef NFC_MF1_FAST_SIM
+                    crypto1_deinit(pcs);
+#endif
+                } else {
+                    m_gen1a_state = GEN1A_STATE_DISABLE;
+                }
             }
         }
         // Remember, no matter what the byte frame is processed here, it will end directly after processing
@@ -697,7 +735,32 @@ void nfc_tag_mf1_state_handler(uint8_t *p_data, uint16_t szDataBits) {
                                 //Save the block and update status machine to be written
                                 CurrentAddress = p_data[1];
                                 m_gen1a_state = GEN1A_STATE_WRITING;
+                                m_gen1a_write_is_cfg = false;
                                 // Responsive ACK, let the read head continue the next step data to come over
+                                nfc_tag_14a_tx_nbit(ACK_VALUE, 4);
+                            } else {
+                                nfc_tag_14a_tx_nbit(NAK_INVALID_OPERATION_TBIV, 4);
+                                nfc_tag_mf1_reset_handler();
+                            }
+                            break;
+                        }
+                        case CMD_GDM_READ_CFG: {
+                            // Separate storage from block memory -- a real GDM
+                            // card's config block is not aliased to block 0,
+                            // unlike this card's own opcode-agnostic CMD_READ.
+                            if (m_gen1a_state == GEN1A_STATE_UNLOCKED_RW_WAIT) {
+                                memcpy(m_tag_tx_buffer.tx_raw_buffer, m_gdm_config, NFC_TAG_MF1_DATA_SIZE);
+                                nfc_tag_14a_tx_bytes(m_tag_tx_buffer.tx_raw_buffer, NFC_TAG_MF1_DATA_SIZE, true);
+                            } else {
+                                nfc_tag_14a_tx_nbit(NAK_INVALID_OPERATION_TBIV, 4);
+                                nfc_tag_mf1_reset_handler();
+                            }
+                            break;
+                        }
+                        case CMD_GDM_WRITE_CFG: {
+                            if (m_gen1a_state == GEN1A_STATE_UNLOCKED_RW_WAIT) {
+                                m_gen1a_state = GEN1A_STATE_WRITING;
+                                m_gen1a_write_is_cfg = true;
                                 nfc_tag_14a_tx_nbit(ACK_VALUE, 4);
                             } else {
                                 nfc_tag_14a_tx_nbit(NAK_INVALID_OPERATION_TBIV, 4);
@@ -724,7 +787,12 @@ void nfc_tag_mf1_state_handler(uint8_t *p_data, uint16_t szDataBits) {
                     // Determine that we are written into the block operation under the Gen1a mode
                     if (nfc_tag_14a_checks_crc(p_data, NFC_TAG_MF1_FRAME_SIZE)) {
                         // The data verification passes, we need to put the data sent in RAM
-                        memcpy(m_tag_information->memory[CurrentAddress], p_data, NFC_TAG_MF1_DATA_SIZE);
+                        if (m_gen1a_write_is_cfg) {
+                            memcpy(m_gdm_config, p_data, NFC_TAG_MF1_DATA_SIZE);
+                        } else {
+                            memcpy(m_tag_information->memory[CurrentAddress], p_data, NFC_TAG_MF1_DATA_SIZE);
+                        }
+                        m_gen1a_write_is_cfg = false;
                         // Restore the Gen1A special state machine for waiting operation status
                         m_gen1a_state = GEN1A_STATE_UNLOCKED_RW_WAIT;
                         // Reply to read head ACK, complete the writing operation
@@ -1243,6 +1311,7 @@ nfc_tag_14a_coll_res_reference_t *get_saved_mifare_coll_res() {
 void nfc_tag_mf1_reset_handler() {
     m_mf1_state = MF1_STATE_UNAUTHENTICATED;
     m_gen1a_state = GEN1A_STATE_DISABLE;
+    m_gen1a_write_is_cfg = false;
     nfc_tag_14a_set_state(NFC_TAG_STATE_14A_IDLE);
 
 #ifndef NFC_MF1_FAST_SIM
