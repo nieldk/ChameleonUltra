@@ -3215,16 +3215,21 @@ def _nonce_cracking_lines(frames) -> list:
             import itertools
             # Case A: any completed auth carries the tag answer {at} (the 4-byte
             # card->reader frame right after {nr}{ar}). mfkey64 is deterministic
-            # given the *same* auth's {at} — never the next auth's nt.
-            found_at = False
+            # given the *same* auth's {at} — never the next auth's nt. Only an
+            # actual recovered key stops here -- a missing/blocked binary or
+            # "no key found" still falls through to offer mfkey32v2 below,
+            # rather than leaving a dead end when mfkey64 isn't runnable.
+            had_at = False
+            found_key = False
             for n in ns:
                 if n.get('at'):
-                    found_at = True
+                    had_at = True
                     cmd64 = f"mfkey64 {uid} {n['nt']} {n['nr']} {n['ar']} {n['at']}"
                     lines.append(f"     {CC}mfkey64:{C0} {cmd64}")
                     key = _run_mfkey64(uid, n['nt'], n['nr'], n['ar'], n['at'])
                     if key not in (_TOOL_MISSING, _TOOL_BLOCKED, _TOOL_NO_KEY):
                         lines.append(f"     {CG}Key: [{key.upper()}]{C0}")
+                        found_key = True
                     elif key == _TOOL_MISSING:
                         lines.append(f"     {CY}mfkey64 binary not found in bin/ — "
                               f"copy the command above and run it manually{C0}")
@@ -3236,10 +3241,11 @@ def _nonce_cracking_lines(frames) -> list:
                         lines.append(f"     {CR}mfkey64 found no key{C0}")
                     break
 
-            if not found_at:
+            if not found_key:
                 if len(ns) >= 2:
-                    # Case B: no {at}, but two or more clean nonces for the same
-                    # block/key. Run mfkey32v2 over every nonce pair; a real key
+                    # Case B: two or more clean nonces for the same block/key,
+                    # and mfkey64 either wasn't available or didn't pan out --
+                    # offer mfkey32v2 too, over every nonce pair; a real key
                     # shows up as the single candidate common to the pairs.
                     possible_keys = set()
                     for n0, n1 in itertools.combinations(ns, 2):
@@ -3264,12 +3270,17 @@ def _nonce_cracking_lines(frames) -> list:
                     else:
                         lines.append(f"     {CG}Key candidates: [{', '.join(sorted(possible_keys))}]{C0}")
                 else:
-                    # One clean nonce triple, no {at}: not yet crackable. Show the
-                    # two correct ways to finish.
+                    # One clean nonce triple and no key yet: not crackable from
+                    # this alone. Show whichever paths are still open -- the
+                    # mfkey64 template only if {at} was never captured
+                    # (otherwise the real command and its outcome are already
+                    # shown above); mfkey32v2's template always, since a 2nd
+                    # nonce isn't in hand yet.
                     n = ns[0]
                     lines.append(f"     {CY}One clean nonce (nt/nr/ar) captured — not yet crackable.{C0}")
-                    lines.append(f"     {CC}mfkey64  (add this auth's {{at}}):{C0} "
-                          f"mfkey64 {uid} {n['nt']} {n['nr']} {n['ar']} <at>")
+                    if not had_at:
+                        lines.append(f"     {CC}mfkey64  (add this auth's {{at}}):{C0} "
+                              f"mfkey64 {uid} {n['nt']} {n['nr']} {n['ar']} <at>")
                     lines.append(f"     {CC}mfkey32v2 (add a 2nd clean nonce):{C0} "
                           f"mfkey32v2 {uid} {n['nt']} {n['nr']} {n['ar']} <nt2> <nr2> <ar2>")
 
