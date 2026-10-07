@@ -3168,6 +3168,33 @@ def _print_14a_sniff_summary(frames):
         print(f" {CC}Note     :{C0} anti-collision incomplete — no SELECT seen (reader could not complete exchange)")
 
     # ── Nonce cracking ─────────────────────────────────────────────────────
+    for line in _nonce_cracking_lines(frames):
+        print(line)
+
+
+def _nonce_cracking_lines(frames) -> list:
+    """Nonce extraction + mfkey64/mfkey32v2 cracking attempt, as display
+    lines rather than direct prints, so both _print_14a_sniff_summary and
+    authtrace_pretty_dump can use it -- the latter builds a string (for -f
+    file output) rather than printing directly. auth_seen is recomputed
+    here (cheap single-pass scan) rather than threaded in as a parameter,
+    so this stays a self-contained, single-argument function.
+
+    Three cases, in order of how little is needed to crack:
+      A. Any clean nonce has {at} (the encrypted auth ack) -> mfkey64,
+         deterministic from a single auth exchange.
+      B. No {at}, but 2+ clean nonces for the same block/key -> mfkey32v2
+         across every pair combination; a real key is the candidate common
+         to all of them.
+      C. Exactly one clean nonce, no {at} -> not yet crackable; show both
+         ready-to-fill commands so it's clear what to capture next.
+    """
+    lines = []
+    auth_seen = any(
+        (not is_tx) and sz_bits == 32 and len(data) == 4 and data[0] in (0x60, 0x61)
+        for sz_bits, data, is_tx in (f[:3] for f in frames)
+    )
+
     nonces = _extract_sniff_nonces(frames)
     if nonces:
         from collections import defaultdict
@@ -3175,15 +3202,15 @@ def _print_14a_sniff_summary(frames):
         for n in nonces:
             groups[(n['uid'], n['block'], n['key_type'])].append(n)
 
-        print()
-        print(f" {'-'*55}")
+        lines.append("")
+        lines.append(f" {'-'*55}")
         total = sum(len(v) for v in groups.values())
-        print(f" {CC}Nonces   :{C0} {total} auth exchange(s) captured")
+        lines.append(f" {CC}Nonces   :{C0} {total} auth exchange(s) captured")
 
         for (uid, block, kt), ns in groups.items():
-            print(f"   Block {block} Key {kt}  uid={uid}")
+            lines.append(f"   Block {block} Key {kt}  uid={uid}")
             for idx, n in enumerate(ns):
-                print(f"     [{idx}] nt={n['nt']}  nr={n['nr']}  ar={n['ar']} at={n['at']}")
+                lines.append(f"     [{idx}] nt={n['nt']}  nr={n['nr']}  ar={n['ar']} at={n['at']}")
 
             import itertools
             # Case A: any completed auth carries the tag answer {at} (the 4-byte
@@ -3194,19 +3221,19 @@ def _print_14a_sniff_summary(frames):
                 if n.get('at'):
                     found_at = True
                     cmd64 = f"mfkey64 {uid} {n['nt']} {n['nr']} {n['ar']} {n['at']}"
-                    print(f"     {CC}mfkey64:{C0} {cmd64}")
+                    lines.append(f"     {CC}mfkey64:{C0} {cmd64}")
                     key = _run_mfkey64(uid, n['nt'], n['nr'], n['ar'], n['at'])
                     if key not in (_TOOL_MISSING, _TOOL_BLOCKED, _TOOL_NO_KEY):
-                        print(f"     {CG}Key: [{key.upper()}]{C0}")
+                        lines.append(f"     {CG}Key: [{key.upper()}]{C0}")
                     elif key == _TOOL_MISSING:
-                        print(f"     {CY}mfkey64 binary not found in bin/ — "
+                        lines.append(f"     {CY}mfkey64 binary not found in bin/ — "
                               f"copy the command above and run it manually{C0}")
                     elif key == _TOOL_BLOCKED:
-                        print(f"     {CY}mfkey64 could not be executed "
+                        lines.append(f"     {CY}mfkey64 could not be executed "
                               f"(antivirus / permissions) — "
                               f"run the command above manually{C0}")
                     else:
-                        print(f"     {CR}mfkey64 found no key{C0}")
+                        lines.append(f"     {CR}mfkey64 found no key{C0}")
                     break
 
             if not found_at:
@@ -3218,47 +3245,49 @@ def _print_14a_sniff_summary(frames):
                     for n0, n1 in itertools.combinations(ns, 2):
                         cmd32 = (f"mfkey32v2 {uid} {n0['nt']} {n0['nr']} {n0['ar']}"
                                  f" {n1['nt']} {n1['nr']} {n1['ar']}")
-                        print(f"     {CC}mfkey32v2:{C0} {cmd32}")
+                        lines.append(f"     {CC}mfkey32v2:{C0} {cmd32}")
                         key = _run_mfkey32v2_sniff(n0, n1)
                         if key not in (_TOOL_MISSING, _TOOL_BLOCKED, _TOOL_NO_KEY):
                             possible_keys.add(key.upper())
                         elif key == _TOOL_MISSING:
-                            print(f"     {CY}mfkey32v2 binary not found in bin/ — "
+                            lines.append(f"     {CY}mfkey32v2 binary not found in bin/ — "
                                   f"run the commands above manually{C0}")
                         elif key == _TOOL_BLOCKED:
-                            print(f"     {CY}mfkey32v2 could not be executed "
+                            lines.append(f"     {CY}mfkey32v2 could not be executed "
                                   f"(antivirus / permissions) — "
                                   f"run the commands above manually{C0}")
                     if len(possible_keys) == 0:
-                        print(f"     {CR}mfkey32v2 found no key — "
+                        lines.append(f"     {CR}mfkey32v2 found no key — "
                               f"capture more nonce exchanges and retry{C0}")
                     elif len(possible_keys) == 1:
-                        print(f"     {CG}Key: [{next(iter(possible_keys))}]{C0}")
+                        lines.append(f"     {CG}Key: [{next(iter(possible_keys))}]{C0}")
                     else:
-                        print(f"     {CG}Key candidates: [{', '.join(sorted(possible_keys))}]{C0}")
+                        lines.append(f"     {CG}Key candidates: [{', '.join(sorted(possible_keys))}]{C0}")
                 else:
                     # One clean nonce triple, no {at}: not yet crackable. Show the
                     # two correct ways to finish.
                     n = ns[0]
-                    print(f"     {CY}One clean nonce (nt/nr/ar) captured — not yet crackable.{C0}")
-                    print(f"     {CC}mfkey64  (add this auth's {{at}}):{C0} "
+                    lines.append(f"     {CY}One clean nonce (nt/nr/ar) captured — not yet crackable.{C0}")
+                    lines.append(f"     {CC}mfkey64  (add this auth's {{at}}):{C0} "
                           f"mfkey64 {uid} {n['nt']} {n['nr']} {n['ar']} <at>")
-                    print(f"     {CC}mfkey32v2 (add a 2nd clean nonce):{C0} "
+                    lines.append(f"     {CC}mfkey32v2 (add a 2nd clean nonce):{C0} "
                           f"mfkey32v2 {uid} {n['nt']} {n['nr']} {n['ar']} <nt2> <nr2> <ar2>")
 
     elif auth_seen:
         # Reader-side auth was captured but no clean nonce survived — the
         # card-side NT came back garbled. Say so, so it's clear the reader path
         # works and only the RC522 NT capture is the blocker.
-        n_auth = sum(1 for _szb, _d, _tx in frames
+        n_auth = sum(1 for _szb, _d, _tx in (f[:3] for f in frames)
                      if (not _tx) and _szb == 32 and len(_d) == 4 and _d[0] in (0x60, 0x61))
-        print()
-        print(f" {'-'*55}")
-        print(f" {CC}Nonces   :{C0} {CY}{n_auth} AUTH captured, but every card nonce (NT) "
+        lines.append("")
+        lines.append(f" {'-'*55}")
+        lines.append(f" {CC}Nonces   :{C0} {CY}{n_auth} AUTH captured, but every card nonce (NT) "
               f"came back garbled{C0}")
-        print(f"   Reader side is clean (AUTH + NR||AR present); the RC522 is mangling")
-        print(f"   the 4-byte NT. One clean 32-bit NT in the frame right after an AUTH")
-        print(f"   is all that's needed to crack.")
+        lines.append(f"   Reader side is clean (AUTH + NR||AR present); the RC522 is mangling")
+        lines.append(f"   the 4-byte NT. One clean 32-bit NT in the frame right after an AUTH")
+        lines.append(f"   is all that's needed to crack.")
+
+    return lines
 
 
 # Sample period of the last `lf sniff` capture, in microseconds. 8 for a
@@ -4782,27 +4811,11 @@ def authtrace_pretty_dump(sessions):
                 f"{hex_str:<42}  {col}{decoded}{C0}"
             )
 
-        # Nonce summary + mfkey32v2 invocations
-        nonces = _extract_sniff_nonces(frames)
-        if nonces:
-            out.append(f"\n  {CG}Auth nonces captured:{C0}")
-            pairs_by_key = {}
-            for nc in nonces:
-                k = (nc['uid'], nc['block'], nc['key_type'])
-                pairs_by_key.setdefault(k, []).append(nc)
-            for (uid, block, kt), pair_list in pairs_by_key.items():
-                out.append(
-                    f"    UID={uid}  block=0x{block:02X}  Key{kt}  "
-                    f"{len(pair_list)} pair(s)"
-                )
-                if len(pair_list) >= 2:
-                    n0, n1 = pair_list[0], pair_list[1]
-                    cmd = (
-                        f"mfkey32v2 {uid} "
-                        f"{n0['nt']} {n0['nr']} {n0['ar']} "
-                        f"{n1['nt']} {n1['nr']} {n1['ar']}"
-                    )
-                    out.append(f"    {CG}mfkey32v2: {cmd}{C0}")
+        # Nonce summary + mfkey64/mfkey32v2 cracking attempt -- shared with
+        # _print_14a_sniff_summary so --dump gets the same raw nt/nr/ar/at
+        # values and crack attempts the default (non-dump) summary already
+        # had, rather than a second, weaker reimplementation.
+        out.extend(_nonce_cracking_lines(frames))
     return "\n".join(out)
 
 
@@ -5268,9 +5281,12 @@ def _standalone_render_result(args, mode, raw: bytes):
             Path(args.file).write_bytes(raw)
             print(color_string((CG, f"{len(raw)} bytes -> {args.file}")))
         else:
-            print(color_string((CY,
-                f"{len(raw)} raw bytes (use -f to save, or --json/--dump "
-                f"to format)")))
+            print(color_string((CY, f"{len(raw)} raw bytes:")))
+            for off in range(0, len(raw), 16):
+                chunk = raw[off:off + 16]
+                hex_part = ' '.join(f'{b:02x}' for b in chunk)
+                ascii_part = ''.join(chr(b) if 32 <= b < 127 else '.' for b in chunk)
+                print(f"  {off:04x}  {hex_part:<47}  {ascii_part}")
         return
 
     if mode == StandaloneMode.NFC_CANARY:
