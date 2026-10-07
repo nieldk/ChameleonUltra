@@ -4,6 +4,38 @@ TARGETS          := application
 $(OUTPUT_DIRECTORY)/application.out: \
   LINKER_SCRIPT  := application.ld
 
+# ---------------------------------------------------------------------------
+# Standalone mode selection -- each of these 8 modes can be excluded to
+# shrink the image (each 0/1; default 1 = included, matching prior
+# behavior). app_standalone.c's own CONFIG_STANDALONE_<NAME> macros already
+# default to 1 via #ifndef (see the comment there: "Disable a mode by
+# undef'ing its symbol in the build") -- this is that build-side wiring.
+# Excluding a mode here removes its .c file from the build entirely (real
+# size reduction), not just its entry in the mode registry.
+#
+# `relay` is deliberately not included here: app_cmd_standalone.c's
+# RELAY_DIAG handler (cmd 0x7008) calls into ble_relay.c/mode_relay.c
+# unconditionally, so making it optional needs that handler guarded too --
+# a separate, more invasive change, not attempted here.
+# ---------------------------------------------------------------------------
+STANDALONE_AUTHTRACE       ?= 0
+STANDALONE_SLOT_CYCLE      ?= 0
+STANDALONE_AUTOCLONE       ?= 0
+STANDALONE_READ_REPLAY     ?= 0
+STANDALONE_DICT_CHECK      ?= 0
+STANDALONE_EMUL_TRACE      ?= 0
+STANDALONE_NFC_CANARY      ?= 0
+STANDALONE_HF14A_TAP_SNIFF ?= 0
+
+CFLAGS += -DCONFIG_STANDALONE_AUTHTRACE=$(STANDALONE_AUTHTRACE)
+CFLAGS += -DCONFIG_STANDALONE_SLOT_CYCLE=$(STANDALONE_SLOT_CYCLE)
+CFLAGS += -DCONFIG_STANDALONE_AUTOCLONE=$(STANDALONE_AUTOCLONE)
+CFLAGS += -DCONFIG_STANDALONE_READ_REPLAY=$(STANDALONE_READ_REPLAY)
+CFLAGS += -DCONFIG_STANDALONE_DICT_CHECK=$(STANDALONE_DICT_CHECK)
+CFLAGS += -DCONFIG_STANDALONE_EMUL_TRACE=$(STANDALONE_EMUL_TRACE)
+CFLAGS += -DCONFIG_STANDALONE_NFC_CANARY=$(STANDALONE_NFC_CANARY)
+CFLAGS += -DCONFIG_STANDALONE_HF14A_TAP_SNIFF=$(STANDALONE_HF14A_TAP_SNIFF)
+
 # Source files common to all targets
 SRC_FILES += \
   $(SRC_COMMON)/hw_connect.c \
@@ -16,17 +48,7 @@ SRC_FILES += \
   $(PROJ_DIR)/app_standalone.c \
   $(PROJ_DIR)/app_cmd_standalone.c \
   $(PROJ_DIR)/standalone_led.c \
-  $(PROJ_DIR)/standalone_modes/mf1_dict.c \
-  $(PROJ_DIR)/standalone_modes/mode_authtrace.c \
-  $(PROJ_DIR)/standalone_modes/mode_slot_cycle.c \
-  $(PROJ_DIR)/standalone_modes/mode_emultrace.c \
   $(PROJ_DIR)/standalone_modes/mode_relay.c \
-  $(PROJ_DIR)/standalone_modes/mode_hf14a_tap_sniff.c \
-  $(PROJ_DIR)/standalone_modes/nfc_canary_core.c \
-  $(PROJ_DIR)/standalone_modes/mode_nfc_canary.c \
-  $(PROJ_DIR)/standalone_modes/mode_autoclone.c \
-  $(PROJ_DIR)/standalone_modes/mode_read_replay.c \
-  $(PROJ_DIR)/standalone_modes/mode_dict_check.c \
   $(PROJ_DIR)/ble_relay.c \
   $(PROJ_DIR)/rfid/nfctag/hf/nfc_relay_tag.c \
   $(PROJ_DIR)/usb_main.c \
@@ -198,6 +220,38 @@ SRC_FILES += \
   $(SDK_ROOT)/components/libraries/crypto/backend/oberon/oberon_backend_eddsa.c \
   $(SDK_ROOT)/components/libraries/crypto/backend/oberon/oberon_backend_hash.c \
   $(SDK_ROOT)/components/libraries/crypto/backend/oberon/oberon_backend_hmac.c \
+
+ifeq ($(STANDALONE_AUTHTRACE),1)
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_authtrace.c
+endif
+ifeq ($(STANDALONE_SLOT_CYCLE),1)
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_slot_cycle.c
+endif
+ifeq ($(STANDALONE_EMUL_TRACE),1)
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_emultrace.c
+endif
+ifeq ($(STANDALONE_HF14A_TAP_SNIFF),1)
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_hf14a_tap_sniff.c
+endif
+ifeq ($(STANDALONE_NFC_CANARY),1)
+SRC_FILES += $(PROJ_DIR)/standalone_modes/nfc_canary_core.c
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_nfc_canary.c
+endif
+ifeq ($(STANDALONE_AUTOCLONE),1)
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_autoclone.c
+endif
+ifeq ($(STANDALONE_READ_REPLAY),1)
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_read_replay.c
+endif
+ifeq ($(STANDALONE_DICT_CHECK),1)
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_dict_check.c
+endif
+# mf1_dict.c is shared between autoclone and dict_check -- include it if
+# either is enabled (ifneq-on-nonempty, not ifeq-on-"1": filter returns
+# "1 1" when BOTH are enabled, which would never match a plain "1").
+ifneq (,$(filter 1,$(STANDALONE_AUTOCLONE) $(STANDALONE_DICT_CHECK)))
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mf1_dict.c
+endif
 
 # Include folders common to all targets
 INC_FOLDERS += \
