@@ -10,14 +10,14 @@ $(OUTPUT_DIRECTORY)/application.out: \
 #
 # `relay` is deliberately included by default
 # ---------------------------------------------------------------------------
-STANDALONE_AUTHTRACE       ?= 0    // disabled by default
-STANDALONE_SLOT_CYCLE      ?= 0    // disabled by default
-STANDALONE_AUTOCLONE       ?= 0    // disabled by default
-STANDALONE_READ_REPLAY     ?= 0    // disabled by default
-STANDALONE_DICT_CHECK      ?= 0    // disabled by default
-STANDALONE_EMUL_TRACE      ?= 0    // disabled by default
-STANDALONE_NFC_CANARY      ?= 0    // disabled by default
-STANDALONE_HF14A_TAP_SNIFF ?= 0    // disabled by default
+STANDALONE_AUTHTRACE       ?= 0   # disabled by default
+STANDALONE_SLOT_CYCLE      ?= 0   # disabled by default
+STANDALONE_AUTOCLONE       ?= 0   # disabled by default
+STANDALONE_READ_REPLAY     ?= 0   # disabled by default
+STANDALONE_DICT_CHECK      ?= 0   # disabled by default
+STANDALONE_EMUL_TRACE      ?= 0   # disabled by default
+STANDALONE_NFC_CANARY      ?= 0   # disabled by default
+STANDALONE_HF14A_TAP_SNIFF ?= 0   # disabled by default
 
 CFLAGS += -DCONFIG_STANDALONE_AUTHTRACE=$(STANDALONE_AUTHTRACE)
 CFLAGS += -DCONFIG_STANDALONE_SLOT_CYCLE=$(STANDALONE_SLOT_CYCLE)
