@@ -624,8 +624,15 @@ void nfc_tag_14a_data_process(uint8_t *p_data) {
                     m_tag_state_14a = NFC_TAG_STATE_14A_HALTED;
                     return;
                 }
-                // RATS instruction
-                if (p_data[0] == NFC_TAG_14A_CMD_RATS && nfc_tag_14a_checks_crc(p_data, 4)) {
+                // RATS instruction. Gated on the SAK's ISO14443-4 bit, same
+                // reasoning as the PPS guard below: a non-ISO14443-4 tag
+                // (MIFARE Classic, incl. gen1a/GDM magic backdoor mode) never
+                // answers RATS, and 0xE0 is also the GDM backdoor's config-read
+                // opcode -- without this guard every such tag's 0xE0 frame was
+                // swallowed here (NAK'd, state reset) before ever reaching its
+                // own cb_state, regardless of what 0xE0 means to that tag type.
+                if ((auto_coll_res->sak[0] & 0x20) &&
+                        p_data[0] == NFC_TAG_14A_CMD_RATS && nfc_tag_14a_checks_crc(p_data, 4)) {
                     // Make sure the sub -packaging opens the support of ATS
                     if (auto_coll_res->ats->length > 0) {
                         // Take out FSD and return according to the maximum FSD
