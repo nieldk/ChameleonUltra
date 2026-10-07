@@ -9,6 +9,13 @@ Most built-in modes are **safe by default**: they never write to a target card
 or to your emulation slots. The few that do (`autoclone`, `read_replay`) must
 declare it, and the framework refuses to arm them unless you pass `--opt-in`.
 
+Every mode except `relay` is **excluded by default at build time** to keep
+the image small; `relay` ships included. If `standalone set-mode <name>`
+can't find a mode documented here, it most likely wasn't built in — see
+[`CONTRIBUTING STANDALONE.md`](CONTRIBUTING%20STANDALONE.md#3-add-to-the-makefile)
+for the build flags, or ask whoever built your firmware which modes they
+included.
+
 ## How every mode works (the pattern)
 
 1. **Select** the mode: `standalone set-mode <name>`

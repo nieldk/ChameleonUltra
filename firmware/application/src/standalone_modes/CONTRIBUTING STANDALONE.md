@@ -102,12 +102,61 @@ If reader hardware is required, combine the gates:
 
 ### 3. Add to the Makefile
 
-Open `firmware/application/Makefile` and add your source file to
-`SRC_FILES`:
+Every mode is build-time optional, so `mode_my_mode.c` is added to
+`SRC_FILES` conditionally, not in the plain unconditional list. Open
+`firmware/application/Makefile` and add, near the other `STANDALONE_*`
+variables:
 
 ```makefile
-$(PROJ_DIR)/standalone_modes/mode_my_mode.c \
+STANDALONE_MY_MODE ?= 0   # disabled by default
 ```
+
+(or `?= 1` if your mode should ship enabled by default — match the
+`#define CONFIG_STANDALONE_MY_MODE` default you set in step 2). Add the
+matching CFLAGS line next to the others:
+
+```makefile
+CFLAGS += -DCONFIG_STANDALONE_MY_MODE=$(STANDALONE_MY_MODE)
+```
+
+Then add the source file in its own conditional block, after the main
+`SRC_FILES += \ ... \` chain ends (not inside it — splicing a bare
+`ifeq`/`SRC_FILES +=` into the middle of a backslash-continued block
+breaks the continuation and fails the build with a cryptic "missing
+separator" error):
+
+```makefile
+ifeq ($(strip $(STANDALONE_MY_MODE)),1)
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_my_mode.c
+endif
+```
+
+Use `$(strip ...)` in the `ifeq`, not a bare `$(STANDALONE_MY_MODE)` —
+a trailing-space comment on the default line (`?= 0   # disabled by
+default`) otherwise makes the variable's value `"0   "`, which an
+unstripped `ifeq (...,1)` compares as unequal to `"1"` even when you
+pass `STANDALONE_MY_MODE=1` the same way. `$(strip ...)` is just a
+style nit when the variable's definition has no trailing comment, but
+costs nothing to include and avoids this class of bug entirely.
+
+**Before assuming your mode's `.c` file can simply be left out of the
+build when its flag is 0**, grep for any symbol it defines (functions,
+`extern`-shared globals) from outside `standalone_modes/`:
+
+```
+grep -rn "my_symbol_name" firmware/application/src --include=*.c | grep -v standalone_modes/mode_my_mode.c
+```
+
+A successful build with the flag at 1 does not prove isolation — it
+only proves the symbol is defined somewhere. The real test is building
+with the flag at 0 and watching for linker errors. `relay` is the
+cautionary example: `app_cmd_standalone.c`'s `RELAY_DIAG` handler
+called `ble_relay.c` functions directly with no guard, and `ble_main.c`
+(battery management, always built) read a global defined inside
+`mode_relay.c` for an unrelated reason (suppressing low-battery
+shutdown while relay is armed). Both had to be found and guarded
+before `STANDALONE_RELAY=0` would link — a clean build at the default
+hid both until exclusion was actually tried.
 
 ### 4. Add an LED color
 
@@ -266,6 +315,9 @@ Before submitting a PR, verify:
 
 - [ ] Builds clean for both Ultra and Lite (`PROJECT_CHAMELEON_ULTRA`
   defined and undefined)
+- [ ] Builds clean with your mode's flag at 0 (e.g.
+  `make STANDALONE_MY_MODE=0`) — catches any symbol your mode exports
+  that something outside `standalone_modes/` references directly
 - [ ] `standalone status` returns correct state after `set-mode`
 - [ ] Mode config persists across a power cycle (`standalone config <mode>` after reboot shows correct values)
 - [ ] Arm / disarm via button chord works (ARMED_IDLE state confirmed

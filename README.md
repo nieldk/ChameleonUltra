@@ -59,6 +59,11 @@ Then flash with the UF2 helper:
 Other flash paths (`flash-dfu-app.sh`, `flash-dfu-full.sh`) remain available
 for SWD and signed-DFU workflows.
 
+Standalone modes you don't use can be excluded at build time to shrink the
+image — relay ships on by default, the rest off; opt a mode in or out with
+an env var prefix, e.g. `STANDALONE_AUTOCLONE=1 ./build.sh`. See
+[`CONTRIBUTING STANDALONE.md`](firmware/application/src/standalone_modes/CONTRIBUTING%20STANDALONE.md#3-add-to-the-makefile).
+
 ## Revert to stock
 
 You don't need to change the bootloader to run stock firmware — this fork's

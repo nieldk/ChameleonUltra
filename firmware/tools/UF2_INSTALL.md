@@ -103,6 +103,13 @@ Use flash-dfu-sdbl.sh to install both stages.
 ==========================================================
 ```
 
+Standalone modes you don't use can be excluded to shrink the image — relay
+ships on by default, the rest off; opt in/out with an env var prefix, e.g.
+`STANDALONE_AUTOCLONE=1 ./build.sh`. See
+[`CONTRIBUTING STANDALONE.md`](../application/src/standalone_modes/CONTRIBUTING%20STANDALONE.md#3-add-to-the-makefile).
+A smaller app image is also the usual fix for serial-DFU stalling near
+completion — see Troubleshooting below.
+
 Artifacts land in `firmware/objects/` (Lite builds carry a `lite-` prefix):
 
 | File                    | Purpose                                                                                            |
@@ -278,6 +285,17 @@ means a corrupt bootloader build — rebuild clean. Windows: try another USB por
 (descriptor caching). macOS: `system_profiler SPUSBDataType`.
 
 **`FAIL.TXT` after a drop** — read it; see the reasons table in Step 7.
+
+**Serial DFU (`flash-dfu-app.sh`/`nrfutil device program`) stalls near 100%
+and times out, app not updated** — seen on larger application images; the
+bootloader's post-data validation does a single blocking CRC32 over the
+whole received image before replying, so a bigger image means a longer
+silent window, and some hosts give up first before the device responds.
+Not yet confirmed as the actual cause, and not yet confirmed that trimming
+the image fixes it — but it's the leading theory and worth trying: build
+with some `STANDALONE_*` flags off (above) for a smaller image, or use the
+UF2 drive instead of serial DFU for that flash — UF2 is a raw write, no
+equivalent blocking step.
 
 ---
 
