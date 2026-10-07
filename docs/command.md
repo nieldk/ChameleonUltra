@@ -1,6 +1,6 @@
 # Phreakbyte CLI Command Reference
 
-Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 29 command groups, 169 commands.
+Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 29 command groups, 170 commands.
 
 Notation: `<...>` are values you supply. Each option lists its flags, help, allowed `choices`, whether it is `required`, and its `default`. Run any command with `-h` in the client for the same information live.
 
@@ -1414,6 +1414,17 @@ T55xx/T5577 raw block commands
 Detect a T55xx tag by reading block 0 and stride-locking its config: slides a 32-bit window over the demodulated stream and accepts the first window that repeats and parses to a valid config at the read rate. Tries Manchester (amplitude path) and biphase (firmware diphase). FSK/PSK are not wired; streaming tags with no addressable config block (e.g. FDX-B) are reported as such. Sets the default RF/n for subsequent `read`.
 
 - `-p`, `--pwd` — Password, 4 hex bytes (if block 0 is read-protected)
+
+#### `lf t55xx dump`
+
+Dump T55xx memory (page 0 and page 1) at the detected (or given) rate/modulation -- run `lf t55xx detect` first, or pass --rf/--mod explicitly. Each block is read and framed the same way as `read`; a block that doesn't demodulate to a stable 32-bit word is shown as unreadable rather than guessed at.
+
+- `--rf` — Bitrate divisor RF/n (default: from `detect`)
+- `--mod` — Demod (default: from `detect`) (choices: auto, manchester, biphase; default: auto)
+- `-p`, `--pwd` — Password, 4 hex bytes
+- `--blk0` — First block of page 0 to dump (default 0)
+- `--maxblock` — Last block of page 0 to dump (default: from `detect`, else 7)
+- `--no-page1` — Skip page 1 (default: dump page 1 blocks 0-3 too)
 
 #### `lf t55xx read`
 
