@@ -1120,13 +1120,18 @@ static data_frame_tx_t *cmd_processor_lf_t55xx_write(uint16_t cmd, uint16_t stat
         uint8_t use_pwd;  /* 1 = password write, 0 = open write */
         uint8_t pwd[4];   /* 32-bit password, big-endian (ignored when use_pwd == 0) */
         uint8_t page1;    /* 1 = target page 1, 0 = page 0 */
+        uint8_t dl_mode;  /* optional: 0 fixed, 1 long leading ref, 2 leading zero, 3 1-of-4 */
     } PACKED payload_t;
 
-    if (length < sizeof(payload_t)) {
+    if (length < offsetof(payload_t, dl_mode)) {
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
     }
 
     payload_t *p = (payload_t *)data;
+    uint8_t dl_mode = (length >= sizeof(payload_t)) ? p->dl_mode : 0;
+    if (dl_mode > 3) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
 
     bool    page1     = (bool)p->page1;
     uint8_t max_block = page1 ? 3u : 7u;
@@ -1139,7 +1144,9 @@ static data_frame_tx_t *cmd_processor_lf_t55xx_write(uint16_t cmd, uint16_t stat
     uint32_t passwd  = bytes_to_num(p->pwd,  4);
     bool     use_pwd = (bool)p->use_pwd;
 
+    t55xx_set_downlink_mode(dl_mode);
     status = lf_t55xx_write_block(p->block, word, passwd, use_pwd, page1);
+    t55xx_set_downlink_mode(0);
     return data_frame_make(cmd, status, 0, NULL);
 }
 
