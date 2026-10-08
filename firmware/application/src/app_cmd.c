@@ -134,6 +134,7 @@ static data_frame_tx_t *cmd_processor_log_get_status(uint16_t cmd, uint16_t stat
         uint32_t pending;
         uint32_t dropped;
         uint32_t boots;
+        uint32_t err;
     } PACKED payload;
     payload.level    = st.level;
     payload.failed   = st.failed ? 1 : 0;
@@ -143,6 +144,7 @@ static data_frame_tx_t *cmd_processor_log_get_status(uint16_t cmd, uint16_t stat
     payload.pending  = U32HTONL(st.pending);
     payload.dropped  = U32HTONL(st.dropped);
     payload.boots    = U32HTONL(st.boots);
+    payload.err      = U32HTONL(st.err);
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(payload), (uint8_t *)&payload);
 }
 

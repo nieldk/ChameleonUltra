@@ -55,6 +55,7 @@ static volatile uint32_t m_wr;              /* write offset in the ring */
 static volatile uint32_t m_next_seq;
 static volatile uint32_t m_inflight;
 static volatile bool     m_failed;
+static volatile uint32_t m_err;             /* stage<<24 | op<<16 | code, first failure */
 static volatile bool     m_force;
 static volatile bool     m_clear_req;
 static volatile uint32_t m_clear_page;
@@ -234,8 +235,15 @@ void logflash_init(uint8_t level) {
 
 /* ---- RAM -> flash pipeline --------------------------------------------- */
 
+static void set_err(uint32_t stage, uint32_t code) {
+    if (!m_err) {
+        m_err = (stage << 24) | ((uint32_t)m_op << 16) | (code & 0xFFFFu);
+    }
+}
+
 static void fs_evt(nrf_fstorage_evt_t *p_evt) {
     if (p_evt->result != NRF_SUCCESS) {
+        set_err(2, p_evt->result);
         m_failed = true;
         m_op = OP_NONE;
         m_busy = false;
@@ -275,7 +283,9 @@ static void fs_evt(nrf_fstorage_evt_t *p_evt) {
 static void fs_setup(void) {
     logring_view_t v;
 
-    if (nrf_fstorage_init(&m_logflash_fs, &nrf_fstorage_sd, NULL) != NRF_SUCCESS) {
+    ret_code_t irc = nrf_fstorage_init(&m_logflash_fs, &nrf_fstorage_sd, NULL);
+    if (irc != NRF_SUCCESS) {
+        set_err(3, irc);
         m_failed = true;
         return;
     }
@@ -308,6 +318,9 @@ static void issue(op_t op, ret_code_t (*fn)(void)) {
         m_op = OP_NONE;
         m_busy = false;
         if (rc != NRF_ERROR_NO_MEM && rc != NRF_ERROR_BUSY) {
+            m_op = op;
+            set_err(1, rc);
+            m_op = OP_NONE;
             m_failed = true;
         }
     }
@@ -411,6 +424,7 @@ void logflash_get_stats(logflash_stats_t *out) {
     out->pending = m_ram.head - m_ram.flushed;
     out->dropped = m_dropped;
     out->boots   = m_ram.boots;
+    out->err     = m_err;
 }
 
 uint32_t logflash_read(uint32_t offset, uint8_t *dst, uint32_t len) {
@@ -420,6 +434,8 @@ uint32_t logflash_read(uint32_t offset, uint8_t *dst, uint32_t len) {
 }
 
 void logflash_clear(void) {
+    m_failed = false;
+    m_err = 0;
     m_clear_page = 0;
     m_clear_req = true;
 }

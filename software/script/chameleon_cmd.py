@@ -106,9 +106,10 @@ class ChameleonCMD:
         """Persistent debug log state. Also asks the device to flush RAM to flash."""
         resp = self.device.send_cmd_sync(Command.LOG_GET_STATUS)
         if resp.status == Status.SUCCESS:
-            level, failed, pages, _, stored, pending, dropped, boots = struct.unpack('!BBBBIIII', resp.data)
+            data = resp.data + bytes(24 - len(resp.data))  # older firmware sends 20 bytes
+            level, failed, pages, _, stored, pending, dropped, boots, err = struct.unpack('!BBBBIIIII', data[:24])
             resp.parsed = {'level': level, 'failed': bool(failed), 'pages': pages,
-                           'stored': stored, 'pending': pending, 'dropped': dropped, 'boots': boots}
+                           'stored': stored, 'pending': pending, 'dropped': dropped, 'boots': boots, 'err': err}
         return resp
 
     @expect_response(Status.SUCCESS)

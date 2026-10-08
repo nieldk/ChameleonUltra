@@ -32,6 +32,10 @@ class HWLogStatus(DeviceRequiredUnit):
         print(f" - Boots   : {st['boots']}")
         if st['failed']:
             print(" - Flash writes FAILED, logging to RAM only until reboot")
+            err = st.get('err', 0)
+            if err:
+                print(f" - Error   : stage {err >> 24} (1 call, 2 event, 3 init), op {(err >> 16) & 0xFF}"
+                      f" (1 erase, 2 hdr, 3 data, 4 clear), code 0x{err & 0xFFFF:04X}")
 
 
 @hw_log.command("level")

@@ -13,6 +13,7 @@ typedef struct {
     uint32_t pending;     /* bytes in RAM, not yet in flash */
     uint32_t dropped;     /* bytes lost to a full RAM buffer */
     uint32_t boots;       /* boots since the RAM state was last cold */
+    uint32_t err;         /* first failure: stage<<24 | op<<16 | code, 0 = none */
 } logflash_stats_t;
 
 /* Register the log backend. Call after NRF_LOG_DEFAULT_BACKENDS_INIT(). */
