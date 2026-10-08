@@ -18,6 +18,7 @@ from cli_core import (
     lf_indala,
     ArgsParserError,
     ArgumentParserNoExit,
+    BaseCLIUnit,
     C0,
     CG,
     CR,
@@ -846,7 +847,35 @@ _T55_MOD = {
 _T55_BITRATE = [8, 16, 32, 40, 50, 64, 100, 128]  # 3-bit non-extended dbr index
 
 # Detected config from `lf t55xx detect`, used as the default RF for `read`.
-_T55_DETECTED = {"rf": None, "mod": "manchester", "maxblock": 7, "pwd_set": False, "pwd": None}
+_T55_DETECTED = {"rf": None, "mod": "manchester", "maxblock": 7, "pwd_set": False, "pwd": None, "dl": 0}
+
+_T55_DL_NAMES = ("fixed bit length", "long leading reference", "leading zero",
+                 "1 of 4 coding")
+
+
+def _t55_add_dl_args(parser):
+    """--r0..--r3 downlink selectors, as in PM3."""
+    parser.add_argument("--r0", action="store_true", help="downlink - fixed bit length")
+    parser.add_argument("--r1", action="store_true",
+                        help="downlink - long leading reference")
+    parser.add_argument("--r2", action="store_true", help="downlink - leading zero")
+    parser.add_argument("--r3", action="store_true",
+                        help="downlink - 1 of 4 coding reference")
+
+
+def _t55_dl(args):
+    """Downlink mode from --rN, else the one `detect` last used."""
+    if sum((args.r0, args.r1, args.r2, args.r3)) > 1:
+        raise ArgsParserError("Error multiple downlink encoding")
+    if args.r0:
+        return 0
+    if args.r1:
+        return 1
+    if args.r2:
+        return 2
+    if args.r3:
+        return 3
+    return _T55_DETECTED["dl"]
 
 
 def _t55_parse_block0(b0):
@@ -873,14 +902,14 @@ def _t55_parse_block0(b0):
     }
 
 
-def _t55_decode_bits(cmd, block, rf, pwd, page1, modulation):
+def _t55_decode_bits(cmd, block, rf, pwd, page1, modulation, dl=0):
     """Return the raw demodulated bit STRING for a block before any 32-bit framing
     (modulation 0 = Manchester via SAADC amplitude host decode; 1 = biphase via the
     firmware diphase_feed demod), or "" on failure."""
     if modulation == 1:
-        n, items = cmd.lf_t55xx_read(block, rf, pwd, page1, modulation=1)
+        n, items = cmd.lf_t55xx_read(block, rf, pwd, page1, modulation=1, dl_mode=dl)
         return "".join("1" if b else "0" for b in items) if items else ""
-    n, samples = cmd.lf_t55xx_read(block, rf, pwd, page1, adc=True)
+    n, samples = cmd.lf_t55xx_read(block, rf, pwd, page1, adc=True, dl_mode=dl)
     if n == 0:
         return ""
     return _t55_amplitude_bits(samples, rf) or ""
@@ -916,7 +945,7 @@ def _t55_lock_config(bits, rf, want_mods):
     return None
 
 
-def _t55_detect_sources(cmd, rf, pwd, modcode):
+def _t55_detect_sources(cmd, rf, pwd, modcode, dl=0):
     """Candidate demodulated bit strings for detecting block 0 at this rate. For
     Manchester, try the firmware EDGE decode first (block 0 is sparse, so the edge
     path is reliable and sidesteps the amplitude decoder's phase ambiguity on config
@@ -924,16 +953,16 @@ def _t55_detect_sources(cmd, rf, pwd, modcode):
     the firmware diphase edge decode."""
     out = []
     if modcode == 0:
-        n, items = cmd.lf_t55xx_read(0, rf, pwd, False, modulation=0)
+        n, items = cmd.lf_t55xx_read(0, rf, pwd, False, modulation=0, dl_mode=dl)
         if items:
             out.append("".join("1" if b else "0" for b in items))
-        n, samples = cmd.lf_t55xx_read(0, rf, pwd, False, adc=True)
+        n, samples = cmd.lf_t55xx_read(0, rf, pwd, False, adc=True, dl_mode=dl)
         if n:
             b = _t55_amplitude_bits(samples, rf)
             if b:
                 out.append(b)
     else:
-        n, items = cmd.lf_t55xx_read(0, rf, pwd, False, modulation=1)
+        n, items = cmd.lf_t55xx_read(0, rf, pwd, False, modulation=1, dl_mode=dl)
         if items:
             out.append("".join("1" if b else "0" for b in items))
     return out
@@ -979,6 +1008,41 @@ def _t55_frame_block(bits):
         int((unit * (32 // period + 1))[:32], 2),
         f"{period}-bit period — repetitive value or dense-word collapse",
     )
+
+
+def _t55_pwd_safety(cmd, rf, pwd, modulation, dl):
+    """PM3 safety check: a password command sent to a tag without the PWD bit
+    can damage it. Returns True to use the password, False to read without,
+    None to abort."""
+    if _T55_DETECTED.get("pwd") == pwd and _T55_DETECTED["rf"] == rf:
+        return True
+    want = (16, 24) if modulation == 1 else (8,)
+    srcs = []
+    n, items = cmd.lf_t55xx_read(
+        0, rf, None, False, modulation=modulation, downlink=True, dl_mode=dl
+    )
+    if items:
+        srcs.append("".join("1" if b else "0" for b in items))
+    if modulation == 0:
+        n, samples = cmd.lf_t55xx_read(
+            0, rf, None, False, adc=True, downlink=True, dl_mode=dl
+        )
+        if n:
+            bits = _t55_amplitude_bits(samples, rf)
+            if bits:
+                srcs.append(bits)
+    for bits in srcs:
+        res = _t55_lock_config(bits, rf, want)
+        if res:
+            if res[1]["pwd"]:
+                return True
+            print(f"{CY} - Safety check: PWD bit is NOT set in config block. "
+                  f"Reading without password...{C0}")
+            return False
+    print(f"{CY} - Safety check: Could not detect if PWD bit is set in config "
+          f"block. Exits.{C0}")
+    print(" - Hint: Consider using the override parameter to force read.")
+    return None
 
 
 def _t55_expect_match(bits, want):
@@ -1027,6 +1091,7 @@ class LFT55xxWrite(ReaderRequiredUnit):
             help="Password, 4 hex bytes (password-protected write)",
         )
         parser.add_argument("--pg1", action="store_true", help="Target page 1")
+        _t55_add_dl_args(parser)
         return parser
 
     def on_exec(self, args: argparse.Namespace):
@@ -1036,9 +1101,10 @@ class LFT55xxWrite(ReaderRequiredUnit):
             raise ArgsParserError(
                 f"block must be 0-{max_block} on page {'1' if page1 else '0'}"
             )
+        dl = _t55_dl(args)
         word = _t55_hex4(args.data, "data")
         pwd = _t55_hex4(args.pwd, "pwd") if args.pwd is not None else None
-        self.cmd.lf_t55xx_write(args.block, word, pwd, page1)
+        self.cmd.lf_t55xx_write(args.block, word, pwd, page1, dl_mode=dl)
         print(
             f" - T55xx block {args.block}{' (pg1)' if page1 else ''} <- {word.hex().upper()}"
         )
@@ -1075,9 +1141,11 @@ class LFT55xxWipe(ReaderRequiredUnit):
             action="store_true",
             help="Also zero block 3 page 1 (extended-mode config)",
         )
+        _t55_add_dl_args(parser)
         return parser
 
     def on_exec(self, args: argparse.Namespace):
+        dl = _t55_dl(args)
         if args.cfg is not None:
             cfg = _t55_hex4(args.cfg, "cfg")
         else:
@@ -1086,11 +1154,11 @@ class LFT55xxWipe(ReaderRequiredUnit):
         zero = b"\x00\x00\x00\x00"
         # Block 0 first, authenticated if a password was supplied. The default
         # config clears the pwd bit, so blocks 1-7 are then written open.
-        self.cmd.lf_t55xx_write(0, cfg, pwd, page1=False)
+        self.cmd.lf_t55xx_write(0, cfg, pwd, page1=False, dl_mode=dl)
         for blk in range(1, 8):
-            self.cmd.lf_t55xx_write(blk, zero, None, page1=False)
+            self.cmd.lf_t55xx_write(blk, zero, None, page1=False, dl_mode=dl)
         if args.extended:
-            self.cmd.lf_t55xx_write(3, zero, None, page1=True)
+            self.cmd.lf_t55xx_write(3, zero, None, page1=True, dl_mode=dl)
         print(
             f" - T55xx wiped (block 0 = {cfg.hex().upper()}"
             f"{', Q5' if args.q5 else ''}{', +pg1 blk3' if args.extended else ''})"
@@ -1117,9 +1185,11 @@ class LFT55xxDetect(ReaderRequiredUnit):
             metavar="<hex>",
             help="Password, 4 hex bytes (if block 0 is read-protected)",
         )
+        _t55_add_dl_args(parser)
         return parser
 
     def on_exec(self, args: argparse.Namespace):
+        dl = _t55_dl(args)
         pwd = _t55_hex4(args.pwd, "pwd") if args.pwd else None
         # The winner is the rate+modulation whose block-0 decode is a clean 32-bit
         # word AND self-consistent: block 0 must say <that modulation> at the very
@@ -1131,7 +1201,7 @@ class LFT55xxDetect(ReaderRequiredUnit):
             ("biphase", 1, (16, 24)),
         ):
             for rf in (32, 64, 16, 40, 50, 100, 128, 8):
-                for bits in _t55_detect_sources(self.cmd, rf, pwd, modcode):
+                for bits in _t55_detect_sources(self.cmd, rf, pwd, modcode, dl):
                     res = _t55_lock_config(bits, rf, want)
                     if not res:
                         continue
@@ -1141,6 +1211,7 @@ class LFT55xxDetect(ReaderRequiredUnit):
                     _T55_DETECTED["maxblock"] = f["maxblock"] or 7
                     _T55_DETECTED["pwd_set"] = f["pwd"]
                     _T55_DETECTED["pwd"] = pwd if f["pwd"] else None
+                    _T55_DETECTED["dl"] = dl
                     print(f" - T55xx detected  (block 0 = {f['block0']:08X})")
                     print(f"     modulation : {f['mod_name']}")
                     print(f"     bit rate   : RF/{f['rf']}")
@@ -1211,9 +1282,17 @@ class LFT55xxRead(ReaderRequiredUnit):
             help="Demod: manchester (SAADC amplitude, robust) or biphase "
             "(firmware diphase_feed). auto = whatever `detect` found (else manchester).",
         )
+        parser.add_argument(
+            "-o",
+            "--override",
+            action="store_true",
+            help="override safety check",
+        )
+        _t55_add_dl_args(parser)
         return parser
 
     def on_exec(self, args: argparse.Namespace):
+        dl = _t55_dl(args)
         if args.rf is None:
             args.rf = _T55_DETECTED["rf"] or 32
         pwd = _t55_hex4(args.pwd, "pwd") if args.pwd else None
@@ -1222,10 +1301,21 @@ class LFT55xxRead(ReaderRequiredUnit):
         modname = _T55_DETECTED["mod"] if args.mod == "auto" else args.mod
         modulation = 1 if modname == "biphase" else 0
 
+        if pwd is not None and downlink:
+            if args.override:
+                print(" - Safety check overridden - proceeding despite risk")
+            else:
+                use = _t55_pwd_safety(self.cmd, args.rf, pwd, modulation, dl)
+                if use is None:
+                    return
+                if not use:
+                    pwd = None
+
         # --raw: edge-interval diagnostic (fragile on dense data; see --adc).
         if args.raw:
             n, items = self.cmd.lf_t55xx_read(
-                args.block, args.rf, pwd, args.pg1, raw=True, downlink=downlink
+                args.block, args.rf, pwd, args.pg1, raw=True, downlink=downlink,
+                dl_mode=dl,
             )
             if n == 0:
                 print(f"{CR} - no response ({mode}; try --adc to see the envelope){C0}")
@@ -1250,7 +1340,8 @@ class LFT55xxRead(ReaderRequiredUnit):
         # is decoded from the firmware demod below).
         if args.adc:
             n, samples = self.cmd.lf_t55xx_read(
-                args.block, args.rf, pwd, args.pg1, adc=True, downlink=downlink
+                args.block, args.rf, pwd, args.pg1, adc=True, downlink=downlink,
+                dl_mode=dl,
             )
             if n:
                 mean = sum(samples) / n
@@ -1268,7 +1359,8 @@ class LFT55xxRead(ReaderRequiredUnit):
         # Block value via the firmware demod (edge path — the proven decoder detect
         # uses; Manchester or biphase per --mod).
         n, items = self.cmd.lf_t55xx_read(
-            args.block, args.rf, pwd, args.pg1, modulation=modulation, downlink=downlink
+            args.block, args.rf, pwd, args.pg1, modulation=modulation,
+            downlink=downlink, dl_mode=dl,
         )
         if not items:
             print(f"{CR} - no response ({mode}; check --rf / --mod){C0}")
@@ -1365,14 +1457,7 @@ class LFT55xxDump(ReaderRequiredUnit):
         parser.add_argument("-p", "--pwd", type=str, default=None, metavar="<hex>",
                             help="password (4 hex bytes)")
         parser.add_argument("--ns", action="store_true", help="no save to file")
-        parser.add_argument("--r0", action="store_true",
-                            help="downlink - fixed bit length")
-        parser.add_argument("--r1", action="store_true",
-                            help="downlink - long leading reference")
-        parser.add_argument("--r2", action="store_true",
-                            help="downlink - leading zero")
-        parser.add_argument("--r3", action="store_true",
-                            help="downlink - 1 of 4 coding reference")
+        _t55_add_dl_args(parser)
         parser.add_argument("--rf", type=int, default=None, metavar="<n>",
                             help="Bitrate divisor RF/n (default: from `detect`)")
         parser.add_argument("--mod", choices=("auto", "manchester", "biphase"),
@@ -1397,44 +1482,8 @@ class LFT55xxDump(ReaderRequiredUnit):
             return None, "(no stable block)"
         return val, None
 
-    def _pwd_safety_check(self, rf, pwd, modulation, dl):
-        """PM3 safety check: a password command sent to a tag without the PWD
-        bit can damage it. Returns True to read with the password, False to
-        read without, None to abort."""
-        if _T55_DETECTED.get("pwd") == pwd and _T55_DETECTED["rf"] == rf:
-            return True
-        want = (16, 24) if modulation == 1 else (8,)
-        srcs = []
-        n, items = self.cmd.lf_t55xx_read(
-            0, rf, None, False, modulation=modulation, downlink=True, dl_mode=dl
-        )
-        if items:
-            srcs.append("".join("1" if b else "0" for b in items))
-        if modulation == 0:
-            n, samples = self.cmd.lf_t55xx_read(
-                0, rf, None, False, adc=True, downlink=True, dl_mode=dl
-            )
-            if n:
-                bits = _t55_amplitude_bits(samples, rf)
-                if bits:
-                    srcs.append(bits)
-        for bits in srcs:
-            res = _t55_lock_config(bits, rf, want)
-            if res:
-                if res[1]["pwd"]:
-                    return True
-                print(f"{CY} - Safety check: PWD bit is NOT set in config block. "
-                      f"Reading without password...{C0}")
-                return False
-        print(f"{CY} - Safety check: Could not detect if PWD bit is set in config "
-              f"block. Exits.{C0}")
-        print(" - Hint: Consider using the override parameter to force read.")
-        return None
-
     def on_exec(self, args: argparse.Namespace):
-        if sum((args.r0, args.r1, args.r2, args.r3)) > 1:
-            raise ArgsParserError("Error multiple downlink encoding")
-        dl = 1 if args.r1 else 2 if args.r2 else 3 if args.r3 else 0
+        dl = _t55_dl(args)
         rf = args.rf if args.rf is not None else (_T55_DETECTED["rf"] or 32)
         modname = _T55_DETECTED["mod"] if args.mod == "auto" else args.mod
         modulation = 1 if modname == "biphase" else 0
@@ -1450,7 +1499,7 @@ class LFT55xxDump(ReaderRequiredUnit):
             if args.override:
                 print(" - Safety check overridden - proceeding despite risk")
             else:
-                use = self._pwd_safety_check(rf, pwd, modulation, dl)
+                use = _t55_pwd_safety(self.cmd, rf, pwd, modulation, dl)
                 if use is None:
                     return
                 if not use:
@@ -1502,6 +1551,17 @@ class LFT55xxDump(ReaderRequiredUnit):
             print()
             return
 
+        # A block is a repeating 32-bit stream and the demod can return it rotated
+        # or inverted. Block 0 must parse as a config at this rate, else the
+        # framing is suspect and the file would not restore correctly.
+        f0 = _t55_parse_block0(words[0])
+        if f0["extend"] or (f0["rf"] != rf) or (f0["modulation"] not in (
+                (16, 24) if modulation == 1 else (8,))):
+            print(f"{CY} - Block 0 {words[0]:08X} is not a valid config at "
+                  f"RF/{rf}; framing is unreliable, not saved.{C0}")
+            print()
+            return
+
         fn = args.file
         if not fn:
             fn = "lf-t55xx"
@@ -1525,6 +1585,266 @@ class LFT55xxDump(ReaderRequiredUnit):
         data = val.to_bytes(4, "big")
         ascii_repr = "".join(chr(b) if 32 <= b < 127 else "." for b in data)
         return f"  {blk:02d} | {val:08X} | {val:032b} | {ascii_repr}"
+
+
+def _t55_load_dump(fn):
+    """Load a 12-block T55xx dump (.bin/.eml/.json) -> list of 12 ints."""
+    import json
+    import os
+
+    path = os.path.expanduser(fn)
+    if not os.path.exists(path):
+        for ext in (".json", ".bin", ".eml"):
+            if os.path.exists(path + ext):
+                path += ext
+                break
+        else:
+            raise ArgsParserError(f"file not found: {fn}")
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext == ".json":
+            with open(path) as f:
+                doc = json.load(f)
+            if doc.get("FileType") not in (None, "t55x7"):
+                raise ArgsParserError(f"not a t55x7 json file: {doc.get('FileType')}")
+            blocks = doc.get("blocks", {})
+            raw = b"".join(bytes.fromhex(blocks[str(i)]) for i in range(len(blocks)))
+        elif ext == ".eml":
+            with open(path) as f:
+                lines = [ln.strip() for ln in f if ln.strip()]
+            raw = b"".join(bytes.fromhex(ln) for ln in lines)
+        else:
+            with open(path, "rb") as f:
+                raw = f.read()
+    except (OSError, ValueError, KeyError) as e:
+        raise ArgsParserError(f"can't read dump file: {e}")
+    if len(raw) != 48:
+        raise ArgsParserError(
+            f"wrong length of dump file. Expected 48 bytes, got {len(raw)}"
+        )
+    return [int.from_bytes(raw[i : i + 4], "big") for i in range(0, 48, 4)]
+
+
+@lf_t55xx.command("view")
+class LFT55xxView(BaseCLIUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Print a T55xx dump file (bin/eml/json)"
+        parser.add_argument("-f", "--file", type=str, required=True, metavar="<fn>",
+                            help="Specify a filename for dump file")
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        words = _t55_load_dump(args.file)
+        for title, rng in (("Page 0", range(0, 8)), ("Page 1", range(8, 12))):
+            print()
+            print(f"       {CY}{title}{C0}")
+            print("----+----------+-------")
+            print("blk | hex data | ascii")
+            print("----+----------+-------")
+            for i in rng:
+                data = words[i].to_bytes(4, "big")
+                asc = "".join(chr(b) if 32 <= b < 127 else "." for b in data)
+                print(f" {i if i < 8 else i - 8:02d} | {words[i]:08X} | {asc}")
+        print()
+
+
+@lf_t55xx.command("restore")
+class LFT55xxRestore(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "Restore T55xx card page 0/1 blocks from a (bin/eml/json) dump file"
+        )
+        parser.epilog = "example:\n  lf t55xx restore -f lf-t55xx-00148040-dump.bin"
+        parser.formatter_class = argparse.RawDescriptionHelpFormatter
+        parser.add_argument("-f", "--file", type=str, required=True, metavar="<fn>",
+                            help="Specify a filename for dump file")
+        parser.add_argument("-p", "--pwd", type=str, default=None, metavar="<hex>",
+                            help="password if target card has password set (4 hex bytes)")
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        words = _t55_load_dump(args.file)
+        pwd = _t55_hex4(args.pwd, "pwd") if args.pwd else None
+        dl = _T55_DETECTED["dl"]
+
+        # Order as PM3: page 0 blk 1-7, page 1 blk 1-3, then block 0 last.
+        # Block 0 uses the downlink mode stored in page 1 block 3 (extended mode).
+        b30 = words[11]
+        blk0_dl = (b30 >> 10) & 3 if (b30 >> 28) in (6, 9) else 0
+
+        def wr(blk, word, page1, mode):
+            self.cmd.lf_t55xx_write(blk, word.to_bytes(4, "big"), pwd, page1, dl_mode=mode)
+            print(f" - T55xx block {blk}{' (pg1)' if page1 else ''} <- {word:08X}")
+
+        for blk in range(1, 8):
+            wr(blk, words[blk], False, dl)
+        # Block 7 is the password; use the restored one from here on.
+        if pwd is not None:
+            pwd = words[7].to_bytes(4, "big")
+        for blk in range(1, 4):
+            wr(blk, words[8 + blk], True, dl)
+        if words[0] != 0:
+            wr(0, words[0], False, blk0_dl)
+        else:
+            print(f"{CY} - Warning: the dump file contains an all zero config block.{C0}")
+            print(" - Hint: Make sure you dumped the card correctly")
+        print(" - Done!")
+
+
+_T55_BITRATE_STR = {0: "RF/8", 1: "RF/16", 2: "RF/32", 3: "RF/40", 4: "RF/50",
+                    5: "RF/64", 6: "RF/100", 7: "RF/128"}
+_T55_MOD_STR = {
+    0: "DIRECT (ASK/NRZ)",
+    1: "PSK 1 phase change when input changes",
+    2: "PSK 2 phase change on bitclk if input high",
+    3: "PSK 3 phase change on rising edge of input",
+    4: "FSK 1 RF/8  RF/5",
+    5: "FSK 2 RF/8  RF/10",
+    6: "FSK 1a RF/5  RF/8",
+    7: "FSK 2a RF/10  RF/8",
+    8: "Manchester",
+    16: "Biphase",
+}
+_T55_Q5_MOD_STR = {0: "Manchester", 1: "PSK 1 phase change when input changes",
+                    2: "PSK 2 phase change on bitclk if input high",
+                    3: "PSK 3 phase change on rising edge of input",
+                    4: "FSK 1a RF/5  RF/8", 5: "FSK 2a RF/10  RF/8",
+                    6: "Biphase", 7: "NRZ / Direct"}
+
+
+def _t55_yn(v, warn=False):
+    if not v:
+        return "No"
+    return f"{CY}Yes - Warning{C0}" if warn else f"{CG}Yes{C0}"
+
+
+def _t55_psk_cf(v, q5):
+    names = {0: "RF/2", 1: "RF/4", 2: "RF/8"}
+    if v == 3 and q5:
+        return "3 - RF/8"
+    return f"{v} - {names[v]}" if v in names else f"{v} - {CR}(Unknown){C0}"
+
+
+def _t55_print_info(b0, q5):
+    """Block 0 field dump, bit layout and wording as PM3 `lf t55xx info`."""
+    print()
+    if q5:
+        header = (b0 >> 20) & 0xFFF
+        dbr = (b0 >> 12) & 0x3F
+        print(f" --- {CY}Q5 Configuration & Information{C0} ------------")
+        print(f" Header                    : 0x{header:03X}"
+              f"{'' if header == 0x600 else CR + ' - Warning' + C0}")
+        print(f" Page select               : {(b0 >> 19) & 1}")
+        print(f" Fast Write                : {_t55_yn((b0 >> 18) & 1)}")
+        print(f" Data bit rate             : {dbr} - RF/{dbr * 2 + 2}")
+        print(f" AOR - Answer on Request   : {_t55_yn((b0 >> 11) & 1)}")
+        print(f" Password mode             : {_t55_yn((b0 >> 10) & 1)}")
+        print(f" PSK clock frequency       : {_t55_psk_cf((b0 >> 8) & 3, True)}")
+        print(f" Inverse data              : {_t55_yn((b0 >> 7) & 1)}")
+        dm = (b0 >> 4) & 7
+        print(f" Modulation                : {dm} - {_t55_Q5_MOD_STR[dm]}")
+        print(f" Max block                 : {(b0 >> 1) & 7}")
+        print(f" Sequence Terminator       : {_t55_yn(b0 & 1)}")
+    else:
+        ext = (b0 >> 17) & 1
+        safer = (b0 >> 28) & 0xF
+        safer_s = (f"{safer} - {CY}passwd{C0}" if safer == 6 else
+                   f"{safer} - {CY}testmode{C0}" if safer == 9 else str(safer))
+        if ext:
+            resv, dbr = (b0 >> 24) & 0xF, (b0 >> 18) & 0x3F
+            rate = f"{dbr} - RF/{(dbr & 0x3F) * 2 + 2}"
+        else:
+            resv, dbr = (b0 >> 21) & 0x7F, (b0 >> 18) & 7
+            rate = f"{dbr} - {CG}{_T55_BITRATE_STR[dbr]}{C0}"
+        dm = (b0 >> 12) & 0x1F
+        if dm == 24:
+            mod = "24 - " + ("Biphase a - AKA Conditional Dephase Encoding(CDP)"
+                             if ext else f"{CY}Reserved{C0}")
+        else:
+            mod = f"{dm} - {_T55_MOD_STR[dm]}" if dm in _T55_MOD_STR else \
+                f"0x{dm:02X} {CR}(Unknown){C0}"
+        otp = (b0 >> 8) & 1
+        print(f" --- {CY}T55x7 Configuration & Information{C0} ---------")
+        print(f" Safer key                 : {safer_s}")
+        print(f" reserved                  : {resv}")
+        print(f" Data bit rate             : {rate}")
+        print(f" eXtended mode             : {CY + 'Yes - Warning' + C0 if ext else 'No'}")
+        print(f" Modulation                : {mod}")
+        print(f" PSK clock frequency       : {_t55_psk_cf((b0 >> 10) & 3, False)}")
+        print(f" AOR - Answer on Request   : {_t55_yn((b0 >> 9) & 1)}")
+        print(f" OTP - One Time Pad        : "
+              f"{(CY if ext else CR) + 'Yes - Warning' + C0 if otp else 'No'}")
+        print(f" Max block                 : {(b0 >> 5) & 7}")
+        print(f" Password mode             : {_t55_yn((b0 >> 4) & 1)}")
+        print(f" Sequence {'Start Marker' if ext else 'Terminator':<12}     : "
+              f"{_t55_yn((b0 >> 3) & 1)}")
+        print(f" Fast Write                : "
+              f"{_t55_yn((b0 >> 2) & 1, warn=not ext)}")
+        print(f" Inverse data              : "
+              f"{_t55_yn((b0 >> 1) & 1, warn=not ext)}")
+        print(f" POR-Delay                 : {_t55_yn(b0 & 1)}")
+    print(" -------------------------------------------------------------")
+    print(" Raw Data - Page 0, block 0")
+    print(f" {CG}{b0:08X}{C0}")
+    print()
+
+
+@lf_t55xx.command("info")
+class LFT55xxInfo(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "Show T55x7 configuration data (page 0 blk 0) read from the tag. "
+            "Use -c to decode given config block data instead of reading the tag."
+        )
+        parser.epilog = (
+            "examples:\n"
+            "  lf t55xx info\n"
+            "  lf t55xx info -p 11223344\n"
+            "  lf t55xx info -c 00083040\n"
+            "  lf t55xx info -c 6001805A --q5"
+        )
+        parser.formatter_class = argparse.RawDescriptionHelpFormatter
+        parser.add_argument("-p", "--pwd", type=str, default=None, metavar="<hex>",
+                            help="password (4 hex bytes)")
+        parser.add_argument("-c", "--blk0", type=str, default=None, metavar="<hex>",
+                            help="use these data instead (4 hex bytes)")
+        parser.add_argument("--q5", action="store_true",
+                            help="interpret provided data as T5555/Q5 config")
+        parser.add_argument("--rf", type=int, default=None, metavar="<n>",
+                            help="Bitrate divisor RF/n (default: from `detect`)")
+        parser.add_argument("--mod", choices=("auto", "manchester", "biphase"),
+                            default="auto", help="Demod (default: from `detect`)")
+        _t55_add_dl_args(parser)
+        return parser
+
+    def before_exec(self, args: argparse.Namespace):
+        if args.blk0 is not None:
+            return True  # offline decode, no device needed
+        return super().before_exec(args)
+
+    def on_exec(self, args: argparse.Namespace):
+        dl = _t55_dl(args)
+        if args.q5 and args.blk0 is None:
+            raise ArgsParserError("Must specify user supplied Q5 data")
+        if args.blk0 is not None:
+            b0 = int.from_bytes(_t55_hex4(args.blk0, "blk0"), "big")
+            _t55_print_info(b0, args.q5)
+            return
+        rf = args.rf if args.rf is not None else (_T55_DETECTED["rf"] or 32)
+        modname = _T55_DETECTED["mod"] if args.mod == "auto" else args.mod
+        modcode = 1 if modname == "biphase" else 0
+        want = (16, 24) if modcode else (8,)
+        pwd = _t55_hex4(args.pwd, "pwd") if args.pwd else None
+        for bits in _t55_detect_sources(self.cmd, rf, pwd, modcode, dl):
+            res = _t55_lock_config(bits, rf, want)
+            if res:
+                _t55_print_info(res[0], False)
+                return
+        print(f"{CR} - no config block found at RF/{rf} ({modname}); "
+              f"run `lf t55xx detect` or pass --rf/--mod{C0}")
 
 
 @lf_hid_prox.command("read")
