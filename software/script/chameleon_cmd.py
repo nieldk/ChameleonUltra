@@ -688,7 +688,8 @@ class ChameleonCMD:
         raise ValueError("The id bytes length must equal 5 (EM410X) or 13 (Electra)")
 
     @expect_response(Status.LF_TAG_OK)
-    def lf_t55xx_write(self, block: int, word: bytes, pwd: bytes = None, page1: bool = False):
+    def lf_t55xx_write(self, block: int, word: bytes, pwd: bytes = None, page1: bool = False,
+                       dl_mode: int = 0):
         """
         Write a raw 32-bit word to a T55xx block (Ultra only).
 
@@ -696,10 +697,11 @@ class ChameleonCMD:
         :param word:  4-byte big-endian data word
         :param pwd:   4-byte password, or None for open write
         :param page1: target page 1 instead of page 0
+        :param dl_mode: downlink coding: 0 fixed, 1 long leading ref, 2 leading zero, 3 1-of-4
         """
         use_pwd = pwd is not None
         pwd_bytes = pwd if use_pwd else b'\x00\x00\x00\x00'
-        data = struct.pack('!B4sB4sB', block, word, int(use_pwd), pwd_bytes, int(page1))
+        data = struct.pack('!B4sB4sBB', block, word, int(use_pwd), pwd_bytes, int(page1), dl_mode)
         return self.device.send_cmd_sync(Command.LF_T55XX_WRITE, data)
 
     @expect_response(Status.LF_TAG_OK)
