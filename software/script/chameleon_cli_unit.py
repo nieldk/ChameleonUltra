@@ -4812,7 +4812,7 @@ def authtrace_pretty_dump(sessions):
                 col_ctx      = CG
 
             if decoded_ctx is None:
-                decoded, col, _ = _decode_14a_frame_col(data, sz_bits)
+                decoded, col, _ = _decode_14a_frame_col(data, sz_bits, is_tx=is_tx)
             else:
                 decoded, col = decoded_ctx, col_ctx
 
@@ -4903,7 +4903,7 @@ def parse_relay_frames(trace: bytes) -> list:
         if off + byte_cnt > len(trace):
             break
         raw = trace[off:off + byte_cnt]
-        decoded, col = _decode_14a_frame_col(raw, bits)
+        decoded, col, _ = _decode_14a_frame_col(raw, bits, is_tx=tag_to_rd)
         frames.append({
             'dir':     'tag→reader' if tag_to_rd else 'reader→tag',
             'bits':    bits,
