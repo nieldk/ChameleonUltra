@@ -30,6 +30,13 @@ static struct {
     uint8_t blk_addr;
 } t55xx_cmd;
 
+// Read capture anchor. A T55xx block is a repeating 32-bit stream, so where the
+// capture starts decides the bit rotation. The edge capture is armed at the end
+// of the downlink, inside the timeslot, so every read starts at the same point.
+static bool t55xx_read_mode;            // reading: skip the EEPROM wait
+static bool t55xx_anchor_en;            // arm the edge capture after the downlink
+static volatile bool t55xx_g_armed;     // edge callback records intervals
+
 void t55xx_send_gap(uint32_t nus) {
     stop_lf_125khz_radio();  // turn off 125khz field
     bsp_delay_us(nus);
@@ -128,7 +135,7 @@ static void t55xx_dl_send(void) {
 }
 
 // t55xx high-precision timing control function
-void t55xx_timeslot_callback() {
+static void t55xx_timeslot_tx(void) {
     t55xx_send_gap(start_gap);
 
     if (t55xx_dl_mode != T55XX_DL_FIXED) {
@@ -167,6 +174,14 @@ void t55xx_timeslot_callback() {
     }
 }
 
+void t55xx_timeslot_callback() {
+    t55xx_timeslot_tx();
+    if (t55xx_anchor_en) {
+        clear_lf_counter_value();
+        t55xx_g_armed = true;
+    }
+}
+
 /**
  * @brief Write to 5577 instructions, this instruction can be read and write
  *
@@ -201,7 +216,9 @@ void t55xx_send_cmd(uint8_t opcode, uint32_t *passwd, uint8_t lock_bit, uint32_t
     // request timing, and wait for the order operation to complete
     request_timeslot(37 * 1000, t55xx_timeslot_callback);
 
-    if (opcode != 0) {
+    if (t55xx_read_mode) {
+        // no EEPROM write to wait for; the tag is already answering
+    } else if (opcode != 0) {
         bsp_delay_ms(10);  // T5577 EEPROM program time ~5.6ms typ; 10ms gives margin for slow clones (was 6ms)
     } else {
         bsp_delay_ms(1);
@@ -258,9 +275,12 @@ static uint8_t t55xx_g_rf_n = 32;
 
 static void t55xx_edge_cb(void) {
     uint32_t cnt = get_lf_counter_value();
+    clear_lf_counter_value();
+    if (!t55xx_g_armed) {
+        return;  // downlink edges, before the capture anchor
+    }
     uint16_t val = (cnt > 0xff) ? 0xff : (uint16_t)(cnt & 0xff);
     cb_push_back(&t55xx_g_cb, &val);
-    clear_lf_counter_value();
 }
 
 /*
@@ -310,7 +330,9 @@ uint16_t t55xx_read(uint8_t rf_n, uint8_t mode, uint8_t modulation, uint8_t down
         start_lf_125khz_radio();
         bsp_delay_ms(2);
         if (downlink) {
+            t55xx_read_mode = true;
             t55xx_send_cmd(opcode, pwd_ptr, 0, NULL, block);  /* field stays on */
+            t55xx_read_mode = false;
         }
         size_t outlen = 0;
         raw_read_to_buffer_ex(out, max_out, timeout_ms, &outlen, false);
@@ -326,11 +348,19 @@ uint16_t t55xx_read(uint8_t rf_n, uint8_t mode, uint8_t modulation, uint8_t down
     start_lf_125khz_radio();
     bsp_delay_ms(2);  /* antenna settle, like raw_read_to_buffer */
 
+    t55xx_g_armed = false;
     if (downlink) {
-        /* data=NULL, lock_bit=0 => READ downlink; field left on, no RESET. */
+        /* data=NULL, lock_bit=0 => READ downlink; field left on, no RESET.
+         * The timeslot callback arms the capture right after the last gap. */
+        t55xx_read_mode = true;
+        t55xx_anchor_en = true;
         t55xx_send_cmd(opcode, pwd_ptr, 0, NULL, block);
+        t55xx_anchor_en = false;
+        t55xx_read_mode = false;
+    } else {
+        clear_lf_counter_value();
+        t55xx_g_armed = true;
     }
-    clear_lf_counter_value();
 
     uint16_t n = 0;
     autotimer *p_at = bsp_obtain_timer(0);
@@ -389,6 +419,7 @@ uint16_t t55xx_read(uint8_t rf_n, uint8_t mode, uint8_t modulation, uint8_t down
         }
     }
 
+    t55xx_g_armed = false;
     bsp_return_timer(p_at);
     lf_125khz_radio_gpiote_disable();
     unregister_rio_callback();
