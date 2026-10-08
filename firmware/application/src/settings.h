@@ -43,7 +43,8 @@ typedef struct ALIGN_U32 {
     // 1 byte
     uint8_t animation_config : 2;
     uint8_t ble_pairing_enable : 1;
-    uint8_t reserved0 : 5; // If you are add switch field, reallocating me.
+    uint8_t log_level : 3; // persistent debug log level 0..4 (0 = off)
+    uint8_t reserved0 : 2; // If you are add switch field, reallocating me.
 
     // 1 byte
     uint8_t button_a_press : 4;
@@ -92,4 +93,6 @@ void settings_init_sleep_timeout_config(void);
 const char *settings_get_ble_name(void);
 bool settings_set_ble_name(const char *name, uint8_t len);
 void settings_init_ble_name_config(void);
+uint8_t settings_get_log_level(void);
+void settings_set_log_level(uint8_t level);
 #endif

@@ -102,6 +102,34 @@ class ChameleonCMD:
         return resp
 
     @expect_response(Status.SUCCESS)
+    def log_get_status(self):
+        """Persistent debug log state. Also asks the device to flush RAM to flash."""
+        resp = self.device.send_cmd_sync(Command.LOG_GET_STATUS)
+        if resp.status == Status.SUCCESS:
+            level, failed, pages, _, stored, pending, dropped, boots = struct.unpack('!BBBBIIII', resp.data)
+            resp.parsed = {'level': level, 'failed': bool(failed), 'pages': pages,
+                           'stored': stored, 'pending': pending, 'dropped': dropped, 'boots': boots}
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def log_set_level(self, level: int):
+        """Set and persist the debug log level (0 off, 1 error, 2 warning, 3 info, 4 debug)."""
+        return self.device.send_cmd_sync(Command.LOG_SET_LEVEL, struct.pack('!B', level))
+
+    @expect_response(Status.SUCCESS)
+    def log_read(self, offset: int, length: int):
+        """Read length bytes of the stored log starting at offset."""
+        resp = self.device.send_cmd_sync(Command.LOG_READ, struct.pack('!IH', offset, length))
+        if resp.status == Status.SUCCESS:
+            resp.parsed = resp.data
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def log_clear(self):
+        """Erase the stored log."""
+        return self.device.send_cmd_sync(Command.LOG_CLEAR)
+
+    @expect_response(Status.SUCCESS)
     def get_device_mode(self):
         resp = self.device.send_cmd_sync(Command.GET_DEVICE_MODE)
         if resp.status == Status.SUCCESS:

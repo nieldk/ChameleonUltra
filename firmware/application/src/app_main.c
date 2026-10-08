@@ -44,6 +44,7 @@ NRF_LOG_MODULE_REGISTER();
 #include "rgb_marquee.h"
 #include "tag_persistence.h"
 #include "settings.h"
+#include "logflash.h"
 #include "app_standalone.h"
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
@@ -123,6 +124,7 @@ static void log_init(void) {
     APP_ERROR_CHECK(err_code);
 
     NRF_LOG_DEFAULT_BACKENDS_INIT();
+    logflash_init(settings_get_log_level());
 }
 
 /**@brief Function for initializing power management.
@@ -485,11 +487,13 @@ static void system_off_enter(void) {
         sd_power_gpregret_clr(1, GPREGRET_CLEAR_VALUE_DEFAULT);
         sd_power_gpregret_set(1, RESET_ON_LF_FIELD_EXISTS_Msk);
         // Trigger the RESET awakening system, restart the emulation process
+        logflash_flush_blocking(100);
         nrf_pwr_mgmt_shutdown(NRF_PWR_MGMT_SHUTDOWN_RESET);
         return;
     };
 
     // Last call, gate is closing
+    logflash_flush_blocking(100);
     NRF_LOG_FLUSH();
 
     // TEST: ask the bootloader to skip the app CRC check on the next wake, so an
@@ -1279,6 +1283,7 @@ int main(void) {
         data_frame_process();
         // Log print process
         while (NRF_LOG_PROCESS());
+        logflash_poll();
         // USB event process
         while (app_usbd_event_queue_process());
         // WDT refresh

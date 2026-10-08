@@ -1,5 +1,6 @@
 #include "app_timer.h"
 #include "delayed_reset.h"
+#include "logflash.h"
 
 #include "nrf_log.h"
 #include "nrf_log_ctrl.h"
@@ -9,6 +10,7 @@ APP_TIMER_DEF(m_reset_timer);
 
 static void delayed_reset_event_handler(void *ctx) {
     while (NRF_LOG_PROCESS());
+    logflash_flush_blocking(100);
     ret_code_t ret = sd_nvic_SystemReset();
     APP_ERROR_CHECK(ret);
     while (1) {
