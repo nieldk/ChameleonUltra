@@ -51,9 +51,90 @@ void t55xx_tx_uint32_t(uint32_t data) {
     }
 }
 
+// Downlink coding, same numbering as PM3: 0 fixed, 1 long leading ref, 2 leading zero, 3 1-of-4.
+// Bit timings are PM3's generic table (field-on time between gaps, in Tc).
+#define T55XX_DL_FIXED    0
+#define T55XX_DL_LLR      1
+#define T55XX_DL_LZ       2
+#define T55XX_DL_1OF4     3
+#define T55XX_DL_MAX_BITS 80
+#define T55XX_LLR_REF_TC  136  // added to the '0' time for the long leading reference
+
+static const uint8_t dl_tc_llr[2] = {18, 50};
+static const uint8_t dl_tc_lz[2] = {18, 40};
+static const uint8_t dl_tc_1of4[4] = {18, 34, 50, 66};
+
+static uint8_t t55xx_dl_mode = T55XX_DL_FIXED;
+static uint8_t t55xx_dl_bits[T55XX_DL_MAX_BITS];
+static uint8_t t55xx_dl_len;
+
+void t55xx_set_downlink_mode(uint8_t mode) {
+    t55xx_dl_mode = (mode <= T55XX_DL_1OF4) ? mode : T55XX_DL_FIXED;
+}
+
+static void dl_push(uint32_t v, uint8_t n) {
+    for (int8_t i = n - 1; i >= 0 && t55xx_dl_len < T55XX_DL_MAX_BITS; i--) {
+        t55xx_dl_bits[t55xx_dl_len++] = (v >> i) & 1;
+    }
+}
+
+// Build the command bit stream for modes 1-3 (same layout as PM3 T55xx_SendCMD).
+static void t55xx_dl_build(void) {
+    t55xx_dl_len = 0;
+    if (t55xx_dl_mode == T55XX_DL_LZ) {
+        dl_push(0, 1);
+    } else if (t55xx_dl_mode == T55XX_DL_1OF4) {
+        dl_push(0, 2);
+    }
+    dl_push(t55xx_cmd.opcode, 2);
+    if (t55xx_cmd.opcode == 0) {
+        return;
+    }
+    if (t55xx_cmd.passwd != NULL) {
+        if (t55xx_dl_mode == T55XX_DL_LZ || t55xx_dl_mode == T55XX_DL_1OF4) {
+            dl_push(0, 2);
+        }
+        dl_push(*t55xx_cmd.passwd, 32);
+    }
+    if (t55xx_cmd.lock_bit == 0 || t55xx_cmd.lock_bit == 1) {
+        dl_push(t55xx_cmd.lock_bit & 1, 1);
+    }
+    if (t55xx_cmd.data != NULL) {
+        dl_push(*t55xx_cmd.data, 32);
+    }
+    if (t55xx_cmd.blk_addr != 255) {
+        dl_push(t55xx_cmd.blk_addr & 7, 3);
+    }
+}
+
+static void t55xx_dl_send(void) {
+    if (t55xx_dl_mode == T55XX_DL_1OF4) {
+        for (uint8_t i = 0; i + 1 < t55xx_dl_len; i += 2) {
+            uint8_t sym = (t55xx_dl_bits[i] << 1) | t55xx_dl_bits[i + 1];
+            bsp_delay_us(dl_tc_1of4[sym] * 8);
+            t55xx_send_gap(write_gap);
+        }
+        return;
+    }
+    const uint8_t *tc = (t55xx_dl_mode == T55XX_DL_LLR) ? dl_tc_llr : dl_tc_lz;
+    if (t55xx_dl_mode == T55XX_DL_LLR) {
+        bsp_delay_us((tc[0] + T55XX_LLR_REF_TC) * 8);
+        t55xx_send_gap(write_gap);
+    }
+    for (uint8_t i = 0; i < t55xx_dl_len; i++) {
+        bsp_delay_us(tc[t55xx_dl_bits[i]] * 8);
+        t55xx_send_gap(write_gap);
+    }
+}
+
 // t55xx high-precision timing control function
 void t55xx_timeslot_callback() {
     t55xx_send_gap(start_gap);
+
+    if (t55xx_dl_mode != T55XX_DL_FIXED) {
+        t55xx_dl_send();
+        return;
+    }
 
     // send instructions first
     t55xx_tx_bit(t55xx_cmd.opcode >> 1);
@@ -112,6 +193,10 @@ void t55xx_send_cmd(uint8_t opcode, uint32_t *passwd, uint8_t lock_bit, uint32_t
     t55xx_cmd.lock_bit = lock_bit;
     t55xx_cmd.data = data;
     t55xx_cmd.blk_addr = blk_addr;
+
+    if (t55xx_dl_mode != T55XX_DL_FIXED) {
+        t55xx_dl_build();
+    }
 
     // request timing, and wait for the order operation to complete
     request_timeslot(37 * 1000, t55xx_timeslot_callback);

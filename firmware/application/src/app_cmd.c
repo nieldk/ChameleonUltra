@@ -1156,12 +1156,17 @@ static data_frame_tx_t *cmd_processor_lf_t55xx_read(uint16_t cmd, uint16_t statu
         uint8_t modulation;   /* 0 = Manchester, 1 = biphase/diphase (mode 0 only) */
         uint8_t downlink;     /* 1 = addressed read downlink, 0 = regular read */
         uint8_t max_items[2]; /* big-endian, clamped per mode */
+        uint8_t dl_mode;      /* optional: 0 fixed, 1 long leading ref, 2 leading zero, 3 1-of-4 */
     } PACKED payload_t;
 
-    if (length < sizeof(payload_t)) {
+    if (length < offsetof(payload_t, dl_mode)) {
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
     }
     payload_t *p = (payload_t *)data;
+    uint8_t dl_mode = (length >= sizeof(payload_t)) ? p->dl_mode : 0;
+    if (dl_mode > 3) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
 
     uint8_t page1     = p->page1 ? 1 : 0;
     uint8_t max_block = page1 ? 3u : 7u;
@@ -1180,9 +1185,11 @@ static data_frame_tx_t *cmd_processor_lf_t55xx_read(uint16_t cmd, uint16_t statu
         return data_frame_make(cmd, STATUS_MEM_ERR, 0, NULL);
     }
 
+    t55xx_set_downlink_mode(dl_mode);
     uint16_t n = t55xx_read(p->rf_n, p->mode, p->modulation, p->downlink, p->use_pwd,
                             (uint32_t)bytes_to_num(p->pwd, 4),
                             p->block, page1, buf, want, 500);
+    t55xx_set_downlink_mode(0);
 
     /* Response: [u16 count][payload].
      * mode 0 -> count = bits, payload = MSB-first packed bits.

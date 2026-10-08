@@ -705,7 +705,8 @@ class ChameleonCMD:
     @expect_response(Status.LF_TAG_OK)
     def lf_t55xx_read(self, block: int, rf_n: int = 32, pwd: bytes = None,
                       page1: bool = False, raw: bool = False, downlink: bool = True,
-                      adc: bool = False, max_items: int = None, modulation: int = 0):
+                      adc: bool = False, max_items: int = None, modulation: int = 0,
+                      dl_mode: int = 0):
         """
         Read a T55xx block (Ultra only).
 
@@ -722,14 +723,15 @@ class ChameleonCMD:
         :param downlink: True => send addressed read command; False => regular read
         :param adc:      True => raw SAADC amplitude envelope (diagnostic)
         :param max_items: capture ceiling (firmware clamps: 320 edge, 2048 adc)
+        :param dl_mode:  downlink coding: 0 fixed, 1 long leading ref, 2 leading zero, 3 1-of-4
         """
         mode = 2 if adc else (1 if raw else 0)
         if max_items is None:
             max_items = 2048 if adc else 320
         use_pwd = pwd is not None
         pwd_bytes = pwd if use_pwd else b'\x00\x00\x00\x00'
-        data = struct.pack('!BBB4sBBBBH', block, int(page1), int(use_pwd), pwd_bytes,
-                           rf_n, mode, int(modulation), int(downlink), max_items)
+        data = struct.pack('!BBB4sBBBBHB', block, int(page1), int(use_pwd), pwd_bytes,
+                           rf_n, mode, int(modulation), int(downlink), max_items, dl_mode)
         resp = self.device.send_cmd_sync(Command.LF_T55XX_READ, data)
         if resp.status == Status.LF_TAG_OK and len(resp.data) >= 2:
             n = struct.unpack('!H', resp.data[:2])[0]

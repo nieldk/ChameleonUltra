@@ -34,6 +34,7 @@ uint8_t write_idteck_to_t55xx(uint8_t *data, uint8_t *new_passwd, uint8_t *old_p
 uint8_t scan_indala(uint8_t *data);
 uint8_t write_indala_to_t55xx(uint8_t *data, uint8_t *new_passwd, uint8_t *old_passwds, uint8_t old_passwd_count);
 #if defined(PROJECT_CHAMELEON_ULTRA)
+void t55xx_set_downlink_mode(uint8_t mode);
 uint8_t lf_t55xx_write_block(uint8_t block, uint32_t word, uint32_t passwd, bool use_passwd, bool page1);
 uint16_t t55xx_read(uint8_t rf_n, uint8_t mode, uint8_t modulation, uint8_t downlink,
                     uint8_t use_passwd, uint32_t passwd,
