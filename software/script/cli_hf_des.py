@@ -905,7 +905,7 @@ examples:
                 decoded, col = annot, CG
             else:
                 try:
-                    decoded, col = _decode_14a_frame_col(data, szBits)
+                    decoded, col, _ = _decode_14a_frame_col(data, szBits, is_tx=is_tx)
                 except Exception:
                     decoded, col = "(undecoded)", CC
             dir_str = f"{CG}<<<{C0}" if is_tx else f"{CY}>>>{C0}"
