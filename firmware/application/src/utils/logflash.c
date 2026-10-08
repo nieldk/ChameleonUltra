@@ -370,6 +370,13 @@ void logflash_poll(void) {
 
     uint32_t pend = m_ram.head - m_ram.flushed;
 
+    /* RAM state damaged: restart the RAM ring rather than issue bad writes */
+    if (pend > LF_RAM_SIZE || (m_ram.flushed & 3)) {
+        m_ram.head = 0;
+        m_ram.flushed = 0;
+        return;
+    }
+
     /* flash writes are whole words: pad a short tail once the log goes quiet */
     if ((pend & 3) &&
         (m_force || app_timer_cnt_diff_compute(app_timer_cnt_get(), m_last_append) >= APP_TIMER_TICKS(LF_IDLE_FLUSH_MS))) {
@@ -431,6 +438,17 @@ uint32_t logflash_read(uint32_t offset, uint8_t *dst, uint32_t len) {
     logring_view_t v;
     logring_scan(&v);
     return logring_read(&v, offset, dst, len);
+}
+
+void logflash_wipe_noinit(uint32_t base, uint32_t size) {
+    uint32_t keep_lo = (uint32_t)&m_ram;
+    uint32_t keep_hi = keep_lo + sizeof(m_ram);
+
+    for (uint32_t a = base; a < base + size; a += 4) {
+        if (a < keep_lo || a >= keep_hi) {
+            *(volatile uint32_t *)a = 0xFFFFFFFFu;
+        }
+    }
 }
 
 void logflash_clear(void) {

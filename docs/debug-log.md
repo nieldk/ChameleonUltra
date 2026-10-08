@@ -38,6 +38,8 @@ NRF_LOG ──► logflash backend ──► 2 KiB RAM ring (.noinit, survives r
 * The RAM ring keeps the last unflushed lines across a soft reset (fault
   handler, watchdog, `NVIC_SystemReset`). The next boot writes them to flash
   and adds a `--- boot N rst=0x... recovered=B level=L ---` marker.
+* The first-power wipe of the noinit RAM in `app_main.c` skips the log ring
+  (`logflash_wipe_noinit`); wiping it would also zero the ring state.
 * Capacity is about 32 KB of text; the oldest page is erased when the ring
   wraps. Roughly 28-32 KB of the most recent output is always kept.
 * A short tail is padded with newlines after 500 ms of silence so the last

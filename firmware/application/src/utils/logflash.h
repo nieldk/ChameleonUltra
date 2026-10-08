@@ -35,4 +35,7 @@ void logflash_get_stats(logflash_stats_t *out);
 uint32_t logflash_read(uint32_t offset, uint8_t *dst, uint32_t len);
 void logflash_clear(void);
 
+/* Fill [base, base+size) with 0xFF but leave the log RAM ring untouched. */
+void logflash_wipe_noinit(uint32_t base, uint32_t size);
+
 #endif

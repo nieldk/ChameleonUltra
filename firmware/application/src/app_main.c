@@ -616,8 +616,7 @@ static void check_wakeup_src(void) {
         NRF_LOG_INFO("First power system");
 
         // Reset the noinit ram area
-        uint32_t *noinit_addr = (uint32_t *)0x20038000;
-        memset(noinit_addr, 0xFF, 0x8000);
+        logflash_wipe_noinit(0x20038000, 0x8000);
         NRF_LOG_INFO("Reset noinit ram done.");
 
         // Initialize the default card slot data.
