@@ -1,6 +1,6 @@
 # Phreakbyte CLI Command Reference
 
-Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 38 command groups, 189 commands.
+Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 38 command groups, 192 commands.
 
 Notation: `<...>` are values you supply. Each option lists its flags, help, allowed `choices`, whether it is `required`, and its `default`. Run any command with `-h` in the client for the same information live.
 
@@ -1414,6 +1414,10 @@ T55xx/T5577 raw block commands
 Detect a T55xx tag by reading block 0 and stride-locking its config: slides a 32-bit window over the demodulated stream and accepts the first window that repeats and parses to a valid config at the read rate. Tries Manchester (amplitude path) and biphase (firmware diphase). FSK/PSK are not wired; streaming tags with no addressable config block (e.g. FDX-B) are reported as such. Sets the default RF/n for subsequent `read`.
 
 - `-p`, `--pwd` — Password, 4 hex bytes (if block 0 is read-protected)
+- `--r0` — downlink - fixed bit length
+- `--r1` — downlink - long leading reference
+- `--r2` — downlink - leading zero
+- `--r3` — downlink - 1 of 4 coding reference
 
 #### `lf t55xx dump`
 
@@ -1440,6 +1444,28 @@ examples:
   lf t55xx dump -f my_lf_dump
 ```
 
+#### `lf t55xx info`
+
+Show T55x7 configuration data (page 0 blk 0) read from the tag. Use -c to decode given config block data instead of reading the tag.
+
+- `-p`, `--pwd` — password (4 hex bytes)
+- `-c`, `--blk0` — use these data instead (4 hex bytes)
+- `--q5` — interpret provided data as T5555/Q5 config
+- `--rf` — Bitrate divisor RF/n (default: from `detect`)
+- `--mod` — Demod (default: from `detect`) (choices: auto, manchester, biphase; default: auto)
+- `--r0` — downlink - fixed bit length
+- `--r1` — downlink - long leading reference
+- `--r2` — downlink - leading zero
+- `--r3` — downlink - 1 of 4 coding reference
+
+```
+examples:
+  lf t55xx info
+  lf t55xx info -p 11223344
+  lf t55xx info -c 00083040
+  lf t55xx info -c 6001805A --q5
+```
+
 #### `lf t55xx read`
 
 Read a T55xx block (Manchester) and dump the demodulated bitstream
@@ -1453,6 +1479,29 @@ Read a T55xx block (Manchester) and dump the demodulated bitstream
 - `--adc` — Diagnostic: dump raw SAADC envelope amplitude (robust for dense data)
 - `--regread` — Diagnostic: skip the addressed downlink, capture the regular-read stream
 - `--mod` — Demod: manchester (SAADC amplitude, robust) or biphase (firmware diphase_feed). auto = whatever `detect` found (else manchester). (choices: auto, manchester, biphase; default: auto)
+- `-o`, `--override` — override safety check
+- `--r0` — downlink - fixed bit length
+- `--r1` — downlink - long leading reference
+- `--r2` — downlink - leading zero
+- `--r3` — downlink - 1 of 4 coding reference
+
+#### `lf t55xx restore`
+
+Restore T55xx card page 0/1 blocks from a (bin/eml/json) dump file
+
+- `-f`, `--file` — Specify a filename for dump file (required)
+- `-p`, `--pwd` — password if target card has password set (4 hex bytes)
+
+```
+example:
+  lf t55xx restore -f lf-t55xx-00148040-dump.bin
+```
+
+#### `lf t55xx view`
+
+Print a T55xx dump file (bin/eml/json)
+
+- `-f`, `--file` — Specify a filename for dump file (required)
 
 #### `lf t55xx wipe`
 
@@ -1462,6 +1511,10 @@ Wipe a T55xx: default config to block 0, zeros to blocks 1-7
 - `-p`, `--pwd` — Current password, 4 hex bytes (to auth the wipe)
 - `--q5` — Target Q5/T5555 (config 0x6001F004)
 - `--extended` — Also zero block 3 page 1 (extended-mode config)
+- `--r0` — downlink - fixed bit length
+- `--r1` — downlink - long leading reference
+- `--r2` — downlink - leading zero
+- `--r3` — downlink - 1 of 4 coding reference
 
 #### `lf t55xx write`
 
@@ -1471,6 +1524,10 @@ Write a raw 32-bit word to a T55xx block
 - `-d`, `--data` — 32-bit data word, 4 hex bytes (required)
 - `-p`, `--pwd` — Password, 4 hex bytes (password-protected write)
 - `--pg1` — Target page 1
+- `--r0` — downlink - fixed bit length
+- `--r1` — downlink - long leading reference
+- `--r2` — downlink - leading zero
+- `--r3` — downlink - 1 of 4 coding reference
 
 ### `lf viking`
 
