@@ -8,7 +8,8 @@ flashing the wrong image over UF2 will brick the device to an SWD-only state.
 
 ```
 0x00000 - 0x27000   SoftDevice (S140)
-0x27000 - 0xBF000   Application     <- UF2 writes only [0x27000, 0xF3000)
+0x27000 - 0xB0000   Application     <- UF2 writes only [0x27000, 0xF3000)
+0xB0000 - 0xBF000   Bootloader staging (hw bl push)
 0xBF000 - 0xC7000   Debug log ring (see debug-log.md)
 0xC7000 - 0xF3000   FDS
 0xF3000 - 0xFE000   Bootloader (44 KB)
@@ -84,3 +85,19 @@ Still enforced (not downgrade checks): the hardware-version match, the
 SoftDevice compatibility gate for SoftDevice-type updates, and the DFU package
 signature (`NRF_DFU_REQUIRE_SIGNED_APP_UPDATE = 1`). Packages must be signed
 with the fork's DFU key.
+
+## Updating the bootloader from the app (`hw bl push`)
+
+Secure DFU rejects a bootloader image on units that still run an older UF2
+bootloader (`VerificationFailed`). The application can replace the bootloader
+itself, without DFU:
+
+1. Flash a current application through the UF2 drive (works on any unit).
+2. `hw bl push bootloader.hex` (or a raw `.bin` linked for 0xF3000; UICR records in a hex are ignored).
+
+The app erases and fills the staging area (0xB0000-0xBF000), checks the CRC32
+and the vector table, flushes the log, disables the SoftDevice and calls
+`sd_mbr_command(COPY_BL)`. The MBR does the erase and copy and resumes it after
+a power loss. The command is refused unless the MBR parameter page and the
+bootloader address are set in UICR (bootloader flashed once via SWD or from a
+hex file). The application is limited to 0x27000-0xB0000 (560 KB).

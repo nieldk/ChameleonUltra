@@ -60,6 +60,9 @@
 #define DATA_CMD_LOG_SET_LEVEL                  (1048)  /* 0 off .. 4 debug, persisted in settings */
 #define DATA_CMD_LOG_READ                       (1049)  /* u32 offset, u16 len -> text */
 #define DATA_CMD_LOG_CLEAR                      (1050)
+#define DATA_CMD_BL_STAGE_BEGIN                 (1051)  /* u32 len, u32 crc32 */
+#define DATA_CMD_BL_STAGE_DATA                  (1052)  /* u32 offset, data */
+#define DATA_CMD_BL_STAGE_COMMIT                (1053)  /* u32 magic "COPY": verify, copy, reset */
 
 //
 // ******************************************************************

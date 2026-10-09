@@ -17,6 +17,7 @@
 #include "delayed_reset.h"
 #include "logflash.h"
 #include "logring.h"
+#include "blstage.h"
 #include "netdata.h"
 #if defined(PROJECT_CHAMELEON_ULTRA)
 #include "bsp_wdt.h"
@@ -179,6 +180,42 @@ static data_frame_tx_t *cmd_processor_log_read(uint16_t cmd, uint16_t status, ui
 static data_frame_tx_t *cmd_processor_log_clear(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     logflash_clear();
     return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
+static data_frame_tx_t *bl_stage_reply(uint16_t cmd, bls_err_t e) {
+    uint8_t r = (uint8_t)e;
+    if (e == BLS_OK) {
+        return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+    }
+    return data_frame_make(cmd, e == BLS_ERR_FLASH ? STATUS_FLASH_WRITE_FAIL : STATUS_CMD_ERR, 1, &r);
+}
+
+static data_frame_tx_t *cmd_processor_bl_stage_begin(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length != 8) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint32_t len, crc;
+    memcpy(&len, data, 4);
+    memcpy(&crc, data + 4, 4);
+    return bl_stage_reply(cmd, blstage_begin(U32NTOHL(len), U32NTOHL(crc)));
+}
+
+static data_frame_tx_t *cmd_processor_bl_stage_data(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length <= 4) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint32_t off;
+    memcpy(&off, data, 4);
+    return bl_stage_reply(cmd, blstage_write(U32NTOHL(off), data + 4, length - 4));
+}
+
+static data_frame_tx_t *cmd_processor_bl_stage_commit(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length != 4) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint32_t magic;
+    memcpy(&magic, data, 4);
+    return bl_stage_reply(cmd, blstage_commit(U32NTOHL(magic)));
 }
 
 static data_frame_tx_t *cmd_processor_get_device_model(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
@@ -4401,6 +4438,9 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_LOG_SET_LEVEL,                NULL,                        cmd_processor_log_set_level,                 NULL                   },
     {    DATA_CMD_LOG_READ,                     NULL,                        cmd_processor_log_read,                      NULL                   },
     {    DATA_CMD_LOG_CLEAR,                    NULL,                        cmd_processor_log_clear,                     NULL                   },
+    {    DATA_CMD_BL_STAGE_BEGIN,               NULL,                        cmd_processor_bl_stage_begin,                NULL                   },
+    {    DATA_CMD_BL_STAGE_DATA,                NULL,                        cmd_processor_bl_stage_data,                 NULL                   },
+    {    DATA_CMD_BL_STAGE_COMMIT,              NULL,                        cmd_processor_bl_stage_commit,               NULL                   },
     {    DATA_CMD_SET_BLE_NAME,                 NULL,                        cmd_processor_set_ble_name,                  NULL                   },
 
 #if defined(PROJECT_CHAMELEON_ULTRA)

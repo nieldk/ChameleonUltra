@@ -130,6 +130,29 @@ class ChameleonCMD:
         """Erase the stored log."""
         return self.device.send_cmd_sync(Command.LOG_CLEAR)
 
+    BL_STAGE_ERRORS = {
+        1: "bad length or offset", 2: "MBR param page not set in UICR (flash the bootloader once via SWD)",
+        3: "bootloader address is not 0xF3000", 4: "flash erase/write failed",
+        5: "wrong command order", 6: "CRC mismatch", 7: "image is not a bootloader", 8: "bad commit magic",
+    }
+
+    def _bl_stage(self, cmd, payload):
+        resp = self.device.send_cmd_sync(cmd, payload, timeout=15)
+        if resp.status != Status.SUCCESS:
+            why = self.BL_STAGE_ERRORS.get(resp.data[0], "unknown") if resp.data else "unknown"
+            raise UnexpectedResponseError(f"bootloader stage failed (status 0x{resp.status:02X}): {why}")
+
+    def bl_stage_begin(self, length, crc32):
+        """Erase the staging area and announce an image of `length` bytes."""
+        self._bl_stage(Command.BL_STAGE_BEGIN, struct.pack('!II', length, crc32))
+
+    def bl_stage_data(self, offset, data):
+        self._bl_stage(Command.BL_STAGE_DATA, struct.pack('!I', offset) + data)
+
+    def bl_stage_commit(self):
+        """Verify, copy to 0xF3000 via the MBR and reset the device."""
+        self._bl_stage(Command.BL_STAGE_COMMIT, struct.pack('!I', 0x434F5059))
+
     @expect_response(Status.SUCCESS)
     def get_device_mode(self):
         resp = self.device.send_cmd_sync(Command.GET_DEVICE_MODE)
