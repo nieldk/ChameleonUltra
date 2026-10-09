@@ -175,12 +175,21 @@ class SerialTransport(Transport):
         raise DFUError("timeout waiting for DFU response")
 
     def command(self, opcode: int, data: bytes = b"") -> bytes:
-        self.serial.reset_input_buffer()
-        self.serial.write(slip_encode(bytes((opcode,)) + data))
-        return check_response(self._read_packet(), opcode)
+        # SerialException is an OSError. Windows raises it when the device
+        # resets and the port vanishes mid-read, not a clean timeout.
+        try:
+            self.serial.reset_input_buffer()
+            self.serial.write(slip_encode(bytes((opcode,)) + data))
+            packet = self._read_packet()
+        except OSError as e:
+            raise DFUError(f"serial port lost: {e}") from e
+        return check_response(packet, opcode)
 
     def write_data(self, chunk: bytes) -> None:
-        self.serial.write(slip_encode(bytes((DfuOp.WRITE_OBJECT,)) + chunk))
+        try:
+            self.serial.write(slip_encode(bytes((DfuOp.WRITE_OBJECT,)) + chunk))
+        except OSError as e:
+            raise DFUError(f"serial port lost: {e}") from e
 
     def data_chunk_size(self) -> int:
         if self._chunk is None:
