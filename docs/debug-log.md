@@ -43,6 +43,9 @@ NRF_LOG ──► logflash backend ──► 2 KiB RAM ring (.noinit, survives r
 * The boot marker also shows `wdt=1` when the watchdog was already running at
   boot (inherited from the previous run). `main()` logs a `boot: <step>` line
   after each init stage, so a stalled boot shows how far it got.
+* `ble_main` is capped at info and `peer_manager` at warning in the flash log.
+  Otherwise the hex dump of every BLE frame, including the frames that carry
+  the log, is logged again and a dump over BLE never catches up.
 * Capacity is about 32 KB of text; the oldest page is erased when the ring
   wraps. Roughly 28-32 KB of the most recent output is always kept.
 * A short tail is padded with newlines after 500 ms of silence so the last

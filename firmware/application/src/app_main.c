@@ -1211,10 +1211,23 @@ static void ensure_regout0_3v3(void)
     NVIC_SystemReset();             /* REGOUT0 takes effect only after reset */
 }
 
+/* A watchdog started before the reset (bootloader, previous run) keeps running
+ * through init. Feed it so a slow boot is not reset before bsp_wdt_init(). */
+static void wdt_feed_inherited(void) {
+    if (NRF_WDT->RUNSTATUS & 1u) {
+        for (uint32_t i = 0; i < 8; i++) {
+            if (NRF_WDT->RREN & (1u << i)) {
+                NRF_WDT->RR[i] = WDT_RR_RR_Reload;
+            }
+        }
+    }
+}
+
 /* Drain deferred log lines so a stall shows how far init got. */
-#define BOOT_STEP(name) do { NRF_LOG_INFO("boot: " name); while (NRF_LOG_PROCESS()); } while (0)
+#define BOOT_STEP(name) do { wdt_feed_inherited(); NRF_LOG_INFO("boot: " name); while (NRF_LOG_PROCESS()); } while (0)
 
 int main(void) {
+    wdt_feed_inherited();
     ensure_regout0_3v3();   /* self-heal VDD rail after any UICR erase */
     hw_connect_init();        // Remember to initialize the pins first
 

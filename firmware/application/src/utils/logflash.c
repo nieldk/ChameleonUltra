@@ -186,6 +186,27 @@ static uint8_t sev_min(uint8_t a, uint8_t b) {
     return a < b ? a : b;
 }
 
+/* Modules that would flood the log (hex dumps of every BLE frame, which
+ * includes the frames carrying the log itself, and per-event pairing notes). */
+static const struct {
+    const char *name;
+    uint8_t     max;
+} k_caps[] = {
+    { "ble_main",     NRF_LOG_SEVERITY_INFO    },
+    { "peer_manager", NRF_LOG_SEVERITY_WARNING },
+};
+
+static uint8_t module_cap(uint32_t id, uint8_t sev) {
+    const char *name = nrf_log_module_name_get(id, false);
+
+    for (uint32_t k = 0; name && k < sizeof(k_caps) / sizeof(k_caps[0]); k++) {
+        if (strcmp(name, k_caps[k].name) == 0) {
+            return sev_min(sev, k_caps[k].max);
+        }
+    }
+    return sev;
+}
+
 void logflash_set_level(uint8_t level) {
     if (level > LOGFLASH_LEVEL_MAX) {
         level = LOGFLASH_LEVEL_MAX;
@@ -197,7 +218,7 @@ void logflash_set_level(uint8_t level) {
     uint32_t cnt = nrf_log_module_cnt_get();
     for (uint32_t i = 0; i < cnt; i++) {
         uint8_t compiled = nrf_log_module_filter_get(0, i, false, false);
-        nrf_log_module_filter_set((uint32_t)m_backend_id, i, (nrf_log_severity_t)sev_min(compiled, level));
+        nrf_log_module_filter_set((uint32_t)m_backend_id, i, (nrf_log_severity_t)module_cap(i, sev_min(compiled, level)));
     }
 }
 
