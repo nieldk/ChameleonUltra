@@ -75,4 +75,4 @@ fails at link time instead of corrupting it.
   into UF2 mode afterwards; it cannot be streamed live.
 * Compile-time log level is DEBUG and runtime filters are enabled so the level
   can change without a rebuild; this costs about 17 KB of flash.
-* A UF2 application image larger than 0xBF000 would overwrite the ring.
+* A UF2 application image larger than 0xB0000 would overwrite the bootloader staging area, one larger than 0xBF000 the ring.
