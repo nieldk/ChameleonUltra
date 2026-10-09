@@ -1,5 +1,7 @@
 #include "fds_util.h"
 #include "bsp_wdt.h"
+#include "nrf_delay.h"
+#include "nrf.h"
 
 #define NRF_LOG_MODULE_NAME fds_sync
 #include "nrf_log.h"
@@ -18,6 +20,22 @@ static struct {
     bool ignore_pm;     // ignore peer manager records, defaults to true, set to false by fds_wipe
 } fds_operation_info;
 
+#define FDS_WAIT_TIMEOUT_US 10000000UL
+
+/* Wait for the FDS event; feed the WDT, give up after 10 s. */
+static bool fds_wait_done(const char *what) {
+    for (uint32_t t = 0; !fds_operation_info.success; t += 100) {
+        if (t >= FDS_WAIT_TIMEOUT_US) {
+            NRF_LOG_ERROR("FDS wait timeout: %s", what);
+            return false;
+        }
+        if (NRF_WDT->RUNSTATUS & 1u) {
+            bsp_wdt_feed();
+        }
+        nrf_delay_us(100);
+    }
+    return true;
+}
 
 /**
  *The query record exists, and get the handle of the record
@@ -127,9 +145,7 @@ bool fds_write_sync(uint16_t id, uint16_t key, uint16_t length, void *buffer) {
     // CCall the write implementation function without automatic GC
     ret_code_t err_code = fds_write_record_nogc(id, key, data_length_words, buffer);
     if (err_code == NRF_SUCCESS) {
-        while (!fds_operation_info.success) {
-            __NOP();
-        }; // Waiting for operation to complete
+        if (!fds_wait_done("write")) ret = false;
     } else if (err_code == FDS_ERR_NO_SPACE_IN_FLASH) {   //Make sure there is space to operate, otherwise GC will be required
         // The current error is an error with insufficient space. Maybe we need GC
         NRF_LOG_INFO("FDS no space, gc auto start.");
@@ -140,9 +156,7 @@ bool fds_write_sync(uint16_t id, uint16_t key, uint16_t length, void *buffer) {
         fds_operation_info.success = false;
         err_code = fds_write_record_nogc(id, key, data_length_words, buffer);
         if (err_code == NRF_SUCCESS) {
-            while (!fds_operation_info.success) {
-                __NOP();
-            }; // Waiting for operation to complete
+            if (!fds_wait_done("write after gc")) ret = false;
         } else if (err_code == FDS_ERR_NO_SPACE_IN_FLASH) {
             //After gc once, I found that there is still no space, so it may be that the developer did not consider the space distribution and caused overflow
             NRF_LOG_ERROR("FDS no space to write.");
@@ -174,9 +188,7 @@ int fds_delete_sync(uint16_t id, uint16_t key) {
         err_code = fds_record_delete(&record_desc);
         APP_ERROR_CHECK(err_code);
         delete_count++;
-        while (!fds_operation_info.success) {
-            __NOP();
-        }; //Waiting for operation to complete
+        if (!fds_wait_done("delete")) break;
     }
     return delete_count;
 }
@@ -192,8 +204,8 @@ static bool is_peer_manager_record(uint16_t id_or_key) {
  *FDS event callback
  */
 static void fds_evt_handler(fds_evt_t const *p_evt) {
-    // Skip peermanager event
-    if (fds_operation_info.ignore_pm && (
+    // Skip peermanager events (gc events carry no file/key)
+    if (fds_operation_info.ignore_pm && p_evt->id != FDS_EVT_GC && p_evt->id != FDS_EVT_INIT && (
                 is_peer_manager_record(p_evt->write.record_key)
                 || is_peer_manager_record(p_evt->write.file_id)
                 || is_peer_manager_record(p_evt->del.record_key)
@@ -282,9 +294,7 @@ void fds_gc_sync(void) {
     fds_operation_info.success = false;
     ret_code_t err_code = fds_gc();
     APP_ERROR_CHECK(err_code);
-    while (!fds_operation_info.success) {
-        __NOP();
-    };
+    fds_wait_done("gc");
 }
 
 static bool fds_next_record_delete_sync() {
@@ -305,9 +315,7 @@ static bool fds_next_record_delete_sync() {
         return false;
     }
 
-    while (!fds_operation_info.success) {
-        __NOP();
-    }
+    if (!fds_wait_done("record delete")) return false;
 
     NRF_LOG_INFO("Record id=%08x deleted successfully", fds_operation_info.record_id);
     return true;
