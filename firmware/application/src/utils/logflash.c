@@ -224,6 +224,7 @@ void logflash_set_level(uint8_t level) {
 
 void logflash_init(uint8_t level) {
     uint32_t recovered = 0;
+    uint32_t old_magic = m_ram.magic, old_head = m_ram.head, old_flushed = m_ram.flushed;
     bool valid = m_ram.magic == LF_RAM_MAGIC &&
                  (m_ram.head - m_ram.flushed) <= LF_RAM_SIZE &&
                  (m_ram.flushed & 3) == 0;
@@ -256,7 +257,7 @@ void logflash_init(uint8_t level) {
     logflash_set_level(level);
 
     if (level > 0 || recovered > 0) {
-        char line[96];
+        char line[128];
         uint32_t n = cat(line, 0, "\n--- boot ");
         n += utoa_dec(line + n, m_ram.boots);
         n = cat(line, n, " rst=0x");
@@ -268,6 +269,15 @@ void logflash_init(uint8_t level) {
         /* WDT already running at boot = inherited from the previous run */
         n = cat(line, n, " wdt=");
         n += utoa_dec(line + n, NRF_WDT->RUNSTATUS & 1u);
+        if (!valid) {
+            /* why the RAM state was rejected: magic / head / flushed as found */
+            n = cat(line, n, " inv m=");
+            n += hex8(line + n, old_magic);
+            n = cat(line, n, " h=");
+            n += hex8(line + n, old_head);
+            n = cat(line, n, " f=");
+            n += hex8(line + n, old_flushed);
+        }
         n = cat(line, n, " ---\n");
         ram_put(line, n);
     }
