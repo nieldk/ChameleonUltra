@@ -56,6 +56,10 @@
 #define DATA_CMD_GET_BLE_NAME                   (1043)
 #define DATA_CMD_SET_BLE_NAME                   (1044)
 #define DATA_CMD_RESET_DEVICE                   (1045)  /* plain reboot into the app, no bootloader/factory wipe */
+#define DATA_CMD_LOG_GET_STATUS                 (1047)  /* persistent debug log: level, sizes, counters */
+#define DATA_CMD_LOG_SET_LEVEL                  (1048)  /* 0 off .. 4 debug, persisted in settings */
+#define DATA_CMD_LOG_READ                       (1049)  /* u32 offset, u16 len -> text */
+#define DATA_CMD_LOG_CLEAR                      (1050)
 
 //
 // ******************************************************************

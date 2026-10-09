@@ -44,6 +44,7 @@ NRF_LOG_MODULE_REGISTER();
 #include "rgb_marquee.h"
 #include "tag_persistence.h"
 #include "settings.h"
+#include "logflash.h"
 #include "app_standalone.h"
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
@@ -123,6 +124,7 @@ static void log_init(void) {
     APP_ERROR_CHECK(err_code);
 
     NRF_LOG_DEFAULT_BACKENDS_INIT();
+    logflash_init(settings_get_log_level());
 }
 
 /**@brief Function for initializing power management.
@@ -485,11 +487,13 @@ static void system_off_enter(void) {
         sd_power_gpregret_clr(1, GPREGRET_CLEAR_VALUE_DEFAULT);
         sd_power_gpregret_set(1, RESET_ON_LF_FIELD_EXISTS_Msk);
         // Trigger the RESET awakening system, restart the emulation process
+        logflash_flush_blocking(100);
         nrf_pwr_mgmt_shutdown(NRF_PWR_MGMT_SHUTDOWN_RESET);
         return;
     };
 
     // Last call, gate is closing
+    logflash_flush_blocking(100);
     NRF_LOG_FLUSH();
 
     // TEST: ask the bootloader to skip the app CRC check on the next wake, so an
@@ -612,8 +616,7 @@ static void check_wakeup_src(void) {
         NRF_LOG_INFO("First power system");
 
         // Reset the noinit ram area
-        uint32_t *noinit_addr = (uint32_t *)0x20038000;
-        memset(noinit_addr, 0xFF, 0x8000);
+        logflash_wipe_noinit(0x20038000, 0x8000);
         NRF_LOG_INFO("Reset noinit ram done.");
 
         // Initialize the default card slot data.
@@ -1208,6 +1211,9 @@ static void ensure_regout0_3v3(void)
     NVIC_SystemReset();             /* REGOUT0 takes effect only after reset */
 }
 
+/* Drain deferred log lines so a stall shows how far init got. */
+#define BOOT_STEP(name) do { NRF_LOG_INFO("boot: " name); while (NRF_LOG_PROCESS()); } while (0)
+
 int main(void) {
     ensure_regout0_3v3();   /* self-heal VDD rail after any UICR erase */
     hw_connect_init();        // Remember to initialize the pins first
@@ -1217,11 +1223,14 @@ int main(void) {
 
     init_leds();              // LED initialization
     log_init();               // Log initialization
+    BOOT_STEP("log");
     gpio_te_init();           // Initialize GPIO matrix library
     app_timers_init();        // Initialize soft timer
     power_management_init();  // Power management initialization
     usb_cdc_init();           // USB cdc emulation initialization
+    BOOT_STEP("usb");
     ble_slave_init();         // Bluetooth protocol stack initialization
+    BOOT_STEP("ble");
 
     rng_drv_and_srand_init(); // Random number generator initialization
     bsp_timer_init();         // Initialize timeout timer
@@ -1229,8 +1238,10 @@ int main(void) {
     button_init();            // Button initialization for handling business logic
     sleep_timer_init();       // Soft timer initialization for hibernation
     tag_emulation_init();     // Analog card initialization
+    BOOT_STEP("tag");
     rgb_marquee_init();       // Light effect initialization
     app_standalone_init();    // Standalone (host-less) mode subsystem
+    BOOT_STEP("standalone");
 
     ble_passkey_init();       // init ble connect key.
 
@@ -1238,7 +1249,9 @@ int main(void) {
     on_data_frame_complete(on_data_frame_received);
 
     check_wakeup_src();       // Detect wake-up source and decide BLE broadcast and subsequent hibernation action according to the wake-up source
+    BOOT_STEP("wakeup");
     tag_mode_enter();         // Enter card emulation mode by default
+    BOOT_STEP("mode");
 
     // usbd event listener
     APP_ERROR_CHECK(app_usbd_power_events_enable());
@@ -1279,6 +1292,7 @@ int main(void) {
         data_frame_process();
         // Log print process
         while (NRF_LOG_PROCESS());
+        logflash_poll();
         // USB event process
         while (app_usbd_event_queue_process());
         // WDT refresh

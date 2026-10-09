@@ -15,6 +15,8 @@
 #include "nrfx_ppi.h"
 #include "settings.h"
 #include "delayed_reset.h"
+#include "logflash.h"
+#include "logring.h"
 #include "netdata.h"
 #if defined(PROJECT_CHAMELEON_ULTRA)
 #include "bsp_wdt.h"
@@ -118,6 +120,67 @@ static data_frame_tx_t *cmd_processor_get_free_memory(uint16_t cmd, uint16_t sta
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(payload), (uint8_t *)&payload);
 }
 
+static data_frame_tx_t *cmd_processor_log_get_status(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    logflash_stats_t st;
+    logflash_request_flush();
+    logflash_get_stats(&st);
+
+    struct {
+        uint8_t  level;
+        uint8_t  failed;
+        uint8_t  pages;
+        uint8_t  reserved;
+        uint32_t stored;
+        uint32_t pending;
+        uint32_t dropped;
+        uint32_t boots;
+        uint32_t err;
+    } PACKED payload;
+    payload.level    = st.level;
+    payload.failed   = st.failed ? 1 : 0;
+    payload.pages    = LOGRING_PAGES;
+    payload.reserved = 0;
+    payload.stored   = U32HTONL(st.stored);
+    payload.pending  = U32HTONL(st.pending);
+    payload.dropped  = U32HTONL(st.dropped);
+    payload.boots    = U32HTONL(st.boots);
+    payload.err      = U32HTONL(st.err);
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(payload), (uint8_t *)&payload);
+}
+
+static data_frame_tx_t *cmd_processor_log_set_level(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length != 1 || data[0] > LOGFLASH_LEVEL_MAX) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    logflash_set_level(data[0]);
+    settings_set_log_level(data[0]);
+    status = settings_save_config();
+    return data_frame_make(cmd, status, 0, NULL);
+}
+
+static data_frame_tx_t *cmd_processor_log_read(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    static uint8_t buf[512];
+    if (length != 6) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint32_t offset;
+    uint16_t len16;
+    memcpy(&offset, data, sizeof(offset));
+    memcpy(&len16, data + 4, sizeof(len16));
+    offset = U32NTOHL(offset);
+    uint32_t len = U16NTOHS(len16);
+    if (len > sizeof(buf)) {
+        len = sizeof(buf);
+    }
+    uint32_t n = logflash_read(offset, buf, len);
+    return data_frame_make(cmd, STATUS_SUCCESS, n, buf);
+}
+
+static data_frame_tx_t *cmd_processor_log_clear(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    logflash_clear();
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
 static data_frame_tx_t *cmd_processor_get_device_model(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     uint8_t resp_data = hw_get_device_type();
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(resp_data), &resp_data);
@@ -151,6 +214,7 @@ static data_frame_tx_t *cmd_processor_get_device_mode(uint16_t cmd, uint16_t sta
 
 static data_frame_tx_t *cmd_processor_enter_bootloader(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     // restart to boot
+    logflash_flush_blocking(100);
 #define BOOTLOADER_DFU_GPREGRET_MASK            (0xB0)
 #define BOOTLOADER_DFU_START_BIT_MASK           (0x01)
 #define BOOTLOADER_DFU_START    (BOOTLOADER_DFU_GPREGRET_MASK |         BOOTLOADER_DFU_START_BIT_MASK)
@@ -4333,6 +4397,10 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_GET_DFU_APP_VERSION,          NULL,                        cmd_processor_get_dfu_app_version,           NULL                   },
     {    DATA_CMD_GET_FREE_MEMORY,              NULL,                        cmd_processor_get_free_memory,               NULL                   },
     {    DATA_CMD_GET_BLE_NAME,                 NULL,                        cmd_processor_get_ble_name,                  NULL                   },
+    {    DATA_CMD_LOG_GET_STATUS,               NULL,                        cmd_processor_log_get_status,                NULL                   },
+    {    DATA_CMD_LOG_SET_LEVEL,                NULL,                        cmd_processor_log_set_level,                 NULL                   },
+    {    DATA_CMD_LOG_READ,                     NULL,                        cmd_processor_log_read,                      NULL                   },
+    {    DATA_CMD_LOG_CLEAR,                    NULL,                        cmd_processor_log_clear,                     NULL                   },
     {    DATA_CMD_SET_BLE_NAME,                 NULL,                        cmd_processor_set_ble_name,                  NULL                   },
 
 #if defined(PROJECT_CHAMELEON_ULTRA)

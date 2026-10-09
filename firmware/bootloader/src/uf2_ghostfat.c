@@ -1,9 +1,10 @@
 /*
  * uf2_ghostfat.c — virtual FAT12 disk for ChameleonUltra UF2 bootloader.
  *
- * Exposes two status files in the root directory:
+ * Exposes three status files in the root directory:
  *   - INFO_UF2.TXT: always present, device info + dd recommendations
  *   - FAIL.TXT:     appears after a UF2 block was rejected
+ *   - LOG.TXT:      the app's persistent debug log (when it holds any)
  *
  * SPDX-License-Identifier: MIT
  * Ghostfat pattern derived from adafruit/tinyuf2, Copyright (c) 2020 Ha Thach.
@@ -13,6 +14,7 @@
 #include "uf2_ghostfat.h"
 #include "uf2.h"
 #include "uf2_status.h"
+#include "logring.h"
 #include <string.h>
 
 #define NRF_LOG_MODULE_NAME uf2_ghostfat
@@ -44,6 +46,13 @@ extern void uf2_ping_observer(void);
 
 #define INFO_FILE_SECTOR        DATA_START_SECTOR
 #define FAIL_FILE_SECTOR        (DATA_START_SECTOR + 1)
+
+/* LOG.TXT: the app's persistent debug log, read straight from flash. */
+#define LOG_FILE_CLUSTER        4
+#define LOG_FILE_SECTOR         (DATA_START_SECTOR + 2)
+#define LOG_FILE_SECTORS        (LOGRING_SIZE / UF2_SECTOR_SIZE)
+
+static logring_view_t m_log;
 
 static uint32_t m_blocks_written;
 static uint32_t m_num_blocks_expected;
@@ -153,6 +162,7 @@ void uf2_ghostfat_init(void) {
         m_completion_signalled = false;
         uf2_status_init();
     }
+    logring_scan(&m_log);
     NRF_LOG_INFO("GhostFAT init. DATA_START=%u TOTAL=%u failure=%d",
                  DATA_START_SECTOR, BPB_TOTAL_SECTORS,
                  (int)uf2_status_has_failure());
@@ -188,6 +198,11 @@ int uf2_ghostfat_read_block(uint32_t lba, uint8_t *buf) {
             fat12_put(buf, 1, 0xFFF);
             fat12_put(buf, INFO_FILE_CLUSTER, 0xFFF);
             fat12_put(buf, FAIL_FILE_CLUSTER, 0xFFF);
+            uint32_t n = (m_log.length + UF2_SECTOR_SIZE - 1) / UF2_SECTOR_SIZE;
+            for (uint32_t i = 0; i < n; i++) {
+                fat12_put(buf, LOG_FILE_CLUSTER + i,
+                          (i == n - 1) ? 0xFFF : LOG_FILE_CLUSTER + i + 1);
+            }
         }
         return 0;
     }
@@ -200,11 +215,15 @@ int uf2_ghostfat_read_block(uint32_t lba, uint8_t *buf) {
             (void)uf2_status_get_info_txt(&info_sz);
             dir_make_file(&entries[1], "INFO_UF2TXT", INFO_FILE_CLUSTER, info_sz);
         }
+        uint32_t slot = 2;   /* a zero entry ends the directory: no gaps */
         if (uf2_status_has_failure()) {
             uint32_t sz;
             (void)uf2_status_get_fail_txt(&sz);
-            dir_make_file(&entries[2], "FAIL    TXT", FAIL_FILE_CLUSTER, sz);
+            dir_make_file(&entries[slot++], "FAIL    TXT", FAIL_FILE_CLUSTER, sz);
             NRF_LOG_WARNING("FAIL.TXT present in root dir");
+        }
+        if (m_log.length) {
+            dir_make_file(&entries[slot], "LOG     TXT", LOG_FILE_CLUSTER, m_log.length);
         }
         return 0;
     }
@@ -224,6 +243,11 @@ int uf2_ghostfat_read_block(uint32_t lba, uint8_t *buf) {
             memcpy(buf, txt, sz);
             NRF_LOG_WARNING("FAIL.TXT content read by host");
         }
+        return 0;
+    }
+    if (lba >= LOG_FILE_SECTOR && lba < LOG_FILE_SECTOR + LOG_FILE_SECTORS) {
+        (void)logring_read(&m_log, (lba - LOG_FILE_SECTOR) * UF2_SECTOR_SIZE,
+                           buf, UF2_SECTOR_SIZE);
         return 0;
     }
 

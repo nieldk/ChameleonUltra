@@ -319,6 +319,14 @@ void settings_set_sleep_timeout(uint8_t seconds) {
     config.sleep_timeout = seconds;
 }
 
+uint8_t settings_get_log_level(void) {
+    return config.log_level <= 4 ? config.log_level : 0;
+}
+
+void settings_set_log_level(uint8_t level) {
+    config.log_level = level;
+}
+
 /**
  * @brief Get the custom BLE advertised name.
  *
