@@ -139,8 +139,10 @@ static void apply(void *ctx) {
         .params.copy_bl.bl_src = (uint32_t *)BLSTAGE_BASE,
         .params.copy_bl.bl_len = m_len / 4,
     };
-    sd_mbr_command(&cmd);
-    /* Only reached on error: restart the app. */
+    uint32_t rc = sd_mbr_command(&cmd);
+    /* Only reached on error: keep the code in the RAM log, restart the app. */
+    NRF_LOG_ERROR("blstage: COPY_BL failed, rc=0x%x", rc);
+    while (NRF_LOG_PROCESS());
     NVIC_SystemReset();
 }
 
