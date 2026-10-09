@@ -30,6 +30,8 @@ def _read_hex(path):
         n, addr, typ = raw[0], (raw[1] << 8) | raw[2], raw[3]
         if typ == 4:
             upper = ((raw[4] << 8) | raw[5]) << 16
+        elif typ == 2:
+            upper = ((raw[4] << 8) | raw[5]) << 4
         elif typ == 0:
             for i, b in enumerate(raw[4:4 + n]):
                 a = upper + addr + i
