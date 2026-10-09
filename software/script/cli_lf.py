@@ -989,6 +989,9 @@ def _t55_frame_block(bits):
     lead = 1
     while lead < n and bits[lead] == bits[0]:
         lead += 1
+    if lead >= n:
+        # whole stream is one level: an all-0 / all-1 block, not settling noise
+        return (0xFFFFFFFF if bits[0] == "1" else 0), "constant block"
     if lead > 48:
         bits = bits[lead:]
         n = len(bits)
