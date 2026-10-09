@@ -147,8 +147,24 @@ static void ram_put(const char *s, uint32_t n) {
 
 static uint8_t m_strbuf[64];
 
+/* NRF_LOG ends lines with CRLF; keep LF only. */
 static void be_tx(void const *ctx, char const *buf, size_t len) {
-    ram_put(buf, (uint32_t)len);
+    char tmp[64];
+    uint32_t n = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        if (buf[i] == '\r') {
+            continue;
+        }
+        if (n == sizeof(tmp)) {
+            ram_put(tmp, n);
+            n = 0;
+        }
+        tmp[n++] = buf[i];
+    }
+    if (n) {
+        ram_put(tmp, n);
+    }
 }
 
 static void be_put(nrf_log_backend_t const *p_backend, nrf_log_entry_t *p_msg) {
@@ -228,6 +244,9 @@ void logflash_init(uint8_t level) {
         n += utoa_dec(line + n, recovered);
         n = cat(line, n, " level=");
         n += utoa_dec(line + n, level);
+        /* WDT already running at boot = inherited from the previous run */
+        n = cat(line, n, " wdt=");
+        n += utoa_dec(line + n, NRF_WDT->RUNSTATUS & 1u);
         n = cat(line, n, " ---\n");
         ram_put(line, n);
     }

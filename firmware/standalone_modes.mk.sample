@@ -15,12 +15,12 @@
 # See CONTRIBUTING STANDALONE.md for what each mode does and the full
 # build-flag mechanics.
 
-STANDALONE_AUTHTRACE       ?= 1   # reader-side auth capture (Ultra only)
-STANDALONE_SLOT_CYCLE      ?= 1   # cycle emulation slots on a timer
-STANDALONE_AUTOCLONE       ?= 1   # auto-clone a presented card (writes!)
-STANDALONE_READ_REPLAY     ?= 1   # read now, replay later (writes!)
-STANDALONE_DICT_CHECK      ?= 1   # dictionary key check against a card (Ultra only)
-STANDALONE_EMUL_TRACE      ?= 1   # trace emulated-tag traffic
-STANDALONE_NFC_CANARY      ?= 1   # alert on an unexpected reader field
-STANDALONE_HF14A_TAP_SNIFF ?= 1   # passive HF14A tap sniff (Ultra only)
-STANDALONE_RELAY           ?= 1   # BLE peer relay (Ultra only)
+# STANDALONE_AUTHTRACE       ?= 1   # reader-side auth capture (Ultra only)
+# STANDALONE_SLOT_CYCLE      ?= 1   # cycle emulation slots on a timer
+# STANDALONE_AUTOCLONE       ?= 1   # auto-clone a presented card (writes!)
+# STANDALONE_READ_REPLAY     ?= 1   # read now, replay later (writes!)
+# STANDALONE_DICT_CHECK      ?= 1   # dictionary key check against a card (Ultra only)
+# STANDALONE_EMUL_TRACE      ?= 1   # trace emulated-tag traffic
+# STANDALONE_NFC_CANARY      ?= 1   # alert on an unexpected reader field
+# STANDALONE_HF14A_TAP_SNIFF ?= 1   # passive HF14A tap sniff (Ultra only)
+# STANDALONE_RELAY           ?= 1   # BLE peer relay (Ultra only)

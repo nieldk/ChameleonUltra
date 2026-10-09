@@ -1211,6 +1211,9 @@ static void ensure_regout0_3v3(void)
     NVIC_SystemReset();             /* REGOUT0 takes effect only after reset */
 }
 
+/* Drain deferred log lines so a stall shows how far init got. */
+#define BOOT_STEP(name) do { NRF_LOG_INFO("boot: " name); while (NRF_LOG_PROCESS()); } while (0)
+
 int main(void) {
     ensure_regout0_3v3();   /* self-heal VDD rail after any UICR erase */
     hw_connect_init();        // Remember to initialize the pins first
@@ -1220,11 +1223,14 @@ int main(void) {
 
     init_leds();              // LED initialization
     log_init();               // Log initialization
+    BOOT_STEP("log");
     gpio_te_init();           // Initialize GPIO matrix library
     app_timers_init();        // Initialize soft timer
     power_management_init();  // Power management initialization
     usb_cdc_init();           // USB cdc emulation initialization
+    BOOT_STEP("usb");
     ble_slave_init();         // Bluetooth protocol stack initialization
+    BOOT_STEP("ble");
 
     rng_drv_and_srand_init(); // Random number generator initialization
     bsp_timer_init();         // Initialize timeout timer
@@ -1232,8 +1238,10 @@ int main(void) {
     button_init();            // Button initialization for handling business logic
     sleep_timer_init();       // Soft timer initialization for hibernation
     tag_emulation_init();     // Analog card initialization
+    BOOT_STEP("tag");
     rgb_marquee_init();       // Light effect initialization
     app_standalone_init();    // Standalone (host-less) mode subsystem
+    BOOT_STEP("standalone");
 
     ble_passkey_init();       // init ble connect key.
 
@@ -1241,7 +1249,9 @@ int main(void) {
     on_data_frame_complete(on_data_frame_received);
 
     check_wakeup_src();       // Detect wake-up source and decide BLE broadcast and subsequent hibernation action according to the wake-up source
+    BOOT_STEP("wakeup");
     tag_mode_enter();         // Enter card emulation mode by default
+    BOOT_STEP("mode");
 
     // usbd event listener
     APP_ERROR_CHECK(app_usbd_power_events_enable());
