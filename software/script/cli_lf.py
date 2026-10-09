@@ -1565,6 +1565,15 @@ class LFT55xxDump(ReaderRequiredUnit):
             print()
             return
 
+        # Block 7 is the one block whose true value we know when a password was
+        # used. If it differs, the other blocks are rotated too: refuse to save.
+        if f0["pwd"] and pwd is not None and words[7].to_bytes(4, "big") != bytes(pwd):
+            print(f"{CR} - Block 7 read as {words[7]:08X} but the password used was "
+                  f"{bytes(pwd).hex().upper()}: block alignment is wrong, not saved. A file saved "
+                  f"now would not restore correctly.{C0}")
+            print()
+            return
+
         fn = args.file
         if not fn:
             fn = "lf-t55xx"
