@@ -19,6 +19,7 @@
 NRF_LOG_MODULE_REGISTER();
 
 #define BL_ADDR         0x000F3000UL
+#define MBR_PARAM_PAGE  0x000FE000UL   /* NRFFW[1] target; just past the BL region */
 #define PAGE_SIZE       4096UL
 #define WAIT_US         5000000UL
 #define APPLY_DELAY_MS  300
@@ -87,14 +88,13 @@ static bool mbr_ready(bls_err_t *err) {
 }
 
 bls_err_t blstage_begin(uint32_t len, uint32_t crc32) {
-    bls_err_t err;
     m_began = false;
     if (len < 64 || len > BLSTAGE_MAX_LEN || (len & 3u)) {
         return BLS_ERR_LEN;
     }
-    if (!mbr_ready(&err)) {
-        return err;
-    }
+    /* The MBR-registration check lives in blstage_commit (the COPY_BL path), not
+     * here: blstage_commit_raw deliberately runs on devices that fail it, since
+     * it registers the bootloader itself. Staging is the same for both. */
     if (!m_inited) {
         if (nrf_fstorage_init(&m_bs_fs, &nrf_fstorage_sd, NULL) != NRF_SUCCESS) {
             return BLS_ERR_FLASH;
@@ -146,10 +146,7 @@ static void apply(void *ctx) {
     NVIC_SystemReset();
 }
 
-bls_err_t blstage_commit(uint32_t magic) {
-    if (magic != BLSTAGE_COMMIT_MAGIC) {
-        return BLS_ERR_MAGIC;
-    }
+static bls_err_t verify_staged(void) {
     if (!m_began || m_next != m_len || m_committed) {
         return BLS_ERR_STATE;
     }
@@ -161,12 +158,135 @@ bls_err_t blstage_commit(uint32_t magic) {
             (v[1] & ~1u) < BL_ADDR || (v[1] & ~1u) >= BL_ADDR + BLSTAGE_MAX_LEN) {
         return BLS_ERR_IMAGE;
     }
-    NRF_LOG_INFO("blstage: %u bytes staged, crc ok, copying in %d ms", m_len, APPLY_DELAY_MS);
+    return BLS_OK;
+}
+
+static bls_err_t schedule_apply(app_timer_timeout_handler_t fn) {
     m_committed = true;
-    if (app_timer_create(&m_apply_timer, APP_TIMER_MODE_SINGLE_SHOT, apply) != NRF_SUCCESS ||
+    if (app_timer_create(&m_apply_timer, APP_TIMER_MODE_SINGLE_SHOT, fn) != NRF_SUCCESS ||
             app_timer_start(m_apply_timer, APP_TIMER_TICKS(APPLY_DELAY_MS), NULL) != NRF_SUCCESS) {
         m_committed = false;
         return BLS_ERR_STATE;
     }
     return BLS_OK;
+}
+
+bls_err_t blstage_commit(uint32_t magic) {
+    if (magic != BLSTAGE_COMMIT_MAGIC) {
+        return BLS_ERR_MAGIC;
+    }
+    bls_err_t e = verify_staged();
+    if (e != BLS_OK) {
+        return e;
+    }
+    /* COPY_BL needs the MBR registration; raw commit does not. */
+    if (!mbr_ready(&e)) {
+        return e;
+    }
+    NRF_LOG_INFO("blstage: %u bytes staged, crc ok, copying in %d ms", m_len, APPLY_DELAY_MS);
+    return schedule_apply(apply);
+}
+
+/* Set the NVMC write/erase mode and wait until the controller is ready. The
+ * nRF52840 does not allow a direct Een<->Wen switch, so every phase below ends
+ * back at Ren before the next sets the mode it needs. */
+static inline void nvmc_mode(uint32_t wen) {
+    NRF_NVMC->CONFIG = (wen << NVMC_CONFIG_WEN_Pos);
+    while (NRF_NVMC->READY == NVMC_READY_READY_Busy) {}
+}
+
+static inline void nvmc_settle(void) {
+    while (NRF_NVMC->READY == NVMC_READY_READY_Busy) {}
+}
+
+/* Raw installer: no MBR, no journaling. Runs from the app region (0x27000), so
+ * erasing the bootloader region does not erase the code doing it; the busy
+ * loops read the NVMC register, and instruction fetches simply stall while a
+ * page is busy and resume when it is ready. */
+static void apply_raw(void *ctx) {
+    (void)ctx;
+    while (NRF_LOG_PROCESS());
+    logflash_flush_blocking(100);
+    bsp_wdt_feed();
+
+    /* Own the flash controller outright: SoftDevice off, interrupts masked. */
+    sd_softdevice_disable();
+    __disable_irq();
+
+    /* 1. Erase the whole bootloader region [0xF3000, 0xFE000); never the MBR
+     *    param page at 0xFE000. */
+    nvmc_mode(NVMC_CONFIG_WEN_Een);
+    for (uint32_t a = BL_ADDR; a < BL_ADDR + BLSTAGE_MAX_LEN; a += PAGE_SIZE) {
+        NRF_NVMC->ERASEPAGE = a;
+        nvmc_settle();
+        bsp_wdt_feed();
+    }
+    nvmc_mode(NVMC_CONFIG_WEN_Ren);
+
+    /* 2. Write the staged image word by word from the staging area. */
+    nvmc_mode(NVMC_CONFIG_WEN_Wen);
+    const uint32_t *src = (const uint32_t *)BLSTAGE_BASE;
+    volatile uint32_t *dst = (volatile uint32_t *)BL_ADDR;
+    for (uint32_t i = 0; i < m_len / 4; i++) {
+        dst[i] = src[i];
+        nvmc_settle();
+        if ((i & 0xFF) == 0) {
+            bsp_wdt_feed();
+        }
+    }
+    nvmc_mode(NVMC_CONFIG_WEN_Ren);
+
+    /* 3. Register the bootloader with the MBR so it boots and future COPY_BL
+     *    pushes work: NRFFW[0]=0xF3000, NRFFW[1]=MBR param page. UICR words are
+     *    one-time-writable, so if either already points elsewhere the whole
+     *    UICR must be erased first (wipes REGOUT0, restored in step 4). */
+    uint32_t fw0 = NRF_UICR->NRFFW[0];
+    uint32_t fw1 = NRF_UICR->NRFFW[1];
+    if (fw0 != BL_ADDR || fw1 != MBR_PARAM_PAGE) {
+        /* A UICR word can only be rewritten after a full UICR erase; erase only
+         * when a word is non-blank and not already the value we want. */
+        if ((fw0 != 0xFFFFFFFFu && fw0 != BL_ADDR) ||
+                (fw1 != 0xFFFFFFFFu && fw1 != MBR_PARAM_PAGE)) {
+            nvmc_mode(NVMC_CONFIG_WEN_Een);
+            NRF_NVMC->ERASEUICR = 1;
+            nvmc_settle();
+            nvmc_mode(NVMC_CONFIG_WEN_Ren);
+        }
+        nvmc_mode(NVMC_CONFIG_WEN_Wen);
+        if (NRF_UICR->NRFFW[0] != BL_ADDR) {
+            NRF_UICR->NRFFW[0] = BL_ADDR;
+            nvmc_settle();
+        }
+        if (NRF_UICR->NRFFW[1] != MBR_PARAM_PAGE) {
+            NRF_UICR->NRFFW[1] = MBR_PARAM_PAGE;
+            nvmc_settle();
+        }
+        nvmc_mode(NVMC_CONFIG_WEN_Ren);
+    }
+
+    /* 4. Restore REGOUT0 to 3.3V if it is at the erased default, so the board
+     *    runs on battery (same rule as the app's REGOUT0 self-heal). */
+    if ((NRF_UICR->REGOUT0 & UICR_REGOUT0_VOUT_Msk) ==
+            (UICR_REGOUT0_VOUT_DEFAULT << UICR_REGOUT0_VOUT_Pos)) {
+        nvmc_mode(NVMC_CONFIG_WEN_Wen);
+        NRF_UICR->REGOUT0 = (NRF_UICR->REGOUT0 & ~(uint32_t)UICR_REGOUT0_VOUT_Msk) |
+                            (UICR_REGOUT0_VOUT_3V3 << UICR_REGOUT0_VOUT_Pos);
+        nvmc_settle();
+        nvmc_mode(NVMC_CONFIG_WEN_Ren);
+    }
+
+    NVIC_SystemReset();
+}
+
+bls_err_t blstage_commit_raw(uint32_t magic) {
+    if (magic != BLSTAGE_COMMIT_RAW_MAGIC) {
+        return BLS_ERR_MAGIC;
+    }
+    bls_err_t e = verify_staged();
+    if (e != BLS_OK) {
+        return e;
+    }
+    NRF_LOG_INFO("blstage: %u bytes staged, crc ok, RAW NVMC install + UICR convert in %d ms",
+                 m_len, APPLY_DELAY_MS);
+    return schedule_apply(apply_raw);
 }

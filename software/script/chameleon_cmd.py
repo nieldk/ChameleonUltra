@@ -153,6 +153,17 @@ class ChameleonCMD:
         """Verify, copy to 0xF3000 via the MBR and reset the device."""
         self._bl_stage(Command.BL_STAGE_COMMIT, struct.pack('!I', 0x434F5059))
 
+    def bl_stage_commit_raw(self):
+        """Verify, then install WITHOUT the MBR: NVMC-write 0xF3000 directly and
+        convert UICR (NRFFW[0]/[1], REGOUT0), then reset. For a device whose
+        bootloader was never MBR-registered. No journaling: a power loss mid-
+        write bricks the device (SWD-only recovery)."""
+        self._bl_stage(Command.BL_STAGE_COMMIT_RAW, struct.pack('!I', 0x52415721))
+
+    def bl_info(self):
+        """Read-only bootloader-forwarding snapshot (no reflash risk)."""
+        return self.device.send_cmd_sync(Command.BL_INFO, b"", timeout=3)
+
     @expect_response(Status.SUCCESS)
     def get_dfu_settings_version(self):
         """Read the Secure-DFU version counters (app, bootloader) from the settings page."""

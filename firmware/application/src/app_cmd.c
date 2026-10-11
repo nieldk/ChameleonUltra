@@ -219,6 +219,37 @@ static data_frame_tx_t *cmd_processor_bl_stage_commit(uint16_t cmd, uint16_t sta
     return bl_stage_reply(cmd, blstage_commit(U32NTOHL(magic)));
 }
 
+static data_frame_tx_t *cmd_processor_bl_stage_commit_raw(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length != 4) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint32_t magic;
+    memcpy(&magic, data, 4);
+    return bl_stage_reply(cmd, blstage_commit_raw(U32NTOHL(magic)));
+}
+
+/* Read-only snapshot of the bootloader-forwarding state, for diagnosing a
+ * device without SWD. All little-endian u32:
+ *   [0] UICR NRFFW[0]  [1] UICR NRFFW[1]  [2] MBR word 0xFF8  [3] MBR word 0xFFC
+ *   [4] UICR REGOUT0   [5] SP@0xF3000     [6] reset@0xF3000
+ *   [7..30] the 8 ACL regions, each ADDR, SIZE, PERM (bit1 write-block). */
+static data_frame_tx_t *cmd_processor_bl_info(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    uint32_t v[7 + 8 * 3];
+    v[0] = NRF_UICR->NRFFW[0];
+    v[1] = NRF_UICR->NRFFW[1];
+    v[2] = *(volatile uint32_t *)0x00000FF8UL;
+    v[3] = *(volatile uint32_t *)0x00000FFCUL;
+    v[4] = NRF_UICR->REGOUT0;
+    v[5] = *(volatile uint32_t *)0x000F3000UL;
+    v[6] = *(volatile uint32_t *)0x000F3004UL;
+    for (int i = 0; i < 8; i++) {
+        v[7 + i * 3 + 0] = NRF_ACL->ACL[i].ADDR;
+        v[7 + i * 3 + 1] = NRF_ACL->ACL[i].SIZE;
+        v[7 + i * 3 + 2] = NRF_ACL->ACL[i].PERM;
+    }
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(v), (uint8_t *)v);
+}
+
 static data_frame_tx_t *cmd_processor_get_dfu_settings_version(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     uint32_t app_v = 0, bl_v = 0;
     dfuver_get(&app_v, &bl_v);
@@ -4550,6 +4581,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_BL_STAGE_BEGIN,               NULL,                        cmd_processor_bl_stage_begin,                NULL                   },
     {    DATA_CMD_BL_STAGE_DATA,                NULL,                        cmd_processor_bl_stage_data,                 NULL                   },
     {    DATA_CMD_BL_STAGE_COMMIT,              NULL,                        cmd_processor_bl_stage_commit,               NULL                   },
+    {    DATA_CMD_BL_STAGE_COMMIT_RAW,          NULL,                        cmd_processor_bl_stage_commit_raw,           NULL                   },
+    {    DATA_CMD_BL_INFO,                      NULL,                        cmd_processor_bl_info,                       NULL                   },
     {    DATA_CMD_GET_DFU_SETTINGS_VERSION,     NULL,                        cmd_processor_get_dfu_settings_version,      NULL                   },
     {    DATA_CMD_SET_DFU_SETTINGS_VERSION,     NULL,                        cmd_processor_set_dfu_settings_version,      NULL                   },
     {    DATA_CMD_SET_BLE_NAME,                 NULL,                        cmd_processor_set_ble_name,                  NULL                   },

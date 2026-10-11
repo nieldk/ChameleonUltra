@@ -9,6 +9,7 @@
 #define BLSTAGE_MAX_LEN     0x0000B000UL   /* bootloader region size */
 #define BLSTAGE_CHUNK_MAX   256u
 #define BLSTAGE_COMMIT_MAGIC 0x434F5059UL  /* "COPY" */
+#define BLSTAGE_COMMIT_RAW_MAGIC 0x52415721UL  /* "RAW!" */
 
 /* Reason byte returned with a failed command. */
 typedef enum {
@@ -26,5 +27,14 @@ typedef enum {
 bls_err_t blstage_begin(uint32_t len, uint32_t crc32);
 bls_err_t blstage_write(uint32_t offset, const uint8_t *data, uint32_t len);
 bls_err_t blstage_commit(uint32_t magic);
+
+/* Like blstage_commit, but installs the staged image WITHOUT the MBR: after the
+ * SoftDevice is disabled it erases/writes 0xF3000 through NVMC directly, then
+ * registers the bootloader with the MBR (UICR NRFFW[0]=0xF3000, NRFFW[1]=MBR
+ * param page, erasing UICR first if either already points elsewhere) and
+ * restores REGOUT0 to 3.3V. For devices whose bootloader was never MBR-
+ * registered, where COPY_BL is unavailable. No journaling: a power loss mid-
+ * write bricks the device (SWD-only recovery). */
+bls_err_t blstage_commit_raw(uint32_t magic);
 
 #endif

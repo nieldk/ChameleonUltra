@@ -63,6 +63,8 @@
 #define DATA_CMD_BL_STAGE_BEGIN                 (1051)  /* u32 len, u32 crc32 */
 #define DATA_CMD_BL_STAGE_DATA                  (1052)  /* u32 offset, data */
 #define DATA_CMD_BL_STAGE_COMMIT                (1053)  /* u32 magic "COPY": verify, copy, reset */
+#define DATA_CMD_BL_STAGE_COMMIT_RAW            (1056)  /* u32 magic "RAW!": verify, NVMC write 0xF3000 + UICR convert, reset */
+#define DATA_CMD_BL_INFO                        (1057)  /* read-only: NRFFW[0/1], MBR words, REGOUT0, vector@0xF3000 */
 #define DATA_CMD_GET_DFU_SETTINGS_VERSION       (1054)  /* -> u32 app_version, u32 bootloader_version (settings page) */
 #define DATA_CMD_SET_DFU_SETTINGS_VERSION       (1055)  /* u8 mask (b0 app, b1 bl), u32 app, u32 bl */
 
