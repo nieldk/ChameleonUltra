@@ -1,6 +1,6 @@
 # Phreakbyte CLI Command Reference
 
-Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 40 command groups, 202 commands.
+Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 41 command groups, 204 commands.
 
 Notation: `<...>` are values you supply. Each option lists its flags, help, allowed `choices`, whether it is `required`, and its `default`. Run any command with `-h` in the client for the same information live.
 
@@ -1725,6 +1725,25 @@ Clear emul-trace result buffer
 #### `standalone emul-trace get-result`
 
 Read emul-trace result buffer
+
+- `-f`, `--file` — write output to file instead of stdout
+- `--raw` — dump raw bytes (no parsing)
+- `--json` — emit parsed sessions as JSON
+- `--dump` — dump every frame in each session
+- `--pm3` — write each session as a Proxmark3 .trace (<prefix>-NN.trace)
+
+### `standalone gdb-gateway`
+
+Result data for the gdb-gateway mode
+
+#### `standalone gdb-gateway clear-result`
+
+Clear gdb-gateway result buffer
+
+
+#### `standalone gdb-gateway get-result`
+
+Read gdb-gateway result buffer
 
 - `-f`, `--file` — write output to file instead of stdout
 - `--raw` — dump raw bytes (no parsing)

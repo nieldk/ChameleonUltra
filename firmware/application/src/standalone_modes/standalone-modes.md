@@ -354,14 +354,47 @@ the mode **re-selects before every key attempt**, so a full 16-sector run takes
 BOTH_SHORT = run one check · BOTH_LONG = arm/disarm · BOTH_VLONG = discard
 results. No `--opt-in` needed (never writes).
 
+## `gdb_gateway` ,  GDB memory/flash gateway over USB  *(Lite + Ultra)*
+
+The odd one out: instead of running host-less, this mode turns the USB-CDC link
+into a **GDB server**. While armed, the CDC speaks the GDB Remote Serial
+Protocol instead of the CLI, so `arm-none-eabi-gdb` can `target remote` the
+device and read/dump memory and program flash ,  no SWD probe, no wires. There
+is **no execution control** (no breakpoints, single-step or run); the firmware
+keeps running while gdb reads and writes.
+
+```
+standalone set-mode gdb-gateway --opt-in   # can program flash ,  --opt-in required
+#  press both-buttons long to ARM (green LED); the CDC is now GDB RSP
+#  then exit the CLI and point gdb at the same port:
+arm-none-eabi-gdb -ex 'target remote /dev/ttyACM0'
+#  (gdb) dump memory flash.bin 0x0 0x100000     # full-chip dump
+#  (gdb) restore blob.bin binary 0x000c7000     # write a non-running region
+#  press both-buttons long again to DISARM; the CDC returns to the CLI
+```
+
+**Reads are unrestricted:** dump any flash/RAM/peripheral address (the whole
+1 MB flash, RAM at `0x20000000`, UICR at `0x10001000`). **Writes are confined to
+`0xC7000-0x100000`** (FDS, bootloader, settings/param pages); any erase or write
+below that ,  the MBR, SoftDevice, or the **running application** ,  is refused
+with gdb error `E02`, so a `load` of the app over itself fails cleanly instead of
+crashing. Use UF2/DFU to replace the app. Writes go through the SoftDevice and
+are still subject to ACL, so an ACL-locked region returns `E01`.
+
+**Config:** none. **Buttons:** BOTH_LONG = arm/disarm; no short-press or
+very-long action. **Produces no results** (`get-result` is unused). **Requires
+`--opt-in`** (it can program flash). Works on Lite and Ultra ,  no reader
+hardware is touched. Detaching gdb leaves the mode armed so you can reconnect;
+disarm with both-buttons long. For big transfers, `set remotetimeout 60` in gdb.
+
 ---
 ## `--opt-in` and quiet flags
 
 `set-mode` takes optional flags:
 - `--opt-in` ,  sets `HOST_OPTED_IN`. **Required** for modes that write a target
-  card or slot (`autoclone`, `read_replay`) or act on real targets (`relay`);
-  arming without it gives a **red double-flash** and a "requires --opt-in"
-  refusal.
+  card or slot (`autoclone`, `read_replay`), act on real targets (`relay`), or
+  can program flash (`gdb_gateway`); arming without it gives a **red
+  double-flash** and a "requires --opt-in" refusal.
 - `--quiet-buzzer` / `--quiet-led` ,  silence the buzzer / LEDs for covert use.
 
 ## CLI reference (`standalone` group)
@@ -378,8 +411,9 @@ results. No `--opt-in` needed (never writes).
 | `clear-result` | Discard stored results. |
 
 CLI vs firmware names: the CLI uses hyphens (`emul-trace`, `hf14a-tap-sniff`,
-`nfc-canary`, `slot-cycle`); `status` reports the firmware's underscored names
-(`emul_trace`, `hf14a_tap_sniff`, `nfc_canary`, `slot_cycle`). They refer to the same modes.
+`nfc-canary`, `slot-cycle`, `gdb-gateway`); `status` reports the firmware's
+underscored names (`emul_trace`, `hf14a_tap_sniff`, `nfc_canary`, `slot_cycle`,
+`gdb_gateway`). They refer to the same modes.
 
 ## Result format
 

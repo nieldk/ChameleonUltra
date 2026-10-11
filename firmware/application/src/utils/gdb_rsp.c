@@ -15,10 +15,10 @@ NRF_LOG_MODULE_REGISTER();
 
 /* Advertised GDB PacketSize (hex). Keeps the RX/TX buffers small; gdb chunks
  * larger transfers to fit. */
-#define GDB_PACKET_SIZE   0x400u
-#define GDB_PKT_MAX       1100u   /* payload between $ and # (binary writes) */
-#define GDB_OUT_MAX       1100u
-#define GDB_MEM_READ_MAX  512u    /* bytes per 'm' (-> 1024 hex chars) */
+#define GDB_PACKET_SIZE   0x200u   /* advertised; gdb chunks larger transfers */
+#define GDB_PKT_MAX       600u     /* payload between $ and # (binary writes) */
+#define GDB_OUT_MAX       600u
+#define GDB_MEM_READ_MAX  256u     /* bytes per 'm' (-> 512 hex chars) */
 
 #define FLASH_PAGE        4096u
 #define FLASH_SPAN_END    0x00100000u
@@ -58,9 +58,18 @@ static volatile bool       m_fs_done;
 static volatile ret_code_t m_fs_res;
 static bool                m_fs_inited;
 
-static uint8_t  m_flash_buf[FLASH_PAGE];
-static uint32_t m_flash_page;      /* base of the buffered page */
-static bool     m_flash_dirty;     /* buffer holds data not yet written */
+/* Flash write stream: no full-page RAM buffer. Bytes are combined into a tiny
+ * word-aligned buffer and written out in whole words, erasing each page lazily
+ * the first time the cursor enters it. Keeps the mode's RAM footprint small so
+ * it coexists with the other standalone modes. */
+#define WR_BUF            64u      /* multiple of 4 */
+static uint32_t m_fl_buf32[WR_BUF / 4];
+#define m_fl_buf  ((uint8_t *)m_fl_buf32)
+static uint32_t m_fl_waddr;        /* word-aligned flash write cursor */
+static uint32_t m_fl_next;         /* next incoming byte address expected */
+static uint16_t m_fl_len;          /* bytes buffered, starting at m_fl_waddr */
+static uint32_t m_fl_erased;       /* last page erased (0xFFFFFFFF = none) */
+static bool     m_fl_open;         /* a write region is in progress */
 
 static void fs_evt(nrf_fstorage_evt_t *p_evt) {
     m_fs_res = p_evt->result;
@@ -270,50 +279,99 @@ static void do_mem_write(const char *p, const char *end) {
 }
 
 /* ---- flash ----------------------------------------------------------- */
-static bool flash_flush(void) {
-    if (!m_flash_dirty) {
+static bool fl_erase(uint32_t page) {
+    if (page == m_fl_erased) {
         return true;
     }
     m_fs_done = false;
-    if (nrf_fstorage_erase(&m_gdb_fs, m_flash_page, 1, NULL) != NRF_SUCCESS || !fs_wait()) {
+    if (nrf_fstorage_erase(&m_gdb_fs, page, 1, NULL) != NRF_SUCCESS || !fs_wait()) {
         return false;
     }
-    m_fs_done = false;
-    if (nrf_fstorage_write(&m_gdb_fs, m_flash_page, m_flash_buf, FLASH_PAGE, NULL) != NRF_SUCCESS ||
-            !fs_wait()) {
-        return false;
-    }
-    m_flash_dirty = false;
+    m_fl_erased = page;
     return true;
 }
 
-/* Place one byte into the page buffer, flushing the previous page when the
- * address crosses a page boundary. gdb writes ascending, so this streams. */
-static bool flash_put(uint32_t addr, uint8_t b) {
-    uint32_t page = addr & ~(FLASH_PAGE - 1u);
-    if (!m_flash_dirty || page != m_flash_page) {
-        if (!flash_flush()) {
+/* Write the whole words held in m_fl_buf, erasing pages lazily and never
+ * crossing a page boundary in one write. On `final`, a trailing partial word
+ * is padded with 0xFF. Any sub-word tail is kept at the front for next time. */
+static bool fl_flush(bool final) {
+    if (final) {
+        while (m_fl_len & 3u) {
+            m_fl_buf[m_fl_len++] = 0xFF;
+        }
+    }
+    uint16_t full = m_fl_len & ~3u;
+    uint16_t done = 0;
+    while (done < full) {
+        uint32_t page = m_fl_waddr & ~(FLASH_PAGE - 1u);
+        if (!fl_erase(page)) {
             return false;
         }
-        m_flash_page = page;
-        memset(m_flash_buf, 0xFF, FLASH_PAGE);
-        m_flash_dirty = true;
+        uint32_t page_left = FLASH_PAGE - (m_fl_waddr - page);   /* multiple of 4 */
+        uint32_t n = full - done;
+        if (n > page_left) {
+            n = page_left;
+        }
+        m_fs_done = false;
+        if (nrf_fstorage_write(&m_gdb_fs, m_fl_waddr, &m_fl_buf[done], n, NULL) != NRF_SUCCESS ||
+                !fs_wait()) {
+            return false;
+        }
+        m_fl_waddr += n;
+        done += n;
     }
-    m_flash_buf[addr - page] = b;
+    uint16_t tail = m_fl_len - full;
+    for (uint16_t i = 0; i < tail; i++) {
+        m_fl_buf[i] = m_fl_buf[full + i];
+    }
+    m_fl_len = tail;
+    return true;
+}
+
+static void fl_reset(void) {
+    m_fl_open = false;
+    m_fl_len = 0;
+    m_fl_erased = 0xFFFFFFFFu;
+}
+
+/* Stream `len` bytes for ascending flash address `addr`. */
+static bool fl_write(uint32_t addr, const uint8_t *data, uint32_t len) {
+    if (!m_fl_open || addr != m_fl_next) {
+        if (!fl_flush(true)) {          /* finish any previous region first */
+            return false;
+        }
+        m_fl_waddr = addr & ~3u;
+        m_fl_len = (uint16_t)(addr & 3u);          /* unknown low bytes stay 0xFF */
+        for (uint16_t i = 0; i < m_fl_len; i++) {
+            m_fl_buf[i] = 0xFF;
+        }
+        m_fl_next = addr;
+        m_fl_open = true;
+    }
+    for (uint32_t i = 0; i < len; i++) {
+        if (m_fl_len == WR_BUF) {
+            if (!fl_flush(false)) {
+                return false;
+            }
+        }
+        m_fl_buf[m_fl_len++] = data[i];
+        m_fl_next++;
+    }
     return true;
 }
 
 static void do_vflash_erase(const char *p, const char *end) {
-    /* "vFlashErase:addr,length". We validate the range here and refuse any
-     * erase outside the writable window, so a `load` over the running app
-     * fails cleanly (gdb aborts) instead of crashing. The actual erase happens
-     * in flash_flush, right before each matching write. */
+    /* "vFlashErase:addr,length". Validate the range and refuse any erase
+     * outside the writable window, so a `load` over the running app fails
+     * cleanly (gdb aborts) instead of crashing. Pages are erased lazily in
+     * fl_flush, just before each word is written. */
     uint32_t addr, len;
     if (!parse_hex(&p, end, &addr) || p >= end || *p != ',') { send_err(0x16); return; }
     p++;
     if (!parse_hex(&p, end, &len)) { send_err(0x16); return; }
     if (!flash_region_ok(addr, len)) { send_err(0x02); return; }
     if (!fs_init()) { send_err(0x01); return; }
+    fl_reset();      /* gdb erases before writing; start a fresh stream */
     send_ok();
 }
 
@@ -324,14 +382,13 @@ static void do_vflash_write(const char *p, const char *end) {
     p++;
     if (!flash_region_ok(addr, (uint32_t)(end - p))) { send_err(0x02); return; }
     if (!fs_init()) { send_err(0x01); return; }
-    for (const char *q = p; q < end; q++) {
-        if (!flash_put(addr++, (uint8_t)*q)) { send_err(0x01); return; }
-    }
+    if (!fl_write(addr, (const uint8_t *)p, (uint32_t)(end - p))) { send_err(0x01); return; }
     send_ok();
 }
 
 static void do_vflash_done(void) {
-    if (!flash_flush()) { send_err(0x01); return; }
+    if (!fl_flush(true)) { send_err(0x01); return; }
+    fl_reset();
     send_ok();
 }
 
@@ -399,12 +456,14 @@ static void dispatch(uint8_t *pkt, uint16_t len) {
         case 'D':
             /* Detach: gdb is leaving, but the mode stays armed so it can
              * reconnect. Disarm via the both-button long press. */
-            flash_flush();
+            fl_flush(true);
+            fl_reset();
             send_ok();
             return;
         case 'k':
-            /* Kill/quit: no reply; stay armed, flush any pending page. */
-            flash_flush();
+            /* Kill/quit: no reply; stay armed, flush any pending bytes. */
+            fl_flush(true);
+            fl_reset();
             return;
         case 'R':
             send_ok();
@@ -414,7 +473,7 @@ static void dispatch(uint8_t *pkt, uint16_t len) {
             return;
         case 'q':
             if (str_pref(s, len, "qSupported")) {
-                send_str("PacketSize=400;qXfer:memory-map:read+;qXfer:features:read+");
+                send_str("PacketSize=200;qXfer:memory-map:read+;qXfer:features:read+");
                 return;
             }
             if (str_pref(s, len, "qXfer:memory-map:read::")) {
@@ -517,13 +576,14 @@ void gdb_rsp_enter(void) {
     m_state = ST_IDLE;
     m_pkt_len = 0;
     m_ack_pending = false;
-    m_flash_dirty = false;
+    fl_reset();
     m_active = true;
     NRF_LOG_INFO("GDB RSP gateway active on CDC");
 }
 
 void gdb_rsp_leave(void) {
-    flash_flush();          /* commit any buffered page before leaving */
+    fl_flush(true);         /* commit any buffered bytes before leaving */
+    fl_reset();
     m_active = false;
     NRF_LOG_INFO("GDB RSP gateway stopped");
 }
