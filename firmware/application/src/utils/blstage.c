@@ -146,6 +146,26 @@ static void apply(void *ctx) {
     NVIC_SystemReset();
 }
 
+/* True if an ACL region with write/erase blocked overlaps [addr, addr+len).
+ * ACL is tighten-only and re-armed every boot, so a locked bootloader region
+ * cannot be written from the app by any means (raw NVMC or MBR COPY_BL). */
+static bool bl_acl_write_locked(uint32_t addr, uint32_t len) {
+    for (int i = 0; i < 8; i++) {
+        uint32_t a = NRF_ACL->ACL[i].ADDR;
+        uint32_t s = NRF_ACL->ACL[i].SIZE;
+        if (s == 0) {
+            continue;
+        }
+        if (!((NRF_ACL->ACL[i].PERM >> ACL_ACL_PERM_WRITE_Pos) & 1u)) {
+            continue;   /* this region does not block writes */
+        }
+        if (addr < a + s && a < addr + len) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bls_err_t verify_staged(void) {
     if (!m_began || m_next != m_len || m_committed) {
         return BLS_ERR_STATE;
@@ -178,6 +198,9 @@ bls_err_t blstage_commit(uint32_t magic) {
     bls_err_t e = verify_staged();
     if (e != BLS_OK) {
         return e;
+    }
+    if (bl_acl_write_locked(BL_ADDR, m_len)) {
+        return BLS_ERR_ACL_LOCKED;
     }
     /* COPY_BL needs the MBR registration; raw commit does not. */
     if (!mbr_ready(&e)) {
@@ -285,6 +308,10 @@ bls_err_t blstage_commit_raw(uint32_t magic) {
     bls_err_t e = verify_staged();
     if (e != BLS_OK) {
         return e;
+    }
+    /* ACL blocks NVMC too; fail now rather than fault mid-erase after reset. */
+    if (bl_acl_write_locked(BL_ADDR, m_len)) {
+        return BLS_ERR_ACL_LOCKED;
     }
     NRF_LOG_INFO("blstage: %u bytes staged, crc ok, RAW NVMC install + UICR convert in %d ms",
                  m_len, APPLY_DELAY_MS);

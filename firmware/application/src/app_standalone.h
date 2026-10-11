@@ -55,6 +55,7 @@ typedef enum {
     STANDALONE_MODE_RELAY       = 0x07,  /* two-CU BLE relay — Ultra only           */
     STANDALONE_MODE_HF14A_TAP_SNIFF = 0x08,  /* passive hf14a tap sniff — Ultra only */
     STANDALONE_MODE_NFC_CANARY  = 0x09,  /* CU as bait card; alerts when a reader probes it */
+    STANDALONE_MODE_GDB_GATEWAY = 0x0A,  /* CDC becomes a GDB memory/flash gateway (no SWD) */
 
     STANDALONE_MODE__COUNT              /* sentinel - keep last */
 } standalone_mode_t;
@@ -168,6 +169,8 @@ extern const standalone_mode_iface_t mode_hf14a_tap_sniff_iface; /* passive tap 
 #endif
 
 extern const standalone_mode_iface_t mode_nfc_canary_iface;    /* NFCT only, works on Lite */
+
+extern const standalone_mode_iface_t mode_gdb_gateway_iface;   /* USB GDB gateway, no RF/reader */
 
 /* -------------------------------------------------------------------------
  * Public API

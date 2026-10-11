@@ -1,6 +1,9 @@
 #include "usb_main.h"
 #include "syssleep.h"
 #include "dataframe.h"
+#if CONFIG_STANDALONE_GDB_GATEWAY
+#include "gdb_rsp.h"
+#endif
 
 #include "app_usbd.h"
 #include "app_usbd_cdc_acm.h"
@@ -70,7 +73,16 @@ static void cdc_acm_user_ev_handler(app_usbd_class_inst_t const *p_inst, app_usb
         case APP_USBD_CDC_ACM_USER_EVT_RX_DONE: {
             // Get amount of data transfered to process data
             size_t size = app_usbd_cdc_acm_rx_size(&m_app_cdc_acm);
-            data_frame_receive(cdc_data_buffer, size);
+#if CONFIG_STANDALONE_GDB_GATEWAY
+            // When the gdb_gateway standalone mode is armed the CDC link speaks
+            // GDB RSP, not the framed CLI protocol; route bytes accordingly.
+            if (gdb_rsp_active()) {
+                gdb_rsp_rx(cdc_data_buffer, size);
+            } else
+#endif
+            {
+                data_frame_receive(cdc_data_buffer, size);
+            }
 
             // Setup next transfer
             ret_code_t ret = app_usbd_cdc_acm_read_any(&m_app_cdc_acm, cdc_data_buffer, sizeof(cdc_data_buffer));

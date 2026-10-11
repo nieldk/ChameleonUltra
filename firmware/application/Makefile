@@ -26,6 +26,7 @@ STANDALONE_EMUL_TRACE      ?= 0   # disabled by default
 STANDALONE_NFC_CANARY      ?= 0   # disabled by default
 STANDALONE_HF14A_TAP_SNIFF ?= 0   # disabled by default
 STANDALONE_RELAY           ?= 0   # disabled by default
+STANDALONE_GDB_GATEWAY     ?= 0   # disabled by default
 
 CFLAGS += -DCONFIG_STANDALONE_AUTHTRACE=$(STANDALONE_AUTHTRACE)
 CFLAGS += -DCONFIG_STANDALONE_SLOT_CYCLE=$(STANDALONE_SLOT_CYCLE)
@@ -36,6 +37,7 @@ CFLAGS += -DCONFIG_STANDALONE_EMUL_TRACE=$(STANDALONE_EMUL_TRACE)
 CFLAGS += -DCONFIG_STANDALONE_NFC_CANARY=$(STANDALONE_NFC_CANARY)
 CFLAGS += -DCONFIG_STANDALONE_HF14A_TAP_SNIFF=$(STANDALONE_HF14A_TAP_SNIFF)
 CFLAGS += -DCONFIG_STANDALONE_RELAY=$(STANDALONE_RELAY)
+CFLAGS += -DCONFIG_STANDALONE_GDB_GATEWAY=$(STANDALONE_GDB_GATEWAY)
 
 # Source files common to all targets
 SRC_FILES += \
@@ -257,6 +259,10 @@ ifeq ($(strip $(STANDALONE_RELAY)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_relay.c
 SRC_FILES += $(PROJ_DIR)/ble_relay.c
 SRC_FILES += $(PROJ_DIR)/rfid/nfctag/hf/nfc_relay_tag.c
+endif
+ifeq ($(strip $(STANDALONE_GDB_GATEWAY)),1)
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_gdb_gateway.c
+SRC_FILES += $(PROJ_DIR)/utils/gdb_rsp.c
 endif
 
 # Include folders common to all targets

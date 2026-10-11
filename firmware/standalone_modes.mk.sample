@@ -15,7 +15,7 @@
 # See CONTRIBUTING STANDALONE.md for what each mode does and the full
 # build-flag mechanics.
 
-# STANDALONE_AUTHTRACE       ?= 1   # reader-side auth capture (Ultra only)
+STANDALONE_AUTHTRACE       ?= 1   # reader-side auth capture (Ultra only)
 # STANDALONE_SLOT_CYCLE      ?= 1   # cycle emulation slots on a timer
 # STANDALONE_AUTOCLONE       ?= 1   # auto-clone a presented card (writes!)
 # STANDALONE_READ_REPLAY     ?= 1   # read now, replay later (writes!)
@@ -24,3 +24,4 @@
 # STANDALONE_NFC_CANARY      ?= 1   # alert on an unexpected reader field
 # STANDALONE_HF14A_TAP_SNIFF ?= 1   # passive HF14A tap sniff (Ultra only)
 # STANDALONE_RELAY           ?= 1   # BLE peer relay (Ultra only)
+# STANDALONE_GDB_GATEWAY     ?= 1   # CDC becomes a GDB memory/flash gateway (no SWD)

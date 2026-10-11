@@ -29,6 +29,7 @@ static chameleon_rgb_type_t m_palette[STANDALONE_MODE__COUNT] = {
     [STANDALONE_MODE_RELAY]       = RGB_BLUE,
     [STANDALONE_MODE_HF14A_TAP_SNIFF] = RGB_GREEN,
     [STANDALONE_MODE_NFC_CANARY]  = RGB_WHITE,    /* red/green are feedback colours */
+    [STANDALONE_MODE_GDB_GATEWAY] = RGB_GREEN,
 };
 
 static bool m_initialised = false;

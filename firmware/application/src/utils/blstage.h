@@ -22,6 +22,7 @@ typedef enum {
     BLS_ERR_CRC,
     BLS_ERR_IMAGE,      /* vector table does not look like the bootloader */
     BLS_ERR_MAGIC,
+    BLS_ERR_ACL_LOCKED, /* 0xF3000 is ACL write-locked; no app-side write possible */
 } bls_err_t;
 
 bls_err_t blstage_begin(uint32_t len, uint32_t crc32);

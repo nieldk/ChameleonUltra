@@ -134,6 +134,7 @@ class ChameleonCMD:
         1: "bad length or offset", 2: "MBR param page not set in UICR (flash the bootloader once via SWD)",
         3: "bootloader address is not 0xF3000", 4: "flash erase/write failed",
         5: "wrong command order", 6: "CRC mismatch", 7: "image is not a bootloader", 8: "bad commit magic",
+        9: "0xF3000 is ACL write-locked by the bootloader - no app-side update possible (SWD required)",
     }
 
     def _bl_stage(self, cmd, payload):

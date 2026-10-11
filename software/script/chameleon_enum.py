@@ -830,6 +830,7 @@ class StandaloneMode(enum.IntEnum):
     RELAY       = 0x07   # two-CU BLE peer relay (Ultra only)
     HF14A_TAP_SNIFF = 0x08   # passive hf14a tap sniff (Ultra only)
     NFC_CANARY  = 0x09   # bait card; alerts when a reader probes it
+    GDB_GATEWAY = 0x0A   # CDC becomes a GDB memory/flash gateway (no SWD)
 
     @classmethod
     def from_name(cls, name: str) -> "StandaloneMode":
