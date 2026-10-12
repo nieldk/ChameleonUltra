@@ -390,7 +390,9 @@ arm-none-eabi-gdb -ex 'target remote /dev/ttyACM0'
 below that ,  the MBR, SoftDevice, or the **running application** ,  is refused
 with gdb error `E02`, so a `load` of the app over itself fails cleanly instead of
 crashing. Use UF2/DFU to replace the app. Writes go through the SoftDevice and
-are still subject to ACL, so an ACL-locked region returns `E01`.
+are still subject to ACL, so an ACL-locked region returns `E01`. The app floor
+can be lowered at runtime with `monitor unlock-app` (see below) for targeted
+patches; MBR and SoftDevice stay protected.
 
 **Config:** none. **Buttons:** BOTH_LONG = arm/disarm; no short-press or
 very-long action. **Produces no results** (`get-result` is unused). **Requires
@@ -400,8 +402,16 @@ disarm with both-buttons long. For big transfers, `set remotetimeout 60` in gdb.
 
 **Monitor commands** (gdb `monitor <cmd>`, served over the same link):
 - `monitor help` ,  list the commands.
-- `monitor info` ,  flash write window, and (with `GDB_GATEWAY_EXEC`) exec state,
-  usable hardware-breakpoint count, watchpoint count, halted/running.
+- `monitor info` ,  flash write window (shows `[app unlocked]` when lowered), and
+  (with `GDB_GATEWAY_EXEC`) exec state, usable hardware-breakpoint count,
+  watchpoint count, halted/running.
+- `monitor unlock-app` ,  lower the write floor to the app base `0x27000`, so
+  writes into the app region are allowed. **Danger:** erasing or writing a page
+  the running app, SoftDevice or this monitor executes from hardfaults (flash is
+  single-bank, the CPU stalls during NVMC); a full app `load` from the running
+  app cannot work ,  use UF2/DFU. Targeted patches to idle pages only. Re-armed
+  to the default on every arm.
+- `monitor lock` ,  restore the default `0xC7000` write floor.
 - `monitor reset` ,  reboot the device. The gdb link drops (the device is the
   target), coming back up disarmed.
 
