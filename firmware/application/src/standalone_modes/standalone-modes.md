@@ -360,18 +360,22 @@ The odd one out: instead of running host-less, this mode turns the USB-CDC link
 into a **GDB server**. While armed, the CDC speaks the GDB Remote Serial
 Protocol instead of the CLI, so `arm-none-eabi-gdb` can `target remote` the
 device, read/dump memory, program flash, and (by default) set **breakpoints**
-and **single-step** ,  all with no SWD probe and no wires.
+and **step** ,  all with no SWD probe and no wires.
 
 Execution control is monitor-mode debug (Cortex-M DebugMonitor + FPB/DWT):
-**up to 6 hardware breakpoints, 4 watchpoints**, step and continue, real
-register access. Its limits are inherent: you **cannot break inside the
-SoftDevice or high-priority ISRs** (the monitor sits below them so the USB
-link and radio keep running while you are stopped), it is **not a true halt**
-(higher-priority interrupts keep executing at a breakpoint), and it only works
-with no SWD debugger attached. There is also **no async interrupt** (gdb
-Ctrl-C): stopping would have to come from the USB/RSP path, which reenters the
-USB stack, so you **stop a running target by hitting a breakpoint**, not by
-interrupting. Build-time flag `GDB_GATEWAY_EXEC` (default `1`) gates it; set
+**up to 6 hardware breakpoints, 4 watchpoints**, continue and register access.
+Its limits are inherent: you **cannot break inside the SoftDevice or
+high-priority ISRs** (the monitor sits below them so the USB link and radio
+keep running while you are stopped), it is **not a true halt** (higher-priority
+interrupts keep executing at a breakpoint), and it only works with no SWD
+debugger attached. There is **no async interrupt** (gdb Ctrl-C): stopping would
+have to come from the USB/RSP path, which reenters the USB stack, so you **stop
+a running target by hitting a breakpoint**, not by interrupting. **Stepping is
+software single-step:** hardware single-step is not advertised (resuming for
+one instruction lets a USB/SoftDevice interrupt escape the step and drop the
+link), so gdb steps with temporary breakpoints + continue over the same
+breakpoint path ,  `step`/`next`/`stepi` work, using 1-2 FPB slots while
+stepping. Build-time flag `GDB_GATEWAY_EXEC` (default `1`) gates it; set
 `GDB_GATEWAY_EXEC=0` for a smaller memory/flash-only gateway.
 
 ```
