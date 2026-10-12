@@ -175,6 +175,17 @@ static void send_err(uint8_t e) {
     send_str(b);
 }
 
+#if CONFIG_GDB_GATEWAY_EXEC
+/* Emit just the packet ack, for commands that send no response packet now
+ * (continue/step: the stop reply comes later). Keeps gdb from retransmitting. */
+static void send_ack(void) {
+    if (m_ack_pending) {
+        send_raw("+", 1);
+        m_ack_pending = false;
+    }
+}
+#endif
+
 /* ---- qXfer static-document responder -------------------------------- */
 /* Minimal Cortex-M target description so `g`/`p` have a defined layout. */
 static const char TARGET_XML[] =
@@ -412,6 +423,216 @@ static bool str_pref(const char *s, uint16_t len, const char *pref) {
     return len >= n && memcmp(s, pref, n) == 0;
 }
 
+/* =====================================================================
+ * Execution control (monitor-mode debug) -- optional, CONFIG_GDB_GATEWAY_EXEC.
+ *
+ * Breakpoints (FPB, up to 6), watchpoints (DWT, up to 4), single-step and
+ * continue via the Cortex-M DebugMonitor exception. No SWD: debug events trap
+ * to DebugMon_Handler, which parks in a loop servicing gdb over the same CDC
+ * link while higher-priority interrupts (USB, SoftDevice) keep running. UNTESTED
+ * on hardware here -- bring up carefully (see the mode doc / commit notes).
+ * ===================================================================== */
+#if CONFIG_GDB_GATEWAY_EXEC
+
+#include "app_usbd.h"
+#include "nrf.h"
+
+extern volatile bool g_usb_port_opened;   /* CDC DTR: false once gdb closes the port */
+
+#define FP_CTRL_REG      (*(volatile uint32_t *)0xE0002000u)
+#define FP_COMP_REG(n)   (*(volatile uint32_t *)(0xE0002008u + 4u * (uint32_t)(n)))
+#define DWT_COMP_REG(n)  (*(volatile uint32_t *)(0xE0001020u + 16u * (uint32_t)(n)))
+#define DWT_MASK_REG(n)  (*(volatile uint32_t *)(0xE0001024u + 16u * (uint32_t)(n)))
+#define DWT_FUNC_REG(n)  (*(volatile uint32_t *)(0xE0001028u + 16u * (uint32_t)(n)))
+#define GDB_MAX_HWBP     6u
+#define GDB_MAX_WP       4u
+
+static volatile bool    m_halted;   /* true while stopped in the DebugMon loop */
+static volatile uint8_t m_run;      /* leave the loop: 1 = continue, 2 = step  */
+static uint32_t         m_regs[17]; /* r0-r15, xPSR captured on halt            */
+static uint8_t          m_ncode;    /* usable FPB code comparators              */
+
+/* register <-> hex in little-endian (target) byte order */
+static void word_le_hex(char *o, uint32_t v) {
+    for (int b = 0; b < 4; b++) {
+        uint8_t byte = (v >> (b * 8)) & 0xFFu;
+        o[b * 2]     = HEXD[byte >> 4];
+        o[b * 2 + 1] = HEXD[byte & 0xF];
+    }
+}
+static uint32_t hex_le_word(const char *p) {
+    uint32_t v = 0;
+    for (int b = 0; b < 4; b++) {
+        int hi = hexval((uint8_t)p[b * 2]);
+        int lo = hexval((uint8_t)p[b * 2 + 1]);
+        if (hi < 0 || lo < 0) break;
+        v |= (uint32_t)((hi << 4) | lo) << (b * 8);
+    }
+    return v;
+}
+
+static void fpb_enable(void) {
+    m_ncode = (uint8_t)((((FP_CTRL_REG >> 12) & 0x7u) << 4) | ((FP_CTRL_REG >> 4) & 0xFu));
+    if (m_ncode == 0 || m_ncode > GDB_MAX_HWBP) {
+        m_ncode = GDB_MAX_HWBP;
+    }
+    FP_CTRL_REG = (1u << 1) | (1u << 0);   /* KEY | ENABLE */
+}
+static bool fpb_set(uint32_t addr) {
+    for (uint8_t i = 0; i < m_ncode; i++) {
+        if (FP_COMP_REG(i) & 1u) {
+            continue;
+        }
+        uint32_t replace = (addr & 2u) ? 2u : 1u;   /* upper / lower halfword */
+        FP_COMP_REG(i) = (replace << 30) | (addr & 0x1FFFFFFCu) | 1u;
+        return true;
+    }
+    return false;
+}
+static bool fpb_clear(uint32_t addr) {
+    for (uint8_t i = 0; i < m_ncode; i++) {
+        if ((FP_COMP_REG(i) & 1u) &&
+                (FP_COMP_REG(i) & 0x1FFFFFFCu) == (addr & 0x1FFFFFFCu)) {
+            FP_COMP_REG(i) = 0;
+            return true;
+        }
+    }
+    return false;
+}
+
+static uint8_t wp_size_bits(uint32_t len) {
+    uint8_t m = 0;
+    while ((1u << m) < len && m < 31) {
+        m++;
+    }
+    return m;
+}
+static bool dwt_set(uint32_t addr, uint32_t len, uint32_t func) {
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    for (uint8_t i = 0; i < GDB_MAX_WP; i++) {
+        if (DWT_FUNC_REG(i) & 0xFu) {
+            continue;
+        }
+        DWT_COMP_REG(i) = addr;
+        DWT_MASK_REG(i) = wp_size_bits(len ? len : 4u);
+        DWT_FUNC_REG(i) = func;   /* 5 read, 6 write, 7 read/write (data addr) */
+        return true;
+    }
+    return false;
+}
+static bool dwt_clear(uint32_t addr) {
+    for (uint8_t i = 0; i < GDB_MAX_WP; i++) {
+        if ((DWT_FUNC_REG(i) & 0xFu) && DWT_COMP_REG(i) == addr) {
+            DWT_FUNC_REG(i) = 0;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* gdb Z/z: 0,1 -> FPB breakpoint; 2 write / 3 read / 4 access -> DWT. */
+static void do_bp(const char *s, const char *end, bool set) {
+    if (end - s < 2) { send_empty(); return; }
+    char type = s[1];
+    const char *p = s + 2;
+    if (p < end && *p == ',') p++;
+    uint32_t addr = 0, kindlen = 0;
+    parse_hex(&p, end, &addr);
+    if (p < end && *p == ',') { p++; parse_hex(&p, end, &kindlen); }
+    bool ok;
+    switch (type) {
+        case '0': case '1': ok = set ? fpb_set(addr) : fpb_clear(addr); break;
+        case '2': ok = set ? dwt_set(addr, kindlen, 6) : dwt_clear(addr); break;
+        case '3': ok = set ? dwt_set(addr, kindlen, 5) : dwt_clear(addr); break;
+        case '4': ok = set ? dwt_set(addr, kindlen, 7) : dwt_clear(addr); break;
+        default: send_empty(); return;
+    }
+    if (ok) send_ok(); else send_err(0x01);
+}
+
+/* Enable monitor-mode debug. Works only with no SWD attached (SWD halting
+ * debug overrides MON_EN). DebugMon runs at the lowest exception priority so
+ * USB and the SoftDevice preempt it and keep running while stopped. */
+static void gdb_debug_init(void) {
+    m_halted = false;
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    fpb_enable();
+    NVIC_SetPriority(DebugMonitor_IRQn, (1u << __NVIC_PRIO_BITS) - 1u);
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_MON_EN_Msk;
+}
+static void bp_clear_all(void) {
+    for (uint8_t i = 0; i < GDB_MAX_HWBP; i++) FP_COMP_REG(i) = 0;
+    for (uint8_t i = 0; i < GDB_MAX_WP; i++)   DWT_FUNC_REG(i) = 0;
+}
+static void gdb_debug_deinit(void) {
+    bp_clear_all();
+    CoreDebug->DEMCR &= ~(CoreDebug_DEMCR_MON_EN_Msk | CoreDebug_DEMCR_MON_STEP_Msk);
+    m_halted = false;
+}
+
+/* C body of the DebugMon exception: assemble registers from the stacked frame
+ * and the saved r4-r11, send a stop reply, then service gdb until it resumes. */
+void gdb_mon_handle(uint32_t *frame, uint32_t exc_return, uint32_t *r4_11) {
+    for (int i = 0; i < 4; i++)  m_regs[i]     = frame[i];   /* r0-r3  */
+    for (int i = 0; i < 8; i++)  m_regs[4 + i] = r4_11[i];   /* r4-r11 */
+    m_regs[12] = frame[4];   /* r12 */
+    m_regs[14] = frame[5];   /* lr  */
+    m_regs[15] = frame[6];   /* pc  */
+    m_regs[16] = frame[7];   /* xPSR */
+    uint32_t sp = (uint32_t)frame + 32u;                 /* basic frame = 8 words */
+    if (frame[7] & (1u << 9)) sp += 4u;                  /* stack-align padding   */
+    if ((exc_return & 0x10u) == 0u) sp += 72u;           /* FPU extended frame    */
+    m_regs[13] = sp;
+
+    CoreDebug->DEMCR &= ~CoreDebug_DEMCR_MON_STEP_Msk;
+    m_halted = true;
+    m_run = 0;
+    send_str("S05");                 /* unsolicited stop reply to gdb */
+
+    while (m_run == 0) {
+        /* If gdb closed the port (quit / cable yank) while stopped, resume and
+         * disarm breakpoints so the firmware does not stay frozen in here. */
+        if (!g_usb_port_opened) {
+            bp_clear_all();
+            m_run = 1;
+            break;
+        }
+        app_usbd_event_queue_process();   /* keep the CDC/RSP alive while stopped */
+        bsp_wdt_feed();
+    }
+
+    for (int i = 0; i < 4; i++)  frame[i]  = m_regs[i];
+    for (int i = 0; i < 8; i++)  r4_11[i]  = m_regs[4 + i];
+    frame[4] = m_regs[12];
+    frame[5] = m_regs[14];
+    frame[6] = m_regs[15];   /* gdb may have moved pc */
+    frame[7] = m_regs[16];
+
+    if (m_run == 2) {
+        CoreDebug->DEMCR |= CoreDebug_DEMCR_MON_STEP_Msk;   /* one instruction */
+    }
+    m_halted = false;
+}
+
+/* Exception entry: pick the active stack, hand the stacked frame + a saved
+ * copy of r4-r11 to the C body, restore on return (gdb edits take effect). */
+__attribute__((naked)) void DebugMon_Handler(void) {
+    __asm volatile(
+        "tst   lr, #4            \n"
+        "ite   eq                \n"
+        "mrseq r0, msp           \n"
+        "mrsne r0, psp           \n"
+        "mov   r1, lr            \n"
+        "push  {r4-r11, lr}      \n"
+        "mov   r2, sp            \n"
+        "bl    gdb_mon_handle    \n"
+        "pop   {r4-r11, lr}      \n"
+        "bx    lr                \n"
+    );
+}
+
+#endif /* CONFIG_GDB_GATEWAY_EXEC */
+
 static void dispatch(uint8_t *pkt, uint16_t len) {
     if (len == 0) {
         send_empty();
@@ -425,21 +646,54 @@ static void dispatch(uint8_t *pkt, uint16_t len) {
         case '?':
             send_str("S05");   /* benign "stopped (TRAP)" so gdb attaches */
             return;
-        case 'g': {            /* read all registers: 17 x 32-bit, zeroed */
+        case 'g': {            /* read all registers (r0-r15, xPSR) */
             uint16_t j = 0;
-            for (int i = 0; i < 17 * 8; i++) m_out[j++] = '0';
+#if CONFIG_GDB_GATEWAY_EXEC
+            if (m_halted) {
+                for (int i = 0; i < 17; i++) { word_le_hex(&m_out[j], m_regs[i]); j += 8; }
+                send_payload(m_out, j);
+                return;
+            }
+#endif
+            for (int i = 0; i < 17 * 8; i++) m_out[j++] = '0';   /* running: unknown */
             send_payload(m_out, j);
             return;
         }
         case 'G':
+#if CONFIG_GDB_GATEWAY_EXEC
+            if (m_halted) {
+                const char *p = s + 1;
+                for (int i = 0; i < 17 && p + 8 <= end; i++) { m_regs[i] = hex_le_word(p); p += 8; }
+            }
+#endif
             send_ok();
             return;
-        case 'p': {            /* read one register -> 0 */
+        case 'p': {            /* read one register */
+#if CONFIG_GDB_GATEWAY_EXEC
+            if (m_halted) {
+                const char *p = s + 1;
+                uint32_t n = 0;
+                parse_hex(&p, end, &n);
+                word_le_hex(m_out, n < 17 ? m_regs[n] : 0);
+                send_payload(m_out, 8);
+                return;
+            }
+#endif
             memcpy(m_out, "00000000", 8);
             send_payload(m_out, 8);
             return;
         }
         case 'P':
+#if CONFIG_GDB_GATEWAY_EXEC
+            if (m_halted) {
+                const char *p = s + 1;
+                uint32_t n = 0;
+                parse_hex(&p, end, &n);
+                if (p < end && *p == '=') { p++; if (n < 17) m_regs[n] = hex_le_word(p); }
+            }
+#endif
+            send_ok();
+            return;
         case 'H':
             send_ok();
             return;
@@ -450,18 +704,42 @@ static void dispatch(uint8_t *pkt, uint16_t len) {
             do_mem_write(s + 1, end);
             return;
         case 'c': case 's': case 'C': case 'S':
+#if CONFIG_GDB_GATEWAY_EXEC
+            if (m_halted) {
+                /* leave the DebugMon loop; the stop reply comes on the next halt */
+                send_ack();
+                m_run = (c == 's' || c == 'S') ? 2 : 1;
+                return;
+            }
+            /* Core running (soft "stopped"). There is NO async halt: forcing a
+             * stop from here (the RSP/USB path) reenters the USB stack and
+             * corrupts it, so 'c' just acks and the real stop reply comes when a
+             * breakpoint fires. A step from the running state can't truly step,
+             * so report stopped to keep gdb from hanging. */
+            if (c == 's' || c == 'S') { send_str("S05"); return; }
+            send_ack();
+            return;
+#else
             /* No execution control; report immediately "stopped". */
             send_str("S05");
             return;
+#endif
         case 'D':
-            /* Detach: gdb is leaving, but the mode stays armed so it can
-             * reconnect. Disarm via the both-button long press. */
+            /* Detach: resume the core and clear breakpoints so the target runs
+             * free (and can be disarmed by button) instead of staying frozen in
+             * the DebugMon loop. The mode stays armed so gdb can reconnect. */
+#if CONFIG_GDB_GATEWAY_EXEC
+            if (m_halted) { bp_clear_all(); m_run = 1; }
+#endif
             fl_flush(true);
             fl_reset();
             send_ok();
             return;
         case 'k':
-            /* Kill/quit: no reply; stay armed, flush any pending bytes. */
+            /* Kill/quit: resume + clear breakpoints too, then no reply. */
+#if CONFIG_GDB_GATEWAY_EXEC
+            if (m_halted) { bp_clear_all(); m_run = 1; }
+#endif
             fl_flush(true);
             fl_reset();
             return;
@@ -469,7 +747,11 @@ static void dispatch(uint8_t *pkt, uint16_t len) {
             send_ok();
             return;
         case 'z': case 'Z':
+#if CONFIG_GDB_GATEWAY_EXEC
+            do_bp(s, end, c == 'Z');
+#else
             send_empty();       /* no breakpoint/watchpoint support */
+#endif
             return;
         case 'q':
             if (str_pref(s, len, "qSupported")) {
@@ -501,6 +783,20 @@ static void dispatch(uint8_t *pkt, uint16_t len) {
             return;
         case 'v':
             if (str_pref(s, len, "vMustReplyEmpty")) { send_empty(); return; }
+#if CONFIG_GDB_GATEWAY_EXEC
+            if (str_pref(s, len, "vCont?")) { send_str("vCont;c;C;s;S"); return; }
+            if (str_pref(s, len, "vCont;")) {
+                bool step = false;
+                for (const char *q = s + 6; q < end; q++) {
+                    if (*q == 's' || *q == 'S') { step = true; break; }
+                    if (*q == 'c' || *q == 'C') break;
+                }
+                if (m_halted) { send_ack(); m_run = step ? 2 : 1; return; }
+                if (step) { send_str("S05"); return; }   /* no step from running */
+                send_ack();
+                return;
+            }
+#endif
             if (str_pref(s, len, "vFlashErase:")) {
                 do_vflash_erase(s + strlen("vFlashErase:"), end);
                 return;
@@ -532,7 +828,12 @@ void gdb_rsp_rx(const uint8_t *data, size_t len) {
                 m_pkt_len = 0;
                 m_csum = 0;
             } else if (ch == 0x03) {
-                send_str("S05");    /* Ctrl-C interrupt */
+#if CONFIG_GDB_GATEWAY_EXEC
+                /* No async interrupt: halting from this (USB/RSP) context
+                 * reenters the USB stack. Stop the target with a breakpoint. */
+#else
+                send_str("S05");    /* Ctrl-C interrupt (nothing to stop) */
+#endif
             }
             /* '+'/'-' acks and stray bytes are ignored between packets */
             continue;
@@ -577,6 +878,9 @@ void gdb_rsp_enter(void) {
     m_pkt_len = 0;
     m_ack_pending = false;
     fl_reset();
+#if CONFIG_GDB_GATEWAY_EXEC
+    gdb_debug_init();
+#endif
     m_active = true;
     NRF_LOG_INFO("GDB RSP gateway active on CDC");
 }
@@ -584,6 +888,9 @@ void gdb_rsp_enter(void) {
 void gdb_rsp_leave(void) {
     fl_flush(true);         /* commit any buffered bytes before leaving */
     fl_reset();
+#if CONFIG_GDB_GATEWAY_EXEC
+    gdb_debug_deinit();
+#endif
     m_active = false;
     NRF_LOG_INFO("GDB RSP gateway stopped");
 }
