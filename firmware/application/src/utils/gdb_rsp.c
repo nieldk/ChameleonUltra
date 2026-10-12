@@ -434,11 +434,13 @@ static bool str_pref(const char *s, uint16_t len, const char *pref) {
 /* =====================================================================
  * Execution control (monitor-mode debug) -- optional, CONFIG_GDB_GATEWAY_EXEC.
  *
- * Breakpoints (FPB, up to 6), watchpoints (DWT, up to 4), single-step and
- * continue via the Cortex-M DebugMonitor exception. No SWD: debug events trap
- * to DebugMon_Handler, which parks in a loop servicing gdb over the same CDC
- * link while higher-priority interrupts (USB, SoftDevice) keep running. UNTESTED
- * on hardware here -- bring up carefully (see the mode doc / commit notes).
+ * Breakpoints (FPB, up to 6), watchpoints (DWT, up to 4) and continue via the
+ * Cortex-M DebugMonitor exception. No SWD: debug events trap to
+ * DebugMon_Handler, which parks in a loop servicing gdb over the same CDC link
+ * while higher-priority interrupts (USB, SoftDevice) keep running. Hardware
+ * single-step is deliberately NOT offered -- resuming for one instruction lets
+ * those interrupts escape the step and drop the link; gdb steps in software
+ * (temp breakpoints + continue) instead, over this same breakpoint path.
  * ===================================================================== */
 #if CONFIG_GDB_GATEWAY_EXEC
 
@@ -788,27 +790,29 @@ static void dispatch(uint8_t *pkt, uint16_t len) {
         case 'M':
             do_mem_write(s + 1, end);
             return;
-        case 'c': case 's': case 'C': case 'S':
+        case 'c': case 'C':
 #if CONFIG_GDB_GATEWAY_EXEC
-            if (m_halted) {
-                /* leave the DebugMon loop; the stop reply comes on the next halt */
+            if (m_halted) {        /* leave the DebugMon loop; stop reply on next halt */
                 send_ack();
-                m_run = (c == 's' || c == 'S') ? 2 : 1;
+                m_run = 1;
                 return;
             }
-            /* Core running (soft "stopped"). There is NO async halt: forcing a
-             * stop from here (the RSP/USB path) reenters the USB stack and
-             * corrupts it, so 'c' just acks and the real stop reply comes when a
-             * breakpoint fires. A step from the running state can't truly step,
-             * so report stopped to keep gdb from hanging. */
-            if (c == 's' || c == 'S') { send_str("S05"); return; }
+            /* Running: no async halt (forcing a stop from the RSP/USB path
+             * reenters the USB stack and corrupts it), so just ack and the stop
+             * reply comes when a breakpoint fires. */
             send_ack();
             return;
 #else
-            /* No execution control; report immediately "stopped". */
-            send_str("S05");
+            send_str("S05");       /* no execution control */
             return;
 #endif
+        case 's': case 'S':
+            /* Hardware single-step is not offered: resuming for one instruction
+             * lets a USB/SoftDevice interrupt escape the step and drop the link.
+             * gdb single-steps in software (temp breakpoints + continue), so a
+             * stray s/S is a harmless no-op reported as stopped. */
+            send_str("S05");
+            return;
         case 'D':
             /* Detach: resume the core and clear breakpoints so the target runs
              * free (and can be disarmed by button) instead of staying frozen in
@@ -870,16 +874,12 @@ static void dispatch(uint8_t *pkt, uint16_t len) {
         case 'v':
             if (str_pref(s, len, "vMustReplyEmpty")) { send_empty(); return; }
 #if CONFIG_GDB_GATEWAY_EXEC
-            if (str_pref(s, len, "vCont?")) { send_str("vCont;c;C;s;S"); return; }
+            /* Advertise continue only. gdb then single-steps in software (temp
+             * breakpoints + continue), avoiding the fragile hardware step. */
+            if (str_pref(s, len, "vCont?")) { send_str("vCont;c;C"); return; }
             if (str_pref(s, len, "vCont;")) {
-                bool step = false;
-                for (const char *q = s + 6; q < end; q++) {
-                    if (*q == 's' || *q == 'S') { step = true; break; }
-                    if (*q == 'c' || *q == 'C') break;
-                }
-                if (m_halted) { send_ack(); m_run = step ? 2 : 1; return; }
-                if (step) { send_str("S05"); return; }   /* no step from running */
-                send_ack();
+                if (m_halted) { send_ack(); m_run = 1; return; }
+                send_ack();        /* running: stop reply comes on a breakpoint */
                 return;
             }
 #endif
