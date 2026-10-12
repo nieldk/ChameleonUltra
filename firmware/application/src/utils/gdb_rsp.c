@@ -268,6 +268,8 @@ static void do_mem_read(const char *p, const char *end) {
     if (!parse_hex(&p, end, &addr) || p >= end || *p != ',') { send_err(0x16); return; }
     p++;
     if (!parse_hex(&p, end, &len)) { send_err(0x16); return; }
+    bsp_wdt_feed();   /* a long find/dump floods reads; keep the WDT fed so the
+                         scan can't reset the device out from under gdb */
     if (len > GDB_MEM_READ_MAX) len = GDB_MEM_READ_MAX;
     const volatile uint8_t *src = (const volatile uint8_t *)addr;
     uint16_t j = 0;
