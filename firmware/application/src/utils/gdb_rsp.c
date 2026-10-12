@@ -35,8 +35,14 @@ NRF_LOG_MODULE_REGISTER();
  * 0xF3000, BL 0xF3000-0xFE000, MBR params 0xFE000, settings 0xFF000.) */
 #define SAFE_FLASH_MIN    0x000C7000u
 #define SAFE_FLASH_MAX    0x00100000u
+#define APP_FLASH_BASE    0x00027000u   /* app image start; MBR+SD sit below */
 
 static bool m_active;
+
+/* Lower bound of the writable flash window. Default (SAFE_FLASH_MIN) protects
+ * MBR, SoftDevice and the running app; `monitor unlock-app` lowers it to the
+ * app base for targeted patches. Re-armed to the default on every arm. */
+static uint32_t m_wr_min = SAFE_FLASH_MIN;
 
 /* ---- RSP receive state machine -------------------------------------- */
 enum { ST_IDLE, ST_DATA, ST_CSUM1, ST_CSUM2 };
@@ -109,7 +115,7 @@ static bool flash_region_ok(uint32_t addr, uint32_t len) {
     if (a_end < addr) {
         return false;   /* wrap */
     }
-    return addr >= SAFE_FLASH_MIN && a_end <= SAFE_FLASH_MAX;
+    return addr >= m_wr_min && a_end <= SAFE_FLASH_MAX;
 }
 
 /* ---- small hex helpers ---------------------------------------------- */
@@ -670,15 +676,32 @@ static void do_monitor(const char *p, const char *end) {
 
     if (cmd[0] == 0 || strcmp(cmd, "help") == 0) {
         mon_reply("ChameleonUltra GDB gateway (no SWD)\n"
-                  "  monitor help   this list\n"
-                  "  monitor info   gateway state\n"
-                  "  monitor reset  reboot the device (drops this gdb link)\n");
+                  "  monitor help        this list\n"
+                  "  monitor info        gateway state\n"
+                  "  monitor unlock-app  allow writes into the app region\n"
+                  "  monitor lock        restore the default write floor\n"
+                  "  monitor reset       reboot the device (drops this gdb link)\n");
+        return;
+    }
+    if (strcmp(cmd, "unlock-app") == 0) {
+        m_wr_min = APP_FLASH_BASE;
+        mon_reply("app region writable: 0x027000-0x100000.\n"
+                  "WARNING: erasing/writing a page the running app, SoftDevice\n"
+                  "or this monitor executes from WILL hardfault - a full app\n"
+                  "load from the running app cannot work (use UF2/DFU). For\n"
+                  "targeted patches to idle pages only. 'monitor lock' restores.\n");
+        return;
+    }
+    if (strcmp(cmd, "lock") == 0) {
+        m_wr_min = SAFE_FLASH_MIN;
+        mon_reply("write floor restored to 0x0C7000.\n");
         return;
     }
     if (strcmp(cmd, "info") == 0) {
         char b[224];
-        int n = snprintf(b, sizeof(b), "flash write window: 0x%06lX-0x%06lX\n",
-                         (unsigned long)SAFE_FLASH_MIN, (unsigned long)SAFE_FLASH_MAX);
+        int n = snprintf(b, sizeof(b), "flash write window: 0x%06lX-0x%06lX%s\n",
+                         (unsigned long)m_wr_min, (unsigned long)SAFE_FLASH_MAX,
+                         m_wr_min < SAFE_FLASH_MIN ? "  [app unlocked]" : "");
 #if CONFIG_GDB_GATEWAY_EXEC
         snprintf(b + n, sizeof(b) - n, "exec: on  hw-bp: %u  wp: %u  state: %s\n",
                  (unsigned)m_ncode, (unsigned)GDB_MAX_WP, m_halted ? "halted" : "running");
@@ -943,6 +966,7 @@ void gdb_rsp_enter(void) {
     m_state = ST_IDLE;
     m_pkt_len = 0;
     m_ack_pending = false;
+    m_wr_min = SAFE_FLASH_MIN;   /* always start locked; unlock per session */
     fl_reset();
 #if CONFIG_GDB_GATEWAY_EXEC
     gdb_debug_init();
