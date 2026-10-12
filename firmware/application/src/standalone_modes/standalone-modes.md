@@ -398,6 +398,13 @@ very-long action. **Produces no results** (`get-result` is unused). **Requires
 hardware is touched. Detaching gdb leaves the mode armed so you can reconnect;
 disarm with both-buttons long. For big transfers, `set remotetimeout 60` in gdb.
 
+**Monitor commands** (gdb `monitor <cmd>`, served over the same link):
+- `monitor help` ,  list the commands.
+- `monitor info` ,  flash write window, and (with `GDB_GATEWAY_EXEC`) exec state,
+  usable hardware-breakpoint count, watchpoint count, halted/running.
+- `monitor reset` ,  reboot the device. The gdb link drops (the device is the
+  target), coming back up disarmed.
+
 ---
 ## `--opt-in` and quiet flags
 
