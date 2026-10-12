@@ -81,21 +81,23 @@ static data_frame_tx_t *cmd_processor_get_git_version(uint16_t cmd, uint16_t sta
 }
 
 
-#define BOOTLOADER_SETTINGS_ADDRESS             0xFF000UL
-#define DFU_SETTINGS_BL_VERSION_OFFSET          12U
-
 static data_frame_tx_t *cmd_processor_get_bootloader_version(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    uint32_t payload = U32HTONL((uint32_t)BL_VERSION);
+    /* Report the settings-page bootloader_version: the counter the Secure-DFU
+     * bootloader checks for anti-rollback, and what SET_DFU_SETTINGS_VERSION
+     * changes. Keeps hw status, hw version and the DFU gate on one value. */
+    uint32_t app_v = 0, bl_v = 0;
+    dfuver_get(&app_v, &bl_v);
+    uint32_t payload = U32HTONL(bl_v);
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(payload), (uint8_t *)&payload);
 }
 
 static data_frame_tx_t *cmd_processor_get_dfu_app_version(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    /* The DFU application-version counter (build.sh application_version), compiled
-     * in via -DAPP_VERSION. It is NOT read from the settings page: a UF2 app flash
-     * does not rewrite the settings-page app_version, so that value goes stale
-     * (always reads the nrfutil default). The compiled constant always reflects
-     * the build that is actually running. */
-    uint32_t payload = U32HTONL((uint32_t)APP_VERSION);
+    /* Report the settings-page app_version: same source the Secure-DFU bootloader
+     * checks and SET_DFU_SETTINGS_VERSION changes, so all reports agree. A UF2 app
+     * flash does not touch it; set it with `hw version -a` or a signed DFU. */
+    uint32_t app_v = 0, bl_v = 0;
+    dfuver_get(&app_v, &bl_v);
+    uint32_t payload = U32HTONL(app_v);
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(payload), (uint8_t *)&payload);
 }
 
