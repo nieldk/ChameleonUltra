@@ -1,8 +1,10 @@
 #include "gdb_rsp.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "bsp_wdt.h"
+#include "delayed_reset.h"
 #include "nrf_delay.h"
 #include "nrf_fstorage.h"
 #include "nrf_fstorage_sd.h"
@@ -633,6 +635,69 @@ __attribute__((naked)) void DebugMon_Handler(void) {
 
 #endif /* CONFIG_GDB_GATEWAY_EXEC */
 
+/* ---- qRcmd ("monitor <cmd>") ---------------------------------------- */
+/* Reply payload is hex-encoded ASCII; gdb prints it on the console. An empty
+ * reply means "unknown command". */
+static void mon_reply(const char *txt) {
+    uint16_t j = 0;
+    for (const char *p = txt; *p && j + 2u <= GDB_OUT_MAX; p++) {
+        m_out[j++] = HEXD[(uint8_t)*p >> 4];
+        m_out[j++] = HEXD[(uint8_t)*p & 0xF];
+    }
+    send_payload(m_out, j);
+}
+
+/* Decode the hex-encoded command after "qRcmd,", NUL-terminating `out`. */
+static void mon_decode(const char *p, const char *end, char *out, uint16_t max) {
+    uint16_t n = 0;
+    while (p + 1 < end && n + 1u < max) {
+        int hi = hexval((uint8_t)p[0]);
+        int lo = hexval((uint8_t)p[1]);
+        if (hi < 0 || lo < 0) break;
+        out[n++] = (char)((hi << 4) | lo);
+        p += 2;
+    }
+    out[n] = 0;
+}
+
+static void do_monitor(const char *p, const char *end) {
+    char cmd[64];
+    mon_decode(p, end, cmd, sizeof(cmd));
+    for (int i = (int)strlen(cmd) - 1;             /* trim trailing ws gdb adds */
+         i >= 0 && (cmd[i] == ' ' || cmd[i] == '\n' || cmd[i] == '\r'); i--) {
+        cmd[i] = 0;
+    }
+
+    if (cmd[0] == 0 || strcmp(cmd, "help") == 0) {
+        mon_reply("ChameleonUltra GDB gateway (no SWD)\n"
+                  "  monitor help   this list\n"
+                  "  monitor info   gateway state\n"
+                  "  monitor reset  reboot the device (drops this gdb link)\n");
+        return;
+    }
+    if (strcmp(cmd, "info") == 0) {
+        char b[224];
+        int n = snprintf(b, sizeof(b), "flash write window: 0x%06lX-0x%06lX\n",
+                         (unsigned long)SAFE_FLASH_MIN, (unsigned long)SAFE_FLASH_MAX);
+#if CONFIG_GDB_GATEWAY_EXEC
+        snprintf(b + n, sizeof(b) - n, "exec: on  hw-bp: %u  wp: %u  state: %s\n",
+                 (unsigned)m_ncode, (unsigned)GDB_MAX_WP, m_halted ? "halted" : "running");
+#else
+        snprintf(b + n, sizeof(b) - n, "exec: off (memory read + flash load only)\n");
+#endif
+        mon_reply(b);
+        return;
+    }
+    if (strcmp(cmd, "reset") == 0) {
+        mon_reply("resetting\n");
+        fl_flush(true);
+        fl_reset();
+        delayed_reset(100);        /* canonical path; non-blocking, lets CDC drain */
+        return;
+    }
+    send_empty();                  /* unknown monitor command */
+}
+
 static void dispatch(uint8_t *pkt, uint16_t len) {
     if (len == 0) {
         send_empty();
@@ -779,6 +844,7 @@ static void dispatch(uint8_t *pkt, uint16_t len) {
             if (str_pref(s, len, "qfThreadInfo")) { send_str("m0"); return; }
             if (str_pref(s, len, "qsThreadInfo")) { send_str("l"); return; }
             if (str_pref(s, len, "qC")) { send_str("QC0"); return; }
+            if (str_pref(s, len, "qRcmd,")) { do_monitor(s + 6, end); return; }
             send_empty();
             return;
         case 'v':
