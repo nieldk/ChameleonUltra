@@ -15,12 +15,17 @@
 #include "nrf_log_ctrl.h"
 NRF_LOG_MODULE_REGISTER();
 
-/* Advertised GDB PacketSize (hex). Keeps the RX/TX buffers small; gdb chunks
- * larger transfers to fit. */
-#define GDB_PACKET_SIZE   0x200u   /* advertised; gdb chunks larger transfers */
-#define GDB_PKT_MAX       600u     /* payload between $ and # (binary writes) */
-#define GDB_OUT_MAX       600u
-#define GDB_MEM_READ_MAX  256u     /* bytes per 'm' (-> 512 hex chars) */
+/* Advertised GDB PacketSize and the RX/TX buffers derived from it. Bigger means
+ * fewer round-trips on bulk reads (find/dump) but more RAM; set with the
+ * GDB_GATEWAY_PKT build flag. Default 0x200 keeps the mode RAM-slim for
+ * multi-mode builds; 0x800 roughly quarters a full-chip dump's round-trips. */
+#ifndef CONFIG_GDB_GATEWAY_PKT
+#define CONFIG_GDB_GATEWAY_PKT  0x200u
+#endif
+#define GDB_PACKET_SIZE   (CONFIG_GDB_GATEWAY_PKT)
+#define GDB_PKT_MAX       (GDB_PACKET_SIZE + 88u)   /* $..# payload (binary writes) */
+#define GDB_OUT_MAX       (GDB_PACKET_SIZE + 88u)   /* outgoing payload (hex reply, qXfer) */
+#define GDB_MEM_READ_MAX  (GDB_PACKET_SIZE / 2u)    /* 2 hex chars/byte -> reply fits PacketSize */
 
 #define FLASH_PAGE        4096u
 #define FLASH_SPAN_END    0x00100000u
@@ -846,7 +851,10 @@ static void dispatch(uint8_t *pkt, uint16_t len) {
             return;
         case 'q':
             if (str_pref(s, len, "qSupported")) {
-                send_str("PacketSize=200;qXfer:memory-map:read+;qXfer:features:read+");
+                int n = snprintf(m_out, GDB_OUT_MAX,
+                                 "PacketSize=%lx;qXfer:memory-map:read+;qXfer:features:read+",
+                                 (unsigned long)GDB_PACKET_SIZE);
+                send_payload(m_out, (uint16_t)n);
                 return;
             }
             if (str_pref(s, len, "qXfer:memory-map:read::")) {
