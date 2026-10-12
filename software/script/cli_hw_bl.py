@@ -159,9 +159,11 @@ class HWBlInfo(DeviceRequiredUnit):
 class HWVersion(DeviceRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
-        parser.description = ("Show or set the Secure-DFU version counters in the settings page. "
-                              "These gate DFU updates (an image must be >= the stored counter); "
-                              "set them at/below an image to let DFU accept it. hw bl push ignores them.")
+        parser.description = ("Show or set the app/bootloader version counters stored in the DFU "
+                              "settings page (0xFF000 + backup). These are the versions the "
+                              "Secure-DFU bootloader checks for anti-rollback, and the same values "
+                              "'hw status' and 'hw version' report. Set them to restore a known "
+                              "value or to let a signed DFU of a given version through.")
         parser.add_argument("-a", "--app", type=int, help="set stored application version")
         parser.add_argument("-b", "--bl", type=int, help="set stored bootloader version")
         return parser
