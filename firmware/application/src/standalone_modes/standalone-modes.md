@@ -378,6 +378,13 @@ breakpoint path ,  `step`/`next`/`stepi` work, using 1-2 FPB slots while
 stepping. Build-time flag `GDB_GATEWAY_EXEC` (default `1`) gates it; set
 `GDB_GATEWAY_EXEC=0` for a smaller memory/flash-only gateway.
 
+**Transfer speed:** the CDC link is USB bulk (the `hw status` baud is cosmetic),
+so bulk reads are bounded by RSP round-trips, not line rate. `GDB_GATEWAY_PKT`
+(default `0x200`) sets the advertised PacketSize and the derived RX/TX buffers;
+raise it (e.g. `0x800`) to move more per round-trip and cut a full-chip
+`dump`/`find` several-fold, for a few KB more RAM. Reads also feed the watchdog,
+so a long scan won't reset the device.
+
 ```
 standalone set-mode gdb-gateway --opt-in   # can program flash ,  --opt-in required
 #  press both-buttons long to ARM (green LED); the CDC is now GDB RSP
