@@ -456,7 +456,7 @@ extern volatile bool g_usb_port_opened;   /* CDC DTR: false once gdb closes the 
 #define GDB_MAX_WP       4u
 
 static volatile bool    m_halted;   /* true while stopped in the DebugMon loop */
-static volatile uint8_t m_run;      /* leave the loop: 1 = continue, 2 = step  */
+static volatile uint8_t m_run;      /* leave the loop: 1 = continue             */
 static uint32_t         m_regs[17]; /* r0-r15, xPSR captured on halt            */
 static uint8_t          m_ncode;    /* usable FPB code comparators              */
 
@@ -616,9 +616,6 @@ void gdb_mon_handle(uint32_t *frame, uint32_t exc_return, uint32_t *r4_11) {
     frame[6] = m_regs[15];   /* gdb may have moved pc */
     frame[7] = m_regs[16];
 
-    if (m_run == 2) {
-        CoreDebug->DEMCR |= CoreDebug_DEMCR_MON_STEP_Msk;   /* one instruction */
-    }
     m_halted = false;
 }
 
