@@ -1351,8 +1351,11 @@ static ret_code_t cmd_inquiry(app_usbd_class_inst_t const * p_inst,
     p_msc_ctx->scsi_resp.inquiry.version = APP_USBD_SCSI_INQ_VER_SPC4;
     p_msc_ctx->scsi_resp.inquiry.flags2  = APP_USBD_MSC_SCSI_INQ_FLAG2_RSP_SPC2 |
                                            APP_USBD_MSC_SCSI_INQ_FLAG2_HISUP;
+    /* Phreakbyte: ADDITIONAL LENGTH counts bytes AFTER this field, i.e.
+       (total - 5). The stock value (total - offsetof(len) = 32) advertised a
+       37-byte response for 36 bytes, so Linux logged "37 byte inquiry failed". */
     p_msc_ctx->scsi_resp.inquiry.len = sizeof(app_usbd_scsi_cmd_inquiry_resp_t) -
-                                       offsetof(app_usbd_scsi_cmd_inquiry_resp_t, len);
+                                       offsetof(app_usbd_scsi_cmd_inquiry_resp_t, len) - 1;
 
     nrf_block_dev_t const * p_blkd =
         p_msc->specific.inst.pp_block_devs[p_msc_ctx->cbw.lun];
@@ -1425,30 +1428,30 @@ static ret_code_t cmd_modesense6(app_usbd_class_inst_t const * p_inst,
                                  app_usbd_msc_ctx_t          * p_msc_ctx)
 {
     NRF_LOG_DEBUG("CMD: MODESENSE6");
-    app_usbd_scsi_cmd_modesense6_t const * p_sense6 = (const void *)p_msc_ctx->cbw.cdb;
-    UNUSED_VARIABLE(p_sense6);
     if (p_msc_ctx->cbw.cdb_length < sizeof(app_usbd_scsi_cmd_modesense6_t))
     {
         return status_unsupported_start(p_inst);
     }
 
-    if (uint32_decode(p_msc_ctx->cbw.datlen) > sizeof(app_usbd_scsi_cmd_modesense6_resp_t))
+    /* Phreakbyte: 4-byte mode header, plus the Caching page (0x08, WCE=0 =
+       write-through) when the host asks for it or all pages, so Linux stops
+       logging "Asking for cache data failed". Built in scsi_resp (36B union). */
+    uint8_t * buf  = (uint8_t *)&p_msc_ctx->scsi_resp;
+    uint8_t   page = p_msc_ctx->cbw.cdb[2] & 0x3Fu;
+    uint8_t   len  = 4;
+    buf[1] = 0; buf[2] = 0; buf[3] = 0;          /* medium type, dev param, bdlen */
+    if (page == 0x08u || page == 0x3Fu)
     {
-        return status_unsupported_start(p_inst);
+        buf[4] = 0x08u; buf[5] = 0x12u;          /* Caching page, page length 18 */
+        memset(&buf[6], 0, 18);
+        len = 24;
     }
+    buf[0] = len - 1;                            /* mode data length */
 
-    uint32_t resp_len = uint32_decode(p_msc_ctx->cbw.datlen);
+    uint32_t datlen   = uint32_decode(p_msc_ctx->cbw.datlen);
+    uint32_t resp_len = (datlen < len) ? datlen : len;
 
-    app_usbd_scsi_cmd_modesense6_resp_t * p_resp = &p_msc_ctx->scsi_resp.modesense6;
-    p_resp->mdlen = sizeof(app_usbd_scsi_cmd_modesense6_resp_t) - 1;
-    p_resp->type  = 0;
-    p_resp->param = 0;
-    p_resp->bdlen = 0;
-
-    return transfer_in_start(p_inst,
-                             &p_msc_ctx->scsi_resp,
-                             resp_len,
-                             APP_USBD_MSC_STATE_CMD_IN);
+    return transfer_in_start(p_inst, buf, resp_len, APP_USBD_MSC_STATE_CMD_IN);
 }
 
 
@@ -1499,7 +1502,9 @@ static ret_code_t cmd_preventremoval(app_usbd_class_inst_t const * p_inst,
                                      app_usbd_msc_ctx_t          * p_msc_ctx)
 {
     NRF_LOG_DEBUG("CMD: PREVENTMEDIAREMOVAL");
-    return csw_wait_start(p_inst, APP_USBD_MSC_CSW_STATUS_FAIL);
+    /* Phreakbyte: ack lock/unlock instead of failing. Linux issues this on
+       open/close; a FAIL logs a check-condition. No medium lock to honor. */
+    return csw_wait_start(p_inst, APP_USBD_MSC_CSW_STATUS_PASS);
 }
 
 
@@ -1644,8 +1649,6 @@ static ret_code_t cmd_modesense10(app_usbd_class_inst_t const * p_inst,
                                   app_usbd_msc_ctx_t          * p_msc_ctx)
 {
     NRF_LOG_DEBUG("CMD: MODESENSE10");
-    app_usbd_scsi_cmd_modesense10_t const * p_sense10 = (const void *)p_msc_ctx->cbw.cdb;
-    UNUSED_VARIABLE(p_sense10);
     if (p_msc_ctx->cbw.cdb_length < sizeof(app_usbd_scsi_cmd_modesense10_t))
     {
         return status_unsupported_start(p_inst);
@@ -1656,24 +1659,25 @@ static ret_code_t cmd_modesense10(app_usbd_class_inst_t const * p_inst,
         return status_unsupported_start(p_inst);
     }
 
-    if (uint32_decode(p_msc_ctx->cbw.datlen) > sizeof(app_usbd_scsi_cmd_modesense6_resp_t))
+    /* Phreakbyte: 8-byte mode header, plus the Caching page (0x08, WCE=0) when
+       the host asks for it or all pages. See cmd_modesense6. */
+    uint8_t * buf  = (uint8_t *)&p_msc_ctx->scsi_resp;
+    uint8_t   page = p_msc_ctx->cbw.cdb[2] & 0x3Fu;
+    uint16_t  len  = 8;
+    memset(buf, 0, 8);
+    if (page == 0x08u || page == 0x3Fu)
     {
-        return status_unsupported_start(p_inst);
+        buf[8] = 0x08u; buf[9] = 0x12u;          /* Caching page, page length 18 */
+        memset(&buf[10], 0, 18);
+        len = 28;
     }
+    buf[0] = (uint8_t)(((len - 2) >> 8) & 0xFFu); /* mode data length (big-endian) */
+    buf[1] = (uint8_t)((len - 2) & 0xFFu);
 
-    uint32_t resp_len = uint32_decode(p_msc_ctx->cbw.datlen);
+    uint32_t datlen   = uint32_decode(p_msc_ctx->cbw.datlen);
+    uint32_t resp_len = (datlen < len) ? datlen : len;
 
-    app_usbd_scsi_cmd_modesense10_resp_t * p_resp = &p_msc_ctx->scsi_resp.modesense10;
-
-    memset(p_resp, 0, sizeof(app_usbd_scsi_cmd_modesense10_resp_t));
-    uint16_t len = sizeof(app_usbd_scsi_cmd_modesense10_resp_t) - sizeof(p_resp->mdlen);
-    p_resp->mdlen[1] = len & 0xff;
-    p_resp->mdlen[0] = (len >> 8) & 0xff;
-
-    return transfer_in_start(p_inst,
-                             &p_msc_ctx->scsi_resp,
-                             resp_len,
-                             APP_USBD_MSC_STATE_CMD_IN);
+    return transfer_in_start(p_inst, buf, resp_len, APP_USBD_MSC_STATE_CMD_IN);
 }
 
 
@@ -1812,6 +1816,12 @@ static ret_code_t state_cbw(app_usbd_class_inst_t const * p_inst)
 
         case APP_USBD_SCSI_CMD_MODESENSE10:
             ret = cmd_modesense10(p_inst, p_msc, p_msc_ctx);
+            break;
+
+        case 0x35:   /* SYNCHRONIZE CACHE (10) */
+            /* Phreakbyte: no write-back cache; ack the host's flush on
+               attach/detach so it doesn't log a check-condition. */
+            ret = csw_wait_start(p_inst, APP_USBD_MSC_CSW_STATUS_PASS);
             break;
 
         default:
