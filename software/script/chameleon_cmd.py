@@ -2173,7 +2173,8 @@ class ChameleonCMD:
         """
         resp = self.device.send_cmd_sync(Command.GET_BLE_NAME)
         if resp.status == Status.SUCCESS:
-            resp.parsed = resp.data.decode(encoding='utf-8')
+            # Stored name may be uninitialized or non-UTF-8; never crash the CLI.
+            resp.parsed = resp.data.decode(encoding='utf-8', errors='backslashreplace').rstrip('\x00')
         return resp
 
     @expect_response(Status.SUCCESS)
