@@ -2385,15 +2385,58 @@ class HF14AAuthTrace(ReaderRequiredUnit):
             "-t", "--timeout", type=int, default=5000, metavar="<ms>",
             help="Tag-presence polling timeout in ms (1-30000, default 5000)"
         )
+        parser.add_argument(
+            "-@", dest="continuous", action="store_true",
+            help="repeat the auth trace until a key is pressed"
+        )
         parser.epilog = """
 examples:
   hf 14a auth-trace --blk 0 -k FFFFFFFFFFFF
   hf 14a auth-trace --blk 4 -b -k A0A1A2A3A4A5
   hf 14a auth-trace --blk 0 -k FFFFFFFFFFFF -t 10000   # wait up to 10s for tag
+  hf 14a auth-trace --blk 0 -k FFFFFFFFFFFF -@         # loop until a key is pressed
 """
         return parser
 
+    @staticmethod
+    def _key_pressed() -> bool:
+        """Non-blocking check for any keypress, portable across OSes."""
+        if sys.platform == "win32":
+            import msvcrt
+            if msvcrt.kbhit():
+                msvcrt.getch()
+                return True
+            return False
+        import select
+        dr, _, _ = select.select([sys.stdin], [], [], 0)
+        if dr:
+            sys.stdin.readline()
+            return True
+        return False
+
     def on_exec(self, args: argparse.Namespace):
+        # Validate the key once up front so continuous mode can't spin on a bad key.
+        key_hex = args.key.replace(" ", "")
+        if not re.match(r"^[0-9a-fA-F]{12}$", key_hex):
+            print(f" [!] {color_string((CR, 'Key must be exactly 12 hex characters'))}")
+            return
+        if not args.continuous:
+            self._run_once(args)
+            return
+        # Continuous: re-run the trace until a key is pressed — hammer a relay or
+        # card on the bench without retyping. Each run re-polls for the tag.
+        print("[=] Continuous auth-trace — press <Enter> to stop")
+        run = 0
+        try:
+            while not self._key_pressed():
+                run += 1
+                print(f"\n===== run {run} =====")
+                self._run_once(args)
+        except KeyboardInterrupt:
+            pass
+        print()
+
+    def _run_once(self, args: argparse.Namespace):
         # Validate key
         key_hex = args.key.replace(" ", "")
         if not re.match(r"^[0-9a-fA-F]{12}$", key_hex):
