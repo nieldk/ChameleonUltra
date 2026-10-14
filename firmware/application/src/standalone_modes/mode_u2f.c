@@ -396,8 +396,15 @@ static void u2f_cb_state(uint8_t *data, uint16_t szBits){
      * bytes. ISO-DEP frames are byte-aligned, so divide. */
     uint16_t szBytes = szBits / 8;
     if (!nfc_tag_14a_4_base_handler(&m_tcl, data, szBytes)) return;
-    /* APDU assembled into m_tcl.m_apdu_buf; respond from on_tick. base_respond
-     * sends S(WTX) now because no response is ready yet. */
+    /* A GET RESPONSE continuation is just a memcpy of the next chunk, so answer
+     * it here with no S(WTX) round-trip — that halves the frames a large
+     * REGISTER costs on a slow link. REGISTER/AUTHENTICATE run ECDSA, so those
+     * stay deferred to on_tick, where S(WTX) keeps the reader waiting. */
+    uint16_t alen = m_tcl.m_apdu_len >= 2 ? m_tcl.m_apdu_len - 2 : 0;
+    if (alen >= 2 && m_tcl.m_apdu_buf[1] == ISO_INS_GET_RESPONSE && m_big_off < m_big_len) {
+        m_tcl.m_apdu_pending = false;
+        emit_chunk();
+    }
     nfc_tag_14a_4_base_respond(&m_tcl);
 }
 
