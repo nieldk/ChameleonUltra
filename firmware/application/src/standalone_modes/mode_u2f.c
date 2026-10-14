@@ -77,9 +77,10 @@ static const uint8_t U2F_ATT_CERT_DEFAULT[]   = { 0x30, 0x00 };
 /* ---- session ---- */
 static nfc_tag_14a_4_tcl_state_t m_tcl;
 static uint8_t  m_uid[7];
-static uint8_t  m_mk[32];
+/* 4-byte aligned: FDS write source data must be word-aligned. */
+static uint8_t  m_mk[32]       __attribute__((aligned(4)));
 static uint32_t m_ctr;
-static uint8_t  m_att_priv[32];   /* attestation priv key, from FDS or default */
+static uint8_t  m_att_priv[32] __attribute__((aligned(4)));   /* from FDS or default */
 
 /* Large response + ISO7816 GET RESPONSE chaining (REGISTER can exceed FSC). */
 static uint8_t  m_big[640];
@@ -207,8 +208,14 @@ static void ctr_save(void){ fds_write_sync(U2F_FDS_FILE, U2F_FDS_KEY_CTR, sizeof
  * the next arm; the key is also applied live if the mode is armed. */
 bool u2f_set_attestation(const uint8_t *priv, const uint8_t *cert, uint16_t cert_len) {
     if (!priv || !cert || cert_len < 2 || cert_len > U2F_ATT_CERT_MAX) return false;
-    bool ok = fds_write_sync(U2F_FDS_FILE, U2F_FDS_KEY_ATT_PRIV, 32, (void *)priv);
-    ok = fds_write_sync(U2F_FDS_FILE, U2F_FDS_KEY_ATT_CERT, cert_len, (void *)cert) && ok;
+    /* FDS requires word-aligned source data; the inbound command buffer sits at
+     * an odd offset after the frame preamble, so stage into aligned buffers. */
+    static uint32_t priv_buf[32 / 4];
+    static uint32_t cert_buf[(U2F_ATT_CERT_MAX + 3) / 4];
+    memcpy(priv_buf, priv, 32);
+    memcpy(cert_buf, cert, cert_len);
+    bool ok = fds_write_sync(U2F_FDS_FILE, U2F_FDS_KEY_ATT_PRIV, 32, priv_buf);
+    ok = fds_write_sync(U2F_FDS_FILE, U2F_FDS_KEY_ATT_CERT, cert_len, cert_buf) && ok;
     if (ok) memcpy(m_att_priv, priv, 32);
     return ok;
 }
