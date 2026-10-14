@@ -302,15 +302,40 @@ bool nfc_tag_14a_4_base_handler(nfc_tag_14a_4_tcl_state_t *m_tcl_session_state, 
             return false;
         }
 
-        memcpy(m_tcl_session_state->m_apdu_buf, &data[offset], apdu_len);
-        m_tcl_session_state->m_apdu_len    = apdu_len;
-        m_tcl_session_state->m_apdu_pending = true;
-        m_tcl_session_state->m_response_ready = false;
-
+        /* Inbound (reader->card) I-block chaining, ISO14443-4 §7.5.3.2.
+         * Each on-air frame carries its own CRC (CRCMODERX off, so it reaches
+         * us). Intermediate fragments: drop the trailing CRC and append. The
+         * final/only fragment keeps its CRC so the existing single-block
+         * contract is byte-for-byte unchanged (the consumer strips 2). */
         if (more_chain) {
-            send_rack(m_tcl_session_state);
+            uint16_t frag = (apdu_len >= 2) ? apdu_len - 2 : 0;
+            if (!m_tcl_session_state->m_chaining_in) m_tcl_session_state->m_apdu_len = 0;
+            if (m_tcl_session_state->m_apdu_len + frag > NFC_14A_4_MAX_APDU)
+                frag = NFC_14A_4_MAX_APDU - m_tcl_session_state->m_apdu_len;
+            memcpy(&m_tcl_session_state->m_apdu_buf[m_tcl_session_state->m_apdu_len],
+                   &data[offset], frag);
+            m_tcl_session_state->m_apdu_len   += frag;
+            m_tcl_session_state->m_chaining_in = true;
+            m_tcl_session_state->m_apdu_pending = true;
+            m_tcl_session_state->m_response_ready = false;
+            send_rack(m_tcl_session_state);         /* R(ACK) with current block num */
+            m_tcl_session_state->m_block_num ^= 1;  /* advance for next chained block */
             return false;
         }
+
+        if (m_tcl_session_state->m_chaining_in) {
+            if (m_tcl_session_state->m_apdu_len + apdu_len > NFC_14A_4_MAX_APDU)
+                apdu_len = NFC_14A_4_MAX_APDU - m_tcl_session_state->m_apdu_len;
+            memcpy(&m_tcl_session_state->m_apdu_buf[m_tcl_session_state->m_apdu_len],
+                   &data[offset], apdu_len);
+            m_tcl_session_state->m_apdu_len   += apdu_len;
+            m_tcl_session_state->m_chaining_in = false;
+        } else {
+            memcpy(m_tcl_session_state->m_apdu_buf, &data[offset], apdu_len);
+            m_tcl_session_state->m_apdu_len = apdu_len;
+        }
+        m_tcl_session_state->m_apdu_pending = true;
+        m_tcl_session_state->m_response_ready = false;
 
         return true;
     }
@@ -375,6 +400,7 @@ void nfc_tag_14a_4_reset_state(nfc_tag_14a_4_tcl_state_t *m_tcl_session_state) {
     m_tcl_session_state->m_response_ready = false;
     m_tcl_session_state->m_apdu_len       = 0;
     m_tcl_session_state->m_resp_len       = 0;
+    m_tcl_session_state->m_chaining_in    = false;
 }
 
 void nfc_tag_14a_4_reset_handler(void) {
