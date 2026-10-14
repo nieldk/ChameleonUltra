@@ -59,6 +59,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  m_resp_buf[NFC_14A_4_MAX_APDU];
     uint16_t m_resp_len;
     bool     m_response_ready;
+    bool     m_chaining_in;   /* mid inbound (reader->card) I-block chain */
 }
 nfc_tag_14a_4_tcl_state_t;
 
