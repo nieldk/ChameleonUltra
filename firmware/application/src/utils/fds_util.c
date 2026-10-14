@@ -297,6 +297,40 @@ void fds_gc_sync(void) {
     fds_wait_done("gc");
 }
 
+int fds_enumerate(fds_rec_meta_t *out, int max) {
+    fds_find_token_t   tok  = {0};
+    fds_record_desc_t  desc = {0};
+    fds_flash_record_t rec;
+    int n = 0;
+    while (n < max && fds_record_iterate(&desc, &tok) == NRF_SUCCESS) {
+        if (fds_record_open(&desc, &rec) != NRF_SUCCESS) {
+            continue;
+        }
+        out[n].file_id   = rec.p_header->file_id;
+        out[n].key       = rec.p_header->record_key;
+        out[n].len_bytes = (uint16_t)(rec.p_header->length_words * 4);
+        n++;
+        fds_record_close(&desc);
+    }
+    return n;
+}
+
+const uint8_t *fds_peek(uint16_t id, uint16_t key, uint16_t *len_bytes, fds_record_desc_t *desc) {
+    fds_flash_record_t rec;
+    if (!fds_find_record(id, key, desc)) {
+        return NULL;
+    }
+    if (fds_record_open(desc, &rec) != NRF_SUCCESS) {
+        return NULL;
+    }
+    *len_bytes = (uint16_t)(rec.p_header->length_words * 4);
+    return (const uint8_t *)rec.p_data;
+}
+
+void fds_peek_close(fds_record_desc_t *desc) {
+    (void)fds_record_close(desc);
+}
+
 static bool fds_next_record_delete_sync() {
     fds_find_token_t  tok   = {0};
     fds_record_desc_t desc  = {0};

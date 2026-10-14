@@ -2196,6 +2196,23 @@ class ChameleonCMD:
         return self.device.send_cmd_sync(Command.DELETE_ALL_BLE_BONDS)
 
     @expect_response(Status.SUCCESS)
+    def get_fds_list(self):
+        """List all FDS records as (file_id, key, length_bytes) tuples."""
+        resp = self.device.send_cmd_sync(Command.FDS_LIST)
+        if resp.status == Status.SUCCESS:
+            d = resp.data
+            resp.parsed = [struct.unpack('!HHH', d[o:o + 6]) for o in range(0, len(d) - 5, 6)]
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def get_fds_record(self, file_id, key):
+        """Read one FDS record's raw bytes by file_id + key."""
+        resp = self.device.send_cmd_sync(Command.FDS_READ, struct.pack('!HH', file_id, key))
+        if resp.status == Status.SUCCESS:
+            resp.parsed = resp.data
+        return resp
+
+    @expect_response(Status.SUCCESS)
     def get_device_capabilities(self):
         """
         Get list of commands that client understands

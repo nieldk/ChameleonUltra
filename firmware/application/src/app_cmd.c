@@ -252,6 +252,38 @@ static data_frame_tx_t *cmd_processor_bl_info(uint16_t cmd, uint16_t status, uin
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(v), (uint8_t *)v);
 }
 
+static data_frame_tx_t *cmd_processor_fds_list(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    /* Enumerate every valid FDS record: 6 bytes each (file_id, key, len), BE. */
+    static fds_rec_meta_t recs[48];
+    static uint8_t out[sizeof(recs) / sizeof(recs[0]) * 6];
+    int n = fds_enumerate(recs, sizeof(recs) / sizeof(recs[0]));
+    uint16_t j = 0;
+    for (int i = 0; i < n; i++) {
+        out[j++] = (uint8_t)(recs[i].file_id >> 8);   out[j++] = (uint8_t)recs[i].file_id;
+        out[j++] = (uint8_t)(recs[i].key >> 8);       out[j++] = (uint8_t)recs[i].key;
+        out[j++] = (uint8_t)(recs[i].len_bytes >> 8); out[j++] = (uint8_t)recs[i].len_bytes;
+    }
+    return data_frame_make(cmd, STATUS_SUCCESS, j, out);
+}
+
+static data_frame_tx_t *cmd_processor_fds_read(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    /* Dump one record straight from flash (zero-copy) by file_id + key, BE. */
+    if (length != 4) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint16_t file_id = (uint16_t)((data[0] << 8) | data[1]);
+    uint16_t key     = (uint16_t)((data[2] << 8) | data[3]);
+    fds_record_desc_t desc;
+    uint16_t len = 0;
+    const uint8_t *p = fds_peek(file_id, key, &len, &desc);
+    if (p == NULL) {
+        return data_frame_make(cmd, STATUS_FLASH_READ_FAIL, 0, NULL);
+    }
+    data_frame_tx_t *tx = data_frame_make(cmd, STATUS_SUCCESS, len, (uint8_t *)p);
+    fds_peek_close(&desc);
+    return tx;
+}
+
 static data_frame_tx_t *cmd_processor_get_dfu_settings_version(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     uint32_t app_v = 0, bl_v = 0;
     dfuver_get(&app_v, &bl_v);
@@ -4587,6 +4619,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_BL_INFO,                      NULL,                        cmd_processor_bl_info,                       NULL                   },
     {    DATA_CMD_GET_DFU_SETTINGS_VERSION,     NULL,                        cmd_processor_get_dfu_settings_version,      NULL                   },
     {    DATA_CMD_SET_DFU_SETTINGS_VERSION,     NULL,                        cmd_processor_set_dfu_settings_version,      NULL                   },
+    {    DATA_CMD_FDS_LIST,                     NULL,                        cmd_processor_fds_list,                      NULL                   },
+    {    DATA_CMD_FDS_READ,                     NULL,                        cmd_processor_fds_read,                      NULL                   },
     {    DATA_CMD_SET_BLE_NAME,                 NULL,                        cmd_processor_set_ble_name,                  NULL                   },
 
 #if defined(PROJECT_CHAMELEON_ULTRA)

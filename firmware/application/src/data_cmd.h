@@ -67,6 +67,8 @@
 #define DATA_CMD_BL_INFO                        (1057)  /* read-only: NRFFW[0/1], MBR words, REGOUT0, vector@0xF3000 */
 #define DATA_CMD_GET_DFU_SETTINGS_VERSION       (1054)  /* -> u32 app_version, u32 bootloader_version (settings page) */
 #define DATA_CMD_SET_DFU_SETTINGS_VERSION       (1055)  /* u8 mask (b0 app, b1 bl), u32 app, u32 bl */
+#define DATA_CMD_FDS_LIST                       (1058)  /* -> N * {u16 file_id, u16 key, u16 len_bytes} (big-endian) */
+#define DATA_CMD_FDS_READ                       (1059)  /* u16 file_id, u16 key -> record bytes */
 
 //
 // ******************************************************************
