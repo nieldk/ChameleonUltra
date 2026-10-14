@@ -386,7 +386,10 @@ static void emit_chunk(void){
 /* ===================================================================== */
 /*  ISO-DEP handler (ISR) — delegate framing to the 14a_4 engine          */
 /* ===================================================================== */
-static void u2f_cb_state(uint8_t *data, uint16_t szBytes){
+static void u2f_cb_state(uint8_t *data, uint16_t szBits){
+    /* nfc_14a delivers the frame length in BITS; the 14a_4 engine works in
+     * bytes. ISO-DEP frames are byte-aligned, so divide. */
+    uint16_t szBytes = szBits / 8;
     if (!nfc_tag_14a_4_base_handler(&m_tcl, data, szBytes)) return;
     /* APDU assembled into m_tcl.m_apdu_buf; respond from on_tick. base_respond
      * sends S(WTX) now because no response is ready yet. */
