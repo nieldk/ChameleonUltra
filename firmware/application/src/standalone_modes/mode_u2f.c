@@ -32,9 +32,12 @@
 NRF_LOG_MODULE_REGISTER();
 
 /* ---- persistence ---- */
-#define U2F_FDS_FILE      0x1020
-#define U2F_FDS_KEY_MK    0x0001   /* 32-byte master key   */
-#define U2F_FDS_KEY_CTR   0x0002   /* 4-byte global counter */
+#define U2F_FDS_FILE          0x1020
+#define U2F_FDS_KEY_MK        0x0001   /* 32-byte master key            */
+#define U2F_FDS_KEY_CTR       0x0002   /* 4-byte global counter         */
+#define U2F_FDS_KEY_ATT_PRIV  0x0003   /* 32-byte attestation priv key  */
+#define U2F_FDS_KEY_ATT_CERT  0x0004   /* attestation cert (DER)        */
+#define U2F_ATT_CERT_MAX      512      /* max provisioned cert size     */
 
 /* ---- status words ---- */
 #define SW_NO_ERROR               0x9000
@@ -61,23 +64,22 @@ static const uint8_t U2F_V2[]    = {'U','2','F','_','V','2'};
 #define KH_LEN 64   /* nonce(32) | mac(32) */
 
 /* =====================================================================
- *  Attestation material — PLACEHOLDER. Replace before real use:
- *    openssl ecparam -name prime256v1 -genkey -noout -out att.key
- *    openssl req -new -x509 -key att.key -out att.crt -days 3650 \
- *        -subj "/CN=Phreakbyte U2F"
- *    openssl ec   -in att.key -text -noout        # copy the 32 priv bytes
- *    openssl x509 -in att.crt -outform der | xxd  # copy the DER bytes + len
- *  U2F_ATT_CERT must be valid DER so the client can parse past it.
+ *  Attestation material is provisioned at RUNTIME, no code edit needed:
+ *    firmware/tools/gen_u2f_attestation.sh      # make a P-256 key + cert
+ *    hw u2f set-attestation -k att.key -c att.crt
+ *  which stores them in FDS (keys 3/4) and overrides the fallback below.
+ *  The fallback is an empty placeholder: REGISTER only yields a usable
+ *  credential once a real key/cert have been provisioned.
  * ===================================================================== */
-static const uint8_t U2F_ATT_PRIV[32] = { 0 };   /* TODO: real key */
-static const uint8_t U2F_ATT_CERT[]   = { 0x30, 0x00 };  /* TODO: real DER cert */
-#define U2F_ATT_CERT_LEN  (sizeof(U2F_ATT_CERT))
+static const uint8_t U2F_ATT_PRIV_DEFAULT[32] = { 0 };
+static const uint8_t U2F_ATT_CERT_DEFAULT[]   = { 0x30, 0x00 };
 
 /* ---- session ---- */
 static nfc_tag_14a_4_tcl_state_t m_tcl;
 static uint8_t  m_uid[7];
 static uint8_t  m_mk[32];
 static uint32_t m_ctr;
+static uint8_t  m_att_priv[32];   /* attestation priv key, from FDS or default */
 
 /* Large response + ISO7816 GET RESPONSE chaining (REGISTER can exceed FSC). */
 static uint8_t  m_big[640];
@@ -200,6 +202,17 @@ static void derive_mac(const uint8_t *app, const uint8_t *nonce, uint8_t mac[32]
 
 static void ctr_save(void){ fds_write_sync(U2F_FDS_FILE, U2F_FDS_KEY_CTR, sizeof(m_ctr), &m_ctr); }
 
+/* Provision the attestation key (32 bytes) + cert (DER) into FDS at runtime,
+ * so users set them over the CLI instead of editing source. Takes effect on
+ * the next arm; the key is also applied live if the mode is armed. */
+bool u2f_set_attestation(const uint8_t *priv, const uint8_t *cert, uint16_t cert_len) {
+    if (!priv || !cert || cert_len < 2 || cert_len > U2F_ATT_CERT_MAX) return false;
+    bool ok = fds_write_sync(U2F_FDS_FILE, U2F_FDS_KEY_ATT_PRIV, 32, (void *)priv);
+    ok = fds_write_sync(U2F_FDS_FILE, U2F_FDS_KEY_ATT_CERT, cert_len, (void *)cert) && ok;
+    if (ok) memcpy(m_att_priv, priv, 32);
+    return ok;
+}
+
 /* ---- APDU helpers ---- */
 static uint16_t put_sw(uint8_t *resp, uint16_t off, uint16_t sw){
     resp[off++]=(uint8_t)(sw>>8); resp[off++]=(uint8_t)sw; return off;
@@ -239,15 +252,22 @@ static uint16_t do_register(const uint8_t *body, uint16_t lc, uint8_t *out){
     sha256_init(&c); sha256_upd(&c,&pfx,1); sha256_upd(&c,app,32); sha256_upd(&c,chal,32);
     sha256_upd(&c,kh,KH_LEN); sha256_upd(&c,pub65,65); sha256_fin(&c,h);
     uint8_t sig_rs[64], sig_der[72];
-    if (!uECC_sign(U2F_ATT_PRIV, h, 32, sig_rs, C)) return put_sw(out,0,SW_WRONG_DATA);
+    if (!uECC_sign(m_att_priv, h, 32, sig_rs, C)) return put_sw(out,0,SW_WRONG_DATA);
     uint16_t sig_len = der_sig(sig_rs, sig_der);
+
+    /* attestation cert: provisioned record (FDS, zero-copy) or the fallback */
+    fds_record_desc_t cdesc; uint16_t clen = 0;
+    const uint8_t *cert = fds_peek(U2F_FDS_FILE, U2F_FDS_KEY_ATT_CERT, &clen, &cdesc);
+    bool peeked = (cert != NULL);
+    if (!peeked) { cert = U2F_ATT_CERT_DEFAULT; clen = sizeof(U2F_ATT_CERT_DEFAULT); }
 
     uint16_t i=0;
     out[i++]=0x05;
     memcpy(out+i, pub65, 65); i+=65;
     out[i++]=KH_LEN;
     memcpy(out+i, kh, KH_LEN); i+=KH_LEN;
-    memcpy(out+i, U2F_ATT_CERT, U2F_ATT_CERT_LEN); i+=U2F_ATT_CERT_LEN;
+    memcpy(out+i, cert, clen); i+=clen;
+    if (peeked) fds_peek_close(&cdesc);
     memcpy(out+i, sig_der, sig_len); i+=sig_len;
     i = put_sw(out, i, SW_NO_ERROR);
     return i;
@@ -386,6 +406,11 @@ static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len){
     uint16_t cl = sizeof(m_ctr);
     if (!fds_read_sync(U2F_FDS_FILE, U2F_FDS_KEY_CTR, &cl, (uint8_t *)&m_ctr) || cl != sizeof(m_ctr))
         m_ctr = 0;
+
+    /* attestation key: provisioned (FDS) overrides the compiled fallback */
+    uint16_t apl = sizeof(m_att_priv);
+    if (!fds_read_sync(U2F_FDS_FILE, U2F_FDS_KEY_ATT_PRIV, &apl, m_att_priv) || apl != sizeof(m_att_priv))
+        memcpy(m_att_priv, U2F_ATT_PRIV_DEFAULT, sizeof(m_att_priv));
 
     if (!u2f_rng(m_uid, sizeof(m_uid))) return STANDALONE_RC_INVALID_STATE;
     m_uid[0] = 0x08;   /* RID-style first byte; avoids 0x88 cascade marker clash */

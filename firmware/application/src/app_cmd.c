@@ -297,6 +297,17 @@ static data_frame_tx_t *cmd_processor_fds_read(uint16_t cmd, uint16_t status, ui
     return tx;
 }
 
+#if CONFIG_STANDALONE_U2F
+#include "standalone_modes/mode_u2f.h"
+static data_frame_tx_t *cmd_processor_u2f_set_attestation(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    /* payload: u8[32] attestation private key | u8[] attestation cert (DER) */
+    if (length < 32 + 2) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    uint16_t cert_len = length - 32;
+    bool ok = u2f_set_attestation(data, data + 32, cert_len);
+    return data_frame_make(cmd, ok ? STATUS_SUCCESS : STATUS_FLASH_WRITE_FAIL, 0, NULL);
+}
+#endif
+
 static data_frame_tx_t *cmd_processor_get_dfu_settings_version(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     uint32_t app_v = 0, bl_v = 0;
     dfuver_get(&app_v, &bl_v);
@@ -4634,6 +4645,9 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_SET_DFU_SETTINGS_VERSION,     NULL,                        cmd_processor_set_dfu_settings_version,      NULL                   },
     {    DATA_CMD_FDS_LIST,                     NULL,                        cmd_processor_fds_list,                      NULL                   },
     {    DATA_CMD_FDS_READ,                     NULL,                        cmd_processor_fds_read,                      NULL                   },
+#if CONFIG_STANDALONE_U2F
+    {    DATA_CMD_U2F_SET_ATTESTATION,          NULL,                        cmd_processor_u2f_set_attestation,           NULL                   },
+#endif
     {    DATA_CMD_SET_BLE_NAME,                 NULL,                        cmd_processor_set_ble_name,                  NULL                   },
 
 #if defined(PROJECT_CHAMELEON_ULTRA)

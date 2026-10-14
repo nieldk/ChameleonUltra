@@ -452,11 +452,14 @@ NFC path ,  **Android** (Chrome) and **PC/SC** readers. **iOS Safari does not**:
 its NFC WebAuthn requires CTAP2/FIDO2 and silently ignores a U2F-only applet.
 For iPhone you need the CTAP2 layer (not built here).
 
-**Build:** off by default. Set `STANDALONE_U2F=1`, vendor micro-ecc into
-`src/crypto/micro-ecc/` (whole repo ,  `uECC.c` pulls in its `.h`/`.inc`), and
-paste real attestation material over the placeholders in `mode_u2f.c`
-(generate with `firmware/tools/gen_u2f_attestation.sh`). Until the attestation
-key/cert are real, `REGISTER` output is not a usable credential.
+**Build:** off by default. Set `STANDALONE_U2F=1` and vendor micro-ecc into
+`src/crypto/micro-ecc/` (whole repo ,  `uECC.c` pulls in its `.h`/`.inc`).
+No source edits are needed for attestation ,  provision it at runtime:
+```
+firmware/tools/gen_u2f_attestation.sh          # make a P-256 key + cert
+hw u2f set-attestation -k att.key -c att.crt   # stored in FDS, survives reboot
+```
+Until a key/cert are provisioned, `REGISTER` output is not a usable credential.
 
 ```
 standalone set-mode u2f        # no --opt-in needed; writes no tag/slot

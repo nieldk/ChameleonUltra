@@ -2224,6 +2224,13 @@ class ChameleonCMD:
         return out
 
     @expect_response(Status.SUCCESS)
+    def u2f_set_attestation(self, priv: bytes, cert: bytes):
+        """Provision the U2F attestation key (32 bytes) + cert (DER) into FDS."""
+        if len(priv) != 32:
+            raise ValueError("attestation private key must be 32 bytes")
+        return self.device.send_cmd_sync(Command.U2F_SET_ATTESTATION, priv + cert)
+
+    @expect_response(Status.SUCCESS)
     def get_device_capabilities(self):
         """
         Get list of commands that client understands

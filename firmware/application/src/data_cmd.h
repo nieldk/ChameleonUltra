@@ -69,6 +69,7 @@
 #define DATA_CMD_SET_DFU_SETTINGS_VERSION       (1055)  /* u8 mask (b0 app, b1 bl), u32 app, u32 bl */
 #define DATA_CMD_FDS_LIST                       (1058)  /* -> N * {u16 file_id, u16 key, u16 len_bytes} (big-endian) */
 #define DATA_CMD_FDS_READ                       (1059)  /* u16 file_id, u16 key, u16 offset, u16 len -> record slice (len 0 = max) */
+#define DATA_CMD_U2F_SET_ATTESTATION            (1060)  /* u8[32] att_priv, u8[] att_cert_der -> provision U2F attestation */
 
 //
 // ******************************************************************
