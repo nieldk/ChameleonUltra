@@ -365,7 +365,12 @@ static uint16_t u2f_process(const uint8_t *a, uint16_t n){
  * ends with 61 XX and the reader follows up with GET RESPONSE (00 C0 ..). */
 static void emit_chunk(void){
     uint16_t remain = m_big_len - m_big_off;
-    uint16_t max = NFC_14A_4_MAX_APDU - 2;           /* leave room for SW */
+    /* Bound a chunk so the resulting I-block fits the most constrained reader.
+     * A ChameleonUltra used as the reader has a 64-byte RC522 FIFO, so an
+     * on-air I-block (PCB + CID? + payload + 2 CRC) must stay <= 64. 58 payload
+     * bytes (+2 for the 61 XX trailer) leaves room for PCB/CID/CRC. Phones can
+     * take far more, but a smaller chunk just costs extra GET-RESPONSE rounds. */
+    uint16_t max = 58;
     if (remain <= max) {
         memcpy(m_tcl.m_resp_buf, m_big + m_big_off, remain);
         m_tcl.m_resp_len = remain;
