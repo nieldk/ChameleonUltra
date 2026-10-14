@@ -33,8 +33,9 @@ static nfc_14a_ats_t         s_ats        = {0};
 /* Active flag — set by install, cleared by clear; makes callbacks no-ops safely */
 static bool s_active = false;
 
-/* Frame callback (set by mode_relay.c) */
-static void (*s_frame_cb)(const uint8_t *, uint16_t) = NULL;
+/* Frame callback (set by mode_relay.c). parity is NULL unless a Crypto1
+ * session is active, else one byte per data byte (bit0 = that byte's parity). */
+static void (*s_frame_cb)(const uint8_t *, uint16_t, const uint8_t *) = NULL;
 
 /* Awaiting response flag (set in cb_state, cleared in inject_response) */
 static volatile bool s_awaiting_response = false;
@@ -160,7 +161,11 @@ static void relay_cb_state(uint8_t *data, uint16_t szBits) {
         s_response_pending  = false;
         s_response_len      = 0;
         s_wtx_active        = false;
-        s_frame_cb(data, szBits);
+        /* Forward the reader's encrypted Crypto1 parity verbatim when capture
+         * is on; nfc_14a populated it from this same frame just above. */
+        uint16_t npar = 0;
+        const uint8_t *par = nfc_tag_14a_get_rx_parity(&npar);
+        s_frame_cb(data, szBits, npar ? par : NULL);
 
         /* Request a waiting-time extension so the reader tolerates the relay
          * latency — but ONLY where WTX is meaningful. For a non-T=CL card or
@@ -259,6 +264,11 @@ void nfc_relay_tag_install(const uint8_t *uid, uint8_t uid_len,
      * to the 302us default never eats a slow relayed response. */
     nfc_tag_14a_set_relay_hold(true);
 
+    /* Capture per-frame RX parity for the whole session so a Crypto1 (MIFARE
+     * Classic) auth can be relayed with its encrypted parity intact. mode_relay
+     * only forwards it over BLE once a session turns non-CRC. */
+    nfc_tag_14a_rx_parity_capture(true);
+
     /* Ensure NFCT hardware is running. If the active slot has HF type
      * undefined, tag_emulation_sense_switch_all() calls sense_switch(false)
      * at boot leaving NFCT uninitialised — relay would be silent to readers.
@@ -272,7 +282,7 @@ void nfc_relay_tag_install(const uint8_t *uid, uint8_t uid_len,
                  s_atqa[0], s_atqa[1], s_sak[0]);
 }
 
-void nfc_relay_tag_set_frame_cb(void (*cb)(const uint8_t *, uint16_t)) {
+void nfc_relay_tag_set_frame_cb(void (*cb)(const uint8_t *, uint16_t, const uint8_t *)) {
     s_frame_cb = cb;
 }
 
@@ -308,6 +318,39 @@ void nfc_relay_tag_inject_response(const uint8_t *data, uint16_t bit_count) {
     s_response_pending = true;
 
     NRF_LOG_DEBUG("relay_tag: response buffered %u bytes (awaiting WTX ACK)", bytes);
+}
+
+/* Crypto1 relay: inject a response carrying the real card's encrypted parity.
+ * MIFARE Classic is never T=CL, so this is always the direct-transmit path —
+ * no WTX. parity is one byte per data byte (bit0). Short frames (<2 bytes,
+ * e.g. a 4-bit ACK/NAK) carry no parity, so fall back to the plain path. */
+void nfc_relay_tag_inject_response_par(const uint8_t *data, uint16_t bit_count,
+                                       const uint8_t *parity) {
+    if (!s_awaiting_response || !data) return;
+    uint16_t bytes = (bit_count + 7) / 8;
+    if (bytes == 0) return;
+
+    nfc_tag_14a_set_frame_delay_max(0xFFFFFUL);
+    if (bit_count < 9) {
+        /* Short encrypted frame — a MIFARE Classic 4-bit ACK (0x0A) or NAK,
+         * sent after each write/value phase. It carries no parity bit, so
+         * transmit the exact bit count raw; rounding up to a byte (the old
+         * fallback) desynchronises the reader's Crypto1 stream and breaks
+         * every write. */
+        nfc_tag_14a_tx_nbit(data[0], bit_count);
+    } else if (parity) {
+        nfc_tag_14a_tx_bytes_par(data, bytes, parity);
+    } else {
+        /* Byte-aligned frame with no parity supplied — fall back to the plain
+         * byte path (should not happen on a Crypto1 session). */
+        nfc_relay_tag_inject_response(data, bit_count);
+        return;
+    }
+    s_awaiting_response = false;
+    s_response_pending  = false;
+    s_response_len      = 0;
+    s_wtx_active        = false;
+    NRF_LOG_DEBUG("relay_tag: response(par) sent direct %u bits", bit_count);
 }
 
 bool nfc_relay_tag_response_pending(void) {
@@ -349,6 +392,8 @@ void nfc_relay_tag_clear(void) {
     /* Hand RX back before restoring normal timing — a session torn down while
      * a deferred response was outstanding would otherwise leave NFCT deaf. */
     nfc_tag_14a_cancel_deferred_response();
+
+    nfc_tag_14a_rx_parity_capture(false);
 
     /* Release the FRAMEDELAYMAX hold and restore the default window so normal
      * emulation/anticollision after the relay disarms uses standard timing. */

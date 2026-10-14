@@ -32,7 +32,8 @@ const uint8_t *ats, uint8_t ats_len);
 
 /** Register the frame callback (ISR-safe: copy + flag only).
  *  Called once per frame received from the reader after SELECT. */
-void nfc_relay_tag_set_frame_cb(void (*cb)(const uint8_t *data, uint16_t bits));
+void nfc_relay_tag_set_frame_cb(void (*cb)(const uint8_t *data, uint16_t bits,
+                                           const uint8_t *parity));
 /* Returns true once after a new RATS (new T=CL session) has reset the relay
  * tag state; clears the flag on read. mode_relay uses this to force its own
  * sub-state back to READY between auth-trace runs. */
@@ -42,6 +43,12 @@ bool nfc_relay_tag_take_session_reset(void);
  *  Call from main-loop context after receiving the response from RELAY_READER.
  *  bit_count is the exact bit length; data is raw bytes. */
 void nfc_relay_tag_inject_response(const uint8_t *data, uint16_t bit_count);
+
+/** Crypto1 relay variant: inject a response with the card's encrypted parity
+ *  (one byte per data byte, bit0). Direct-transmit only (MIFARE Classic is
+ *  never T=CL). Short frames with no parity fall back to the plain path. */
+void nfc_relay_tag_inject_response_par(const uint8_t *data, uint16_t bit_count,
+                                       const uint8_t *parity);
 
 /** Signal that no response is coming (RELAY_READER reported no card response). */
 void nfc_relay_tag_no_response(void);

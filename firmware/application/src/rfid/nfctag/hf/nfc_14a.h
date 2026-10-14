@@ -161,6 +161,13 @@ void nfc_tag_14a_defer_response(void);
 void nfc_tag_14a_cancel_deferred_response(void);
 void nfc_tag_14a_tx_bits(uint8_t *data, uint32_t bits);
 void nfc_tag_14a_tx_nbit(uint8_t data, uint32_t bits);
+/* Crypto1 relay parity: enable per-frame RX parity capture, read back the
+ * last frame's parity (one byte per data byte, bit0; nbytes = data bytes),
+ * and transmit a response carrying caller-supplied parity instead of HW
+ * parity. See nfc_14a.c for the framing details. */
+void nfc_tag_14a_rx_parity_capture(bool enable);
+const uint8_t *nfc_tag_14a_get_rx_parity(uint16_t *nbytes);
+void nfc_tag_14a_tx_bytes_par(const uint8_t *data, uint16_t bytes, const uint8_t *parity);
 
 // Determine whether it is an effective UID length
 bool is_valid_uid_size(uint8_t uid_length);

@@ -153,17 +153,28 @@ static struct {
     volatile bool  frame_pending;
     uint8_t        frame_buf[256]; /* large enough for any ISO14443-4 APDU */
     uint16_t       frame_bits;
+    uint8_t        frame_par[256]; /* Crypto1: per-byte parity, valid iff frame_has_par */
+    bool           frame_has_par;
 
     /* Response from real card (set in on_response CB, consumed in on_tick) */
     volatile bool  response_ready;
     bool           no_response;
     uint8_t        response_buf[256];
     uint16_t       response_bits;
+    uint8_t        response_par[256];
+    bool           response_has_par;
 
     /* READER: pending frame from CU1 (set in on_frame CB) */
     volatile bool  reader_frame_pending;
     uint8_t        reader_frame_buf[256];
     uint16_t       reader_frame_bits;
+    uint8_t        reader_frame_par[256];
+    bool           reader_frame_has_par;
+
+    /* Crypto1 (MIFARE Classic) session active on the CARD leg: set when a
+     * 0x60/0x61 AUTH command is seen, cleared on a new session boundary. While
+     * set, frames cross BLE with their encrypted parity instead of CRC. */
+    bool           crypto1_active;
 
     /* Timing */
     uint32_t link_start_ticks;
@@ -191,12 +202,24 @@ static struct {
 /* -------------------------------------------------------------------------
  * Frame ISR callback (NFCT ISR context — ISR-safe: copy and flag only)
  * ------------------------------------------------------------------------- */
-static void on_frame_isr(const uint8_t *data, uint16_t bits) {
+static void on_frame_isr(const uint8_t *data, uint16_t bits, const uint8_t *parity) {
     if (m_st.frame_pending) return;  /* previous frame not yet processed */
     uint16_t bytes = (bits + 7) / 8;
     if (bytes > sizeof(m_st.frame_buf)) bytes = sizeof(m_st.frame_buf);
     memcpy(m_st.frame_buf, data, bytes);
     m_st.frame_bits    = bits;
+    /* A plaintext AUTH (0x60/0x61) opens a Crypto1 session: from here every
+     * frame is encrypted, carries encrypted parity and no CRC. Latch it so the
+     * response and all following frames relay their parity verbatim. */
+    if (bytes >= 1 && (data[0] == 0x60 || data[0] == 0x61)) {
+        m_st.crypto1_active = true;
+    }
+    if (parity && m_st.crypto1_active) {
+        memcpy(m_st.frame_par, parity, bytes);
+        m_st.frame_has_par = true;
+    } else {
+        m_st.frame_has_par = false;
+    }
     __DMB();  /* publish buffer writes before the flag the consumer polls */
     m_st.frame_pending = true;
 }
@@ -416,15 +439,20 @@ static void on_ready(void) {
     }
 }
 
-/* Response from real card (CU2 → CU1 via BLE) */
+/* Response from real card (CU2 → CU1 via BLE). parity non-NULL on a Crypto1
+ * session: inject it to the reader with its encrypted parity intact. */
 static void on_response(const uint8_t *data, uint16_t bits, const uint8_t *parity) {
-    (void)parity;  /* Crypto1 parity relay: consumed once the card-side capture
-                    * path (nfc_relay_tag/nfc_14a) forwards parity. T=CL unused. */
     if (m_st.sub != RS_CARD_AWAIT_RESPONSE) return;
     uint16_t bytes = (bits + 7) / 8;
     if (bytes > sizeof(m_st.response_buf)) bytes = sizeof(m_st.response_buf);
     memcpy(m_st.response_buf, data, bytes);
     m_st.response_bits  = bits;
+    if (parity) {
+        memcpy(m_st.response_par, parity, bytes);
+        m_st.response_has_par = true;
+    } else {
+        m_st.response_has_par = false;
+    }
     m_st.no_response    = false;
     __DMB();
     m_st.response_ready = true;
@@ -437,15 +465,21 @@ static void on_no_response(void) {
     m_st.response_ready = true;
 }
 
-/* Frame from CU1 to forward to real card (CU2 side) */
+/* Frame from CU1 to forward to real card (CU2 side). parity non-NULL on a
+ * Crypto1 session: drive the real card with bit-transfer + encrypted parity. */
 static void on_frame(const uint8_t *data, uint16_t bits, const uint8_t *parity) {
-    (void)parity;  /* see on_response: reader-side bit-transceive will use this */
     if (m_st.reader_frame_pending) return;
     uint16_t bytes = (bits + 7) / 8;
     if (bytes > sizeof(m_st.reader_frame_buf))
         bytes = sizeof(m_st.reader_frame_buf);
     memcpy(m_st.reader_frame_buf, data, bytes);
     m_st.reader_frame_bits    = bits;
+    if (parity) {
+        memcpy(m_st.reader_frame_par, parity, bytes);
+        m_st.reader_frame_has_par = true;
+    } else {
+        m_st.reader_frame_has_par = false;
+    }
     __DMB();
     m_st.reader_frame_pending = true;
 }
@@ -464,6 +498,7 @@ static void on_disconnected(void) {
     m_st.response_ready    = false;
     m_st.reader_frame_pending = false;
     m_st.real_card_found   = false;  /* allow fresh card scan on reconnect */
+    m_st.crypto1_active    = false;
     m_st.rescan_pending    = false;
     m_st.needs_reselect    = false;
     memset(&m_st.real_card, 0, sizeof(m_st.real_card));
@@ -544,7 +579,7 @@ static void reader_setup_card(void) {
 /* -------------------------------------------------------------------------
  * RELAY_READER: forward frame to real card, return response to CU1
  * ------------------------------------------------------------------------- */
-static void reader_relay_frame(const uint8_t *data, uint16_t bits) {
+static void reader_relay_frame(const uint8_t *data, uint16_t bits, const uint8_t *parity) {
     /* Re-select the real card if the previous T=CL session ended
      * (field drop, S(DESELECT), or first frame after rescan).
      * scan_auto does WUPA+SELECT+RATS in one call — use its result directly.
@@ -577,6 +612,28 @@ static void reader_relay_frame(const uint8_t *data, uint16_t bits) {
     uint16_t tx_bytes = (bits + 7) / 8;
     if (tx_bytes > sizeof(tx_buf)) tx_bytes = sizeof(tx_buf);
     memcpy(tx_buf, data, tx_bytes);
+
+    /* Crypto1 (MIFARE Classic) session: the reader's frame carries encrypted
+     * parity and no CRC, so drive the real card at the bit level — supplying
+     * the parity explicitly and capturing the card's encrypted response parity
+     * — and forward both back. Same primitive the nested/mfkey nonce collector
+     * uses (mf1_toolbox.c). bits is the data-bit count; parity is separate. */
+    if (parity) {
+        uint8_t  rx_par[sizeof(rx_buf)];
+        uint16_t rx_bits = 0;
+        uint8_t  status = pcd_14a_reader_bits_transfer(
+                              tx_buf, bits, (uint8_t *)parity,
+                              rx_buf, rx_par, &rx_bits, sizeof(rx_buf) * 8);
+        trace_append(false, tx_buf, bits);
+        if (status == STATUS_HF_TAG_OK && rx_bits > 0) {
+            trace_append(true, rx_buf, rx_bits);
+            ble_relay_send_response_par(rx_buf, rx_bits, rx_par);
+        } else {
+            NRF_LOG_WARNING("relay reader: crypto1 bit-transfer status=%u", status);
+            ble_relay_send_no_response();
+        }
+        return;
+    }
 
     /* Forward the frame to the real card transparently. The reader's frame
      * already includes its 2-byte ISO14443 CRC, and the card's response will
@@ -836,6 +893,7 @@ static standalone_rc_t on_tick(uint32_t now_ticks) {
             m_trace_frame_count = 0;
         }
         m_st.live_committed = false;   /* new session not yet committed */
+        m_st.crypto1_active = false;   /* new SELECT ends any Crypto1 session */
 
         /* Only discard state if we were stuck waiting on the PREVIOUS run's
          * response. Do NOT blanket-clear frame_pending: the new session's
@@ -945,8 +1003,15 @@ static standalone_rc_t on_tick(uint32_t now_ticks) {
              * need the WTX-ACK handshake handled in the NFCT ISR (respond to
              * the reader's S(WTX) ACK frame), which is a future enhancement. */
 
-            /* Forward frame to RELAY_READER via BLE */
-            ble_relay_send_frame(m_st.frame_buf, m_st.frame_bits);
+            /* Forward frame to RELAY_READER via BLE. On a Crypto1 session the
+             * encrypted parity rides along so the far CU can drive the real
+             * card at the bit level. */
+            if (m_st.frame_has_par) {
+                ble_relay_send_frame_par(m_st.frame_buf, m_st.frame_bits,
+                                         m_st.frame_par);
+            } else {
+                ble_relay_send_frame(m_st.frame_buf, m_st.frame_bits);
+            }
             m_st.sub              = RS_CARD_AWAIT_RESPONSE;
             m_st.frame_sent_ticks = now_ticks;
         }
@@ -991,8 +1056,14 @@ static standalone_rc_t on_tick(uint32_t now_ticks) {
                      * On the WTX path this only buffers the bytes — they go out
                      * when the reader ACKs. Stamp the time so RS_CARD_READY can
                      * abandon it if that ACK never comes. */
-                    nfc_relay_tag_inject_response(m_st.response_buf,
-                                                  m_st.response_bits);
+                    if (m_st.response_has_par) {
+                        nfc_relay_tag_inject_response_par(m_st.response_buf,
+                                                          m_st.response_bits,
+                                                          m_st.response_par);
+                    } else {
+                        nfc_relay_tag_inject_response(m_st.response_buf,
+                                                      m_st.response_bits);
+                    }
                     m_st.response_tx_ticks = now_ticks ? now_ticks : 1;
                 } else {
                     nfc_relay_tag_no_response();
@@ -1136,7 +1207,8 @@ static standalone_rc_t on_tick(uint32_t now_ticks) {
                 __DMB();  /* reader_frame_buf/bits written in BLE callback — order after flag */
                 m_st.reader_frame_pending = false;
                 m_st.sub = RS_READER_RELAY;
-                reader_relay_frame(m_st.reader_frame_buf, m_st.reader_frame_bits);
+                reader_relay_frame(m_st.reader_frame_buf, m_st.reader_frame_bits,
+                                   m_st.reader_frame_has_par ? m_st.reader_frame_par : NULL);
                 m_st.sub = RS_READER_READY;
             }
             break;

@@ -78,6 +78,13 @@ void nfc_tag_14a_set_relay_hold(bool hold) {
 // Receiving buffer
 static uint8_t m_nfc_rx_buffer[MAX_NFC_RX_BUFFER_SIZE] = { 0x00 };
 
+/* Crypto1 relay: when enabled, the RX path keeps each received frame's
+ * per-byte parity (one bit per data byte in bit0) for a tag handler to read
+ * via nfc_tag_14a_get_rx_parity() right after cb_state. */
+static bool     m_rx_par_capture = false;
+static uint8_t  m_rx_par[MAX_NFC_RX_BUFFER_SIZE] = { 0x00 };
+static uint16_t m_rx_par_len = 0;
+
 /* Optional sniff callback — fires for every received frame */
 static nfc_tag_14a_sniff_cb_t m_sniff_cb = NULL;
 
@@ -398,6 +405,34 @@ void nfc_tag_14a_tx_nbit(uint8_t data, uint32_t bits) {
     NFC_14A_TX_BITS_CORE(bits, NRF_NFCT_FRAME_DELAY_MODE_WINDOWGRID);
 }
 
+/* -------- Crypto1 relay parity support -------- */
+
+void nfc_tag_14a_rx_parity_capture(bool enable) {
+    m_rx_par_capture = enable;
+    if (!enable) m_rx_par_len = 0;
+}
+
+const uint8_t *nfc_tag_14a_get_rx_parity(uint16_t *nbytes) {
+    if (nbytes) *nbytes = m_rx_par_len;
+    return m_rx_par;
+}
+
+/* Transmit a frame with caller-supplied parity (one byte per data byte,
+ * bit0) instead of hardware parity. wrap_frame weaves the parity into the air
+ * frame and NFC_14A_TX_BITS_CORE sends it raw (TXD FRAMECONFIG = SOF only, no
+ * HW parity, no CRC). For Crypto1 relay responses whose parity is cipher. */
+void nfc_tag_14a_tx_bytes_par(const uint8_t *data, uint16_t bytes, const uint8_t *parity) {
+    if (m_sniff_passive) return;
+    if (bytes < 2 || (size_t)bytes * 9 > MAX_NFC_TX_BUFFER_SIZE * 8) return;
+    /* wrap_frame returns uint8_t and truncates >28-byte frames; the wrapped
+     * length is deterministically bytes*9 (8 data + 1 parity each), so derive
+     * it directly rather than from the return value. */
+    uint16_t fb = (uint16_t)bytes * 9;
+    nfc_tag_14a_wrap_frame(data, (size_t)bytes * 8, parity, m_nfc_tx_buffer);
+    m_is_responded = true;
+    NFC_14A_TX_BITS_CORE(fb, NRF_NFCT_FRAME_DELAY_MODE_WINDOWGRID);
+}
+
 /**
  * 14A monitoring the packaging function of data processing from PCD
  */
@@ -427,8 +462,13 @@ void nfc_tag_14a_data_process(uint8_t *p_data) {
     // Manually draw frame, separate data and strange school inspection
 #if !NFC_TAG_14A_RX_PARITY_AUTO_DEL_ENABLE
     if (szDataBits >= 9) {
-        //Since we do not need a strange school test for the time being, discard it directly when we take it out
-        szDataBits = nfc_tag_14a_unwrap_frame(p_data, szDataBits, p_data, NULL);
+        /* Crypto1 relay needs the encrypted parity bits verbatim; every other
+         * caller discards them (NULL). */
+        uint8_t *par = m_rx_par_capture ? m_rx_par : NULL;
+        szDataBits = nfc_tag_14a_unwrap_frame(p_data, szDataBits, p_data, par);
+        m_rx_par_len = m_rx_par_capture ? (szDataBits / 8) : 0;
+    } else {
+        m_rx_par_len = 0;
     }
 #endif
 
