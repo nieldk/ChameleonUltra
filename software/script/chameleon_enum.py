@@ -833,6 +833,7 @@ class StandaloneMode(enum.IntEnum):
     HF14A_TAP_SNIFF = 0x08   # passive hf14a tap sniff (Ultra only)
     NFC_CANARY  = 0x09   # bait card; alerts when a reader probes it
     GDB_GATEWAY = 0x0A   # CDC becomes a GDB memory/flash gateway (no SWD)
+    U2F         = 0x0B   # FIDO U2F (CTAP1) authenticator over NFC
 
     @classmethod
     def from_name(cls, name: str) -> "StandaloneMode":
