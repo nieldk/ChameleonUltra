@@ -640,9 +640,9 @@ LDFLAGS += -Wl,--gc-sections
 # use newlib in nano version
 LDFLAGS += --specs=nano.specs
 
-application: CFLAGS += -D__HEAP_SIZE=8192
+application: CFLAGS += -D__HEAP_SIZE=4096
 application: CFLAGS += -D__STACK_SIZE=8192
-application: ASMFLAGS += -D__HEAP_SIZE=8192
+application: ASMFLAGS += -D__HEAP_SIZE=4096
 application: ASMFLAGS += -D__STACK_SIZE=8192
 
 # Add standard libraries at the very end of the linker input, after all objects
