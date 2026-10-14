@@ -427,6 +427,49 @@ disarm with both-buttons long. For big transfers, `set remotetimeout 60` in gdb.
   target), coming back up disarmed.
 
 ---
+## `u2f` ,  FIDO U2F (CTAP1) authenticator over NFC  *(Lite + Ultra)*
+
+Emulates an ISO-14443-4 token answering the FIDO U2F applet (AID
+`A0000006472F0001`). A reader does `SELECT` → `REGISTER` / `AUTHENTICATE`; the
+CU generates a credential and signs assertions. Reuses the tested T=CL engine
+(`nfc_14a_4`), so the NFC tap is the whole interaction ,  no buttons, no USB.
+
+**Stateless key wrapping ,  no per-credential storage.** A credential's private
+key is derived on the fly, not stored:
+```
+priv = HMAC-SHA256(mk, 0x01 | appId | nonce)
+kh   = nonce | HMAC-SHA256(mk, 0x02 | appId | nonce)
+```
+Only a 32-byte master key and a 4-byte global counter live in FDS (file
+`0x1020`). The handle's MAC binds it to its origin, so a handle cannot be
+replayed on another site. Crypto is self-contained SHA-256/HMAC plus micro-ecc
+(uECC) for P-256; the NFC tap is the user-presence gesture (always asserted).
+Oversized `REGISTER` replies are returned with ISO-7816 `61xx`/GET-RESPONSE
+chaining. Keys sit in internal flash, **not a secure element** ,  research use.
+
+**Platform support:** CTAP1/U2F only. Works where the host still does the U2F
+NFC path ,  **Android** (Chrome) and **PC/SC** readers. **iOS Safari does not**:
+its NFC WebAuthn requires CTAP2/FIDO2 and silently ignores a U2F-only applet.
+For iPhone you need the CTAP2 layer (not built here).
+
+**Build:** off by default. Set `STANDALONE_U2F=1`, vendor micro-ecc into
+`src/crypto/micro-ecc/` (whole repo ,  `uECC.c` pulls in its `.h`/`.inc`), and
+paste real attestation material over the placeholders in `mode_u2f.c`
+(generate with `firmware/tools/gen_u2f_attestation.sh`). Until the attestation
+key/cert are real, `REGISTER` output is not a usable credential.
+
+```
+standalone set-mode u2f        # no --opt-in needed; writes no tag/slot
+#  press both-buttons long to ARM (blue LED); present the CU to an NFC reader
+#  Android: Chrome -> webauthn.io -> register a security key -> tap
+#  PC/SC:   python3 firmware/tools/u2f_nfc_test.py   (full register+auth verify)
+```
+
+**Config:** none. **Buttons:** BOTH_LONG = arm/disarm. **Produces no results.**
+Works on Lite and Ultra (NFCT only, no reader hardware). First boot generates
+the master key; it persists, so credentials survive reboots.
+
+---
 ## `--opt-in` and quiet flags
 
 `set-mode` takes optional flags:
