@@ -29,6 +29,7 @@ STANDALONE_RELAY           ?= 0   # disabled by default
 STANDALONE_GDB_GATEWAY     ?= 0   # disabled by default
 GDB_GATEWAY_EXEC           ?= 1   # exec control (breakpoints/step) in gdb_gateway; 0 = memory/flash only
 GDB_GATEWAY_PKT            ?= 0x200   # RSP PacketSize; raise (e.g. 0x800) for faster bulk reads, more RAM
+STANDALONE_U2F             ?= 0   # disabled by default (FIDO U2F over NFC; needs micro-ecc)
 
 CFLAGS += -DCONFIG_STANDALONE_AUTHTRACE=$(STANDALONE_AUTHTRACE)
 CFLAGS += -DCONFIG_STANDALONE_SLOT_CYCLE=$(STANDALONE_SLOT_CYCLE)
@@ -40,6 +41,7 @@ CFLAGS += -DCONFIG_STANDALONE_NFC_CANARY=$(STANDALONE_NFC_CANARY)
 CFLAGS += -DCONFIG_STANDALONE_HF14A_TAP_SNIFF=$(STANDALONE_HF14A_TAP_SNIFF)
 CFLAGS += -DCONFIG_STANDALONE_RELAY=$(STANDALONE_RELAY)
 CFLAGS += -DCONFIG_STANDALONE_GDB_GATEWAY=$(STANDALONE_GDB_GATEWAY)
+CFLAGS += -DCONFIG_STANDALONE_U2F=$(STANDALONE_U2F)
 CFLAGS += -DCONFIG_GDB_GATEWAY_EXEC=$(GDB_GATEWAY_EXEC)
 CFLAGS += -DCONFIG_GDB_GATEWAY_PKT=$(GDB_GATEWAY_PKT)
 
@@ -267,6 +269,16 @@ endif
 ifeq ($(strip $(STANDALONE_GDB_GATEWAY)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_gdb_gateway.c
 SRC_FILES += $(PROJ_DIR)/utils/gdb_rsp.c
+endif
+ifeq ($(strip $(STANDALONE_U2F)),1)
+SRC_FILES   += $(PROJ_DIR)/standalone_modes/mode_u2f.c
+# Vendored micro-ecc (kmackay/micro-ecc) — drop uECC.c/uECC.h into crypto/micro-ecc/
+SRC_FILES   += $(PROJ_DIR)/crypto/micro-ecc/uECC.c
+INC_FOLDERS += $(PROJ_DIR)/crypto/micro-ecc/
+CFLAGS      += -DuECC_SUPPORTS_secp256r1=1 -DuECC_SUPPORTS_secp160r1=0 \
+               -DuECC_SUPPORTS_secp192r1=0 -DuECC_SUPPORTS_secp224r1=0 \
+               -DuECC_SUPPORTS_secp256k1=0 -DuECC_OPTIMIZATION_LEVEL=2 \
+               -DuECC_SUPPORT_COMPRESSED_POINT=0
 endif
 
 # Include folders common to all targets

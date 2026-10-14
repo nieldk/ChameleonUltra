@@ -54,6 +54,9 @@
 #ifndef CONFIG_STANDALONE_GDB_GATEWAY
 #define CONFIG_STANDALONE_GDB_GATEWAY  1
 #endif
+#ifndef CONFIG_STANDALONE_U2F
+#define CONFIG_STANDALONE_U2F  1
+#endif
 
 /* -------------------------------------------------------------------------
  * FDS record keys (file ID FDS_STANDALONE_FILE_ID defined in fds_ids.h)
@@ -132,6 +135,9 @@ static const standalone_mode_iface_t *const m_modes[] = {
 #endif
 #if CONFIG_STANDALONE_GDB_GATEWAY
     &mode_gdb_gateway_iface,
+#endif
+#if CONFIG_STANDALONE_U2F
+    &mode_u2f_iface,
 #endif
 };
 

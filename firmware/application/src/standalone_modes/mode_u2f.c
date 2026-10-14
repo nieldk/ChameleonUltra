@@ -1,0 +1,441 @@
+/*
+ * mode_u2f.c — FIDO U2F (CTAP1) authenticator over NFC, standalone mode.
+ *
+ * Emulates an ISO-14443-4 token that answers the FIDO U2F applet. The tested
+ * T=CL engine (nfc_14a_4 base_handler/base_respond) does all ISO-DEP framing;
+ * this mode owns its own session state, presents a fixed identity, and answers
+ * U2F APDUs. APDUs are processed in on_tick: while the response is computed the
+ * engine sends S(WTX) to keep the reader alive, so slow ECDSA does not time out.
+ *
+ * Stateless key wrapping — no per-credential flash:
+ *   priv = HMAC-SHA256(mk, 0x01 | appId32 | nonce32)   (P-256 scalar)
+ *   kh   = nonce32 | HMAC-SHA256(mk, 0x02 | appId32 | nonce32)32
+ * Only a 32-byte master key and a 4-byte global counter live in FDS. A key
+ * handle is bound to its appId by the MAC, so it cannot be used on another
+ * origin. Keys live in internal flash, not a secure element — research use.
+ *
+ * Crypto: self-contained SHA-256/HMAC below; micro-ecc (uECC) for P-256.
+ */
+
+#include <stdint.h>
+#include <string.h>
+#include "app_standalone.h"
+#include "standalone_led.h"
+#include "nfc_14a.h"
+#include "rfid/nfctag/hf/nfc_14a_4.h"
+#include "utils/fds_util.h"
+#include "nrf_drv_rng.h"
+#include "uECC.h"
+
+#define NRF_LOG_MODULE_NAME u2f
+#include "nrf_log.h"
+NRF_LOG_MODULE_REGISTER();
+
+/* ---- persistence ---- */
+#define U2F_FDS_FILE      0x1020
+#define U2F_FDS_KEY_MK    0x0001   /* 32-byte master key   */
+#define U2F_FDS_KEY_CTR   0x0002   /* 4-byte global counter */
+
+/* ---- status words ---- */
+#define SW_NO_ERROR               0x9000
+#define SW_CONDITIONS_NOT_SAT     0x6985   /* also: test-of-presence / check-only "mine" */
+#define SW_WRONG_DATA             0x6A80
+#define SW_WRONG_LENGTH           0x6700
+#define SW_CLA_NOT_SUPPORTED      0x6E00
+#define SW_INS_NOT_SUPPORTED      0x6D00
+
+/* ---- U2F / ISO7816 instructions ---- */
+#define U2F_INS_REGISTER     0x01
+#define U2F_INS_AUTHENTICATE 0x02
+#define U2F_INS_VERSION      0x03
+#define ISO_INS_SELECT       0xA4
+#define ISO_INS_GET_RESPONSE 0xC0
+
+#define U2F_AUTH_CHECK_ONLY  0x07
+#define U2F_AUTH_ENFORCE     0x03
+#define U2F_AUTH_NO_ENFORCE  0x08
+
+static const uint8_t U2F_AID[]   = {0xA0, 0x00, 0x00, 0x06, 0x47, 0x2F, 0x00, 0x01};
+static const uint8_t U2F_V2[]    = {'U','2','F','_','V','2'};
+#define KH_LEN 64   /* nonce(32) | mac(32) */
+
+/* =====================================================================
+ *  Attestation material — PLACEHOLDER. Replace before real use:
+ *    openssl ecparam -name prime256v1 -genkey -noout -out att.key
+ *    openssl req -new -x509 -key att.key -out att.crt -days 3650 \
+ *        -subj "/CN=Phreakbyte U2F"
+ *    openssl ec   -in att.key -text -noout        # copy the 32 priv bytes
+ *    openssl x509 -in att.crt -outform der | xxd  # copy the DER bytes + len
+ *  U2F_ATT_CERT must be valid DER so the client can parse past it.
+ * ===================================================================== */
+static const uint8_t U2F_ATT_PRIV[32] = { 0 };   /* TODO: real key */
+static const uint8_t U2F_ATT_CERT[]   = { 0x30, 0x00 };  /* TODO: real DER cert */
+#define U2F_ATT_CERT_LEN  (sizeof(U2F_ATT_CERT))
+
+/* ---- session ---- */
+static nfc_tag_14a_4_tcl_state_t m_tcl;
+static uint8_t  m_uid[7];
+static uint8_t  m_mk[32];
+static uint32_t m_ctr;
+
+/* Large response + ISO7816 GET RESPONSE chaining (REGISTER can exceed FSC). */
+static uint8_t  m_big[640];
+static uint16_t m_big_len;
+static uint16_t m_big_off;
+
+/* fixed anti-collision identity: ISO-14443-4 (SAK bit 0x20) + a minimal ATS */
+static nfc_tag_14a_uid_size s_uid_size = NFC_TAG_14A_UID_DOUBLE_SIZE;
+static uint8_t  s_atqa[2]  = {0x44, 0x00};
+static uint8_t  s_sak[1]   = {0x20};
+static nfc_tag_14a_coll_res_reference_t s_coll;
+/* TL,T0(TA/TB/TC,FSCI=8),TA,TB,TC — FSCI=8 (FSC=256), high FWI for slow ECDSA.
+ * Tune on the bench if a given reader is fussy. */
+static nfc_14a_ats_t s_ats = { .length = 5, .data = {0x05, 0x78, 0x80, 0x90, 0x00} };
+
+static nfc_tag_14a_coll_res_reference_t *u2f_get_coll_res(void) {
+    s_coll.size = &s_uid_size;
+    s_coll.uid  = m_uid;
+    s_coll.atqa = s_atqa;
+    s_coll.sak  = s_sak;
+    s_coll.ats  = &s_ats;
+    return &s_coll;
+}
+
+/* ===================================================================== */
+/*  SHA-256 + HMAC-SHA256 (self-contained, FIPS 180-4 / RFC 2104)         */
+/* ===================================================================== */
+typedef struct { uint32_t s[8]; uint64_t n; uint8_t b[64]; uint8_t bl; } sha256_t;
+
+static const uint32_t K256[64] = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+};
+#define ROR(x,n) (((x)>>(n))|((x)<<(32-(n))))
+
+static void sha256_blk(sha256_t *c, const uint8_t *p) {
+    uint32_t w[64], a,b,cc,d,e,f,g,h,t1,t2;
+    for (int i=0;i<16;i++) w[i]=(p[i*4]<<24)|(p[i*4+1]<<16)|(p[i*4+2]<<8)|p[i*4+3];
+    for (int i=16;i<64;i++){
+        uint32_t s0=ROR(w[i-15],7)^ROR(w[i-15],18)^(w[i-15]>>3);
+        uint32_t s1=ROR(w[i-2],17)^ROR(w[i-2],19)^(w[i-2]>>10);
+        w[i]=w[i-16]+s0+w[i-7]+s1;
+    }
+    a=c->s[0];b=c->s[1];cc=c->s[2];d=c->s[3];e=c->s[4];f=c->s[5];g=c->s[6];h=c->s[7];
+    for (int i=0;i<64;i++){
+        uint32_t S1=ROR(e,6)^ROR(e,11)^ROR(e,25), ch=(e&f)^((~e)&g);
+        t1=h+S1+ch+K256[i]+w[i];
+        uint32_t S0=ROR(a,2)^ROR(a,13)^ROR(a,22), mj=(a&b)^(a&cc)^(b&cc);
+        t2=S0+mj;
+        h=g;g=f;f=e;e=d+t1;d=cc;cc=b;b=a;a=t1+t2;
+    }
+    c->s[0]+=a;c->s[1]+=b;c->s[2]+=cc;c->s[3]+=d;c->s[4]+=e;c->s[5]+=f;c->s[6]+=g;c->s[7]+=h;
+}
+static void sha256_init(sha256_t *c){
+    c->s[0]=0x6a09e667;c->s[1]=0xbb67ae85;c->s[2]=0x3c6ef372;c->s[3]=0xa54ff53a;
+    c->s[4]=0x510e527f;c->s[5]=0x9b05688c;c->s[6]=0x1f83d9ab;c->s[7]=0x5be0cd19;
+    c->n=0;c->bl=0;
+}
+static void sha256_upd(sha256_t *c, const uint8_t *p, size_t n){
+    c->n+=n;
+    while(n){
+        uint8_t k=64-c->bl; if(k>n)k=n;
+        memcpy(c->b+c->bl,p,k); c->bl+=k; p+=k; n-=k;
+        if(c->bl==64){ sha256_blk(c,c->b); c->bl=0; }
+    }
+}
+static void sha256_fin(sha256_t *c, uint8_t out[32]){
+    uint64_t bits=c->n*8; uint8_t pad=0x80;
+    sha256_upd(c,&pad,1);
+    uint8_t z=0; while(c->bl!=56) sha256_upd(c,&z,1);
+    uint8_t L[8]; for(int i=0;i<8;i++) L[i]=(uint8_t)(bits>>(56-8*i));
+    sha256_upd(c,L,8);
+    for(int i=0;i<8;i++){ out[i*4]=c->s[i]>>24;out[i*4+1]=c->s[i]>>16;out[i*4+2]=c->s[i]>>8;out[i*4+3]=c->s[i]; }
+}
+static void hmac_sha256(const uint8_t *key, size_t kl, const uint8_t *msg, size_t ml, uint8_t out[32]){
+    uint8_t k[64]={0}, ip[64], op[64], ih[32]; sha256_t c;
+    if(kl>64){ sha256_init(&c); sha256_upd(&c,key,kl); sha256_fin(&c,k); } else memcpy(k,key,kl);
+    for(int i=0;i<64;i++){ ip[i]=k[i]^0x36; op[i]=k[i]^0x5c; }
+    sha256_init(&c); sha256_upd(&c,ip,64); sha256_upd(&c,msg,ml); sha256_fin(&c,ih);
+    sha256_init(&c); sha256_upd(&c,op,64); sha256_upd(&c,ih,32); sha256_fin(&c,out);
+}
+
+/* ===================================================================== */
+static int u2f_rng(uint8_t *dest, unsigned size){
+    return nrf_drv_rng_rand(dest, (uint8_t)size) == NRF_SUCCESS ? 1 : 0;
+}
+
+/* DER-encode an ECDSA (r,s) pair (each 32 bytes) into out. Returns length. */
+static uint16_t der_sig(const uint8_t *rs, uint8_t *out){
+    const uint8_t *r=rs, *s=rs+32;
+    uint8_t rb[33], sb[33]; int rl=32, sl=32;
+    memcpy(rb, r, 32); memcpy(sb, s, 32);
+    /* strip leading zeros, then prepend one if high bit set (positive INTEGER) */
+    int ro=0; while(ro<31 && rb[ro]==0) ro++; rl=32-ro;
+    uint8_t rbuf[33]; int rn=0; if(rb[ro]&0x80) rbuf[rn++]=0x00; memcpy(rbuf+rn, rb+ro, rl); rn+=rl;
+    int so=0; while(so<31 && sb[so]==0) so++; sl=32-so;
+    uint8_t sbuf[33]; int sn=0; if(sb[so]&0x80) sbuf[sn++]=0x00; memcpy(sbuf+sn, sb+so, sl); sn+=sl;
+    uint16_t i=0;
+    out[i++]=0x30; out[i++]=(uint8_t)(2+rn+2+sn);
+    out[i++]=0x02; out[i++]=(uint8_t)rn; memcpy(out+i, rbuf, rn); i+=rn;
+    out[i++]=0x02; out[i++]=(uint8_t)sn; memcpy(out+i, sbuf, sn); i+=sn;
+    return i;
+}
+
+/* Derive the per-credential private key and the handle MAC from (appId,nonce). */
+static void derive_priv(const uint8_t *app, const uint8_t *nonce, uint8_t priv[32]){
+    uint8_t in[1+32+32]; in[0]=0x01; memcpy(in+1,app,32); memcpy(in+33,nonce,32);
+    hmac_sha256(m_mk, sizeof(m_mk), in, sizeof(in), priv);
+}
+static void derive_mac(const uint8_t *app, const uint8_t *nonce, uint8_t mac[32]){
+    uint8_t in[1+32+32]; in[0]=0x02; memcpy(in+1,app,32); memcpy(in+33,nonce,32);
+    hmac_sha256(m_mk, sizeof(m_mk), in, sizeof(in), mac);
+}
+
+static void ctr_save(void){ fds_write_sync(U2F_FDS_FILE, U2F_FDS_KEY_CTR, sizeof(m_ctr), &m_ctr); }
+
+/* ---- APDU helpers ---- */
+static uint16_t put_sw(uint8_t *resp, uint16_t off, uint16_t sw){
+    resp[off++]=(uint8_t)(sw>>8); resp[off++]=(uint8_t)sw; return off;
+}
+
+/* Parse an ISO7816 command: short or extended Lc/Le. Fills *data,*lc. */
+static bool apdu_parse(const uint8_t *a, uint16_t n, const uint8_t **data, uint16_t *lc){
+    if (n < 4) return false;
+    *data=NULL; *lc=0;
+    if (n == 4) return true;                     /* no body */
+    if (a[4] != 0) {                             /* short */
+        *lc=a[4]; *data=a+5; return (5+*lc) <= n;
+    }
+    if (n < 7) return true;                      /* extended, no body (Le only) */
+    *lc=(a[5]<<8)|a[6]; *data=a+7; return (7+*lc) <= n;
+}
+
+/* Build REGISTER response into m_big. */
+static uint16_t do_register(const uint8_t *body, uint16_t lc, uint8_t *out){
+    if (lc != 64) return put_sw(out, 0, SW_WRONG_LENGTH);
+    const uint8_t *chal=body, *app=body+32;
+    uint8_t nonce[32], priv[32], pub[64], kh[KH_LEN], mac[32];
+    uECC_Curve C = uECC_secp256r1();
+
+    for (int tries=0; ; tries++){
+        if (tries>8) return put_sw(out,0,SW_WRONG_DATA);
+        if (!u2f_rng(nonce,32)) return put_sw(out,0,SW_WRONG_DATA);
+        derive_priv(app, nonce, priv);
+        if (uECC_compute_public_key(priv, pub, C)) break;   /* valid scalar */
+    }
+    derive_mac(app, nonce, mac);
+    memcpy(kh, nonce, 32); memcpy(kh+32, mac, 32);
+
+    /* attestation signature over 0x00 | app | chal | kh | 0x04|pub */
+    uint8_t pub65[65]; pub65[0]=0x04; memcpy(pub65+1, pub, 64);
+    sha256_t c; uint8_t h[32]; uint8_t pfx=0x00;
+    sha256_init(&c); sha256_upd(&c,&pfx,1); sha256_upd(&c,app,32); sha256_upd(&c,chal,32);
+    sha256_upd(&c,kh,KH_LEN); sha256_upd(&c,pub65,65); sha256_fin(&c,h);
+    uint8_t sig_rs[64], sig_der[72];
+    if (!uECC_sign(U2F_ATT_PRIV, h, 32, sig_rs, C)) return put_sw(out,0,SW_WRONG_DATA);
+    uint16_t sig_len = der_sig(sig_rs, sig_der);
+
+    uint16_t i=0;
+    out[i++]=0x05;
+    memcpy(out+i, pub65, 65); i+=65;
+    out[i++]=KH_LEN;
+    memcpy(out+i, kh, KH_LEN); i+=KH_LEN;
+    memcpy(out+i, U2F_ATT_CERT, U2F_ATT_CERT_LEN); i+=U2F_ATT_CERT_LEN;
+    memcpy(out+i, sig_der, sig_len); i+=sig_len;
+    i = put_sw(out, i, SW_NO_ERROR);
+    return i;
+}
+
+/* Build AUTHENTICATE response. */
+static uint16_t do_authenticate(uint8_t p1, const uint8_t *body, uint16_t lc, uint8_t *out){
+    if (lc < 65) return put_sw(out,0,SW_WRONG_LENGTH);
+    const uint8_t *chal=body, *app=body+32;
+    uint8_t khl=body[64];
+    if (khl != KH_LEN || lc < (uint16_t)(65+khl)) return put_sw(out,0,SW_WRONG_DATA);
+    const uint8_t *kh=body+65, *nonce=kh, *mac=kh+32;
+
+    uint8_t want[32]; derive_mac(app, nonce, want);
+    if (memcmp(want, mac, 32) != 0) return put_sw(out,0,SW_WRONG_DATA);  /* not ours */
+    if (p1 == U2F_AUTH_CHECK_ONLY) return put_sw(out,0,SW_CONDITIONS_NOT_SAT); /* "mine" */
+
+    /* NFC tap is the presence gesture. */
+    uint8_t up=0x01;
+    m_ctr++; ctr_save();
+    uint8_t ctb[4]={ (uint8_t)(m_ctr>>24),(uint8_t)(m_ctr>>16),(uint8_t)(m_ctr>>8),(uint8_t)m_ctr };
+
+    uint8_t priv[32]; derive_priv(app, nonce, priv);
+    sha256_t c; uint8_t h[32];
+    sha256_init(&c); sha256_upd(&c,app,32); sha256_upd(&c,&up,1); sha256_upd(&c,ctb,4); sha256_upd(&c,chal,32);
+    sha256_fin(&c,h);
+    uint8_t sig_rs[64], sig_der[72];
+    uECC_Curve C = uECC_secp256r1();
+    if (!uECC_sign(priv, h, 32, sig_rs, C)) return put_sw(out,0,SW_WRONG_DATA);
+    uint16_t sig_len = der_sig(sig_rs, sig_der);
+
+    uint16_t i=0;
+    out[i++]=up; memcpy(out+i, ctb, 4); i+=4;
+    memcpy(out+i, sig_der, sig_len); i+=sig_len;
+    i = put_sw(out, i, SW_NO_ERROR);
+    return i;
+}
+
+/* Full U2F APDU dispatch → writes to m_big, returns total length (incl SW). */
+static uint16_t u2f_process(const uint8_t *a, uint16_t n){
+    if (n < 4) { m_big_len = put_sw(m_big,0,SW_WRONG_LENGTH); return m_big_len; }
+    uint8_t cla=a[0], ins=a[1], p1=a[2];
+    const uint8_t *body; uint16_t lc;
+    if (cla != 0x00) { m_big_len = put_sw(m_big,0,SW_CLA_NOT_SUPPORTED); return m_big_len; }
+    if (!apdu_parse(a,n,&body,&lc)) { m_big_len = put_sw(m_big,0,SW_WRONG_LENGTH); return m_big_len; }
+
+    switch (ins) {
+    case ISO_INS_SELECT:
+        memcpy(m_big, U2F_V2, sizeof(U2F_V2));
+        m_big_len = put_sw(m_big, sizeof(U2F_V2), SW_NO_ERROR);
+        break;
+    case U2F_INS_VERSION:
+        memcpy(m_big, U2F_V2, sizeof(U2F_V2));
+        m_big_len = put_sw(m_big, sizeof(U2F_V2), SW_NO_ERROR);
+        break;
+    case U2F_INS_REGISTER:
+        m_big_len = do_register(body, lc, m_big);
+        break;
+    case U2F_INS_AUTHENTICATE:
+        m_big_len = do_authenticate(p1, body, lc, m_big);
+        break;
+    case ISO_INS_GET_RESPONSE:
+        /* handled by the chunker in on_tick; should not reach here */
+        m_big_len = put_sw(m_big,0,SW_INS_NOT_SUPPORTED);
+        break;
+    default:
+        m_big_len = put_sw(m_big,0,SW_INS_NOT_SUPPORTED);
+        break;
+    }
+    return m_big_len;
+}
+
+/* Emit the next response chunk (ISO7816 chaining). If more remains, the chunk
+ * ends with 61 XX and the reader follows up with GET RESPONSE (00 C0 ..). */
+static void emit_chunk(void){
+    uint16_t remain = m_big_len - m_big_off;
+    uint16_t max = NFC_14A_4_MAX_APDU - 2;           /* leave room for SW */
+    if (remain <= max) {
+        memcpy(m_tcl.m_resp_buf, m_big + m_big_off, remain);
+        m_tcl.m_resp_len = remain;
+        m_big_off = m_big_len;                        /* done */
+    } else {
+        /* send `max` payload bytes (no SW yet) then 61 XX */
+        memcpy(m_tcl.m_resp_buf, m_big + m_big_off, max);
+        m_big_off += max;
+        uint16_t left = m_big_len - m_big_off - 2;    /* bytes still owed (excl final SW) */
+        uint8_t xx = left > 0xFF ? 0x00 : (uint8_t)left;
+        m_tcl.m_resp_buf[max]   = 0x61;
+        m_tcl.m_resp_buf[max+1] = xx;
+        m_tcl.m_resp_len = max + 2;
+    }
+    m_tcl.m_response_ready = true;
+}
+
+/* ===================================================================== */
+/*  ISO-DEP handler (ISR) — delegate framing to the 14a_4 engine          */
+/* ===================================================================== */
+static void u2f_cb_state(uint8_t *data, uint16_t szBytes){
+    if (!nfc_tag_14a_4_base_handler(&m_tcl, data, szBytes)) return;
+    /* APDU assembled into m_tcl.m_apdu_buf; respond from on_tick. base_respond
+     * sends S(WTX) now because no response is ready yet. */
+    nfc_tag_14a_4_base_respond(&m_tcl);
+}
+
+static void u2f_cb_reset(void){
+    nfc_tag_14a_4_reset_state(&m_tcl);
+    m_big_len = 0; m_big_off = 0;
+}
+
+static nfc_tag_14a_handler_t s_handler = {
+    .get_coll_res = u2f_get_coll_res,
+    .cb_state     = u2f_cb_state,
+    .cb_reset     = u2f_cb_reset,
+};
+
+/* ===================================================================== */
+/*  Lifecycle                                                             */
+/* ===================================================================== */
+static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len){
+    (void)cfg; (void)cfg_len;
+
+    uECC_set_rng(u2f_rng);
+
+    /* master key: load, or create on first use */
+    uint16_t mkl = sizeof(m_mk);
+    if (!fds_read_sync(U2F_FDS_FILE, U2F_FDS_KEY_MK, &mkl, m_mk) || mkl != sizeof(m_mk)) {
+        if (!u2f_rng(m_mk, sizeof(m_mk))) return STANDALONE_RC_ERR;
+        fds_write_sync(U2F_FDS_FILE, U2F_FDS_KEY_MK, sizeof(m_mk), m_mk);
+    }
+    uint16_t cl = sizeof(m_ctr);
+    if (!fds_read_sync(U2F_FDS_FILE, U2F_FDS_KEY_CTR, &cl, (uint8_t *)&m_ctr) || cl != sizeof(m_ctr))
+        m_ctr = 0;
+
+    if (!u2f_rng(m_uid, sizeof(m_uid))) return STANDALONE_RC_ERR;
+    m_uid[0] = 0x08;   /* RID-style first byte; avoids 0x88 cascade marker clash */
+
+    nfc_tag_14a_4_reset_state(&m_tcl);
+    m_big_len = 0; m_big_off = 0;
+
+    nfc_tag_14a_set_handler(&s_handler);
+    nfc_tag_14a_set_relay_hold(true);    /* keep FRAMEDELAYMAX wide for slow ECDSA */
+    nfc_tag_14a_sense_switch(false);
+    nfc_tag_14a_sense_switch(true);
+
+    standalone_led_set_mode_color(STANDALONE_MODE_U2F, RGB_BLUE);
+    standalone_led_solid();
+    NRF_LOG_INFO("u2f: armed, ctr=%lu", (unsigned long)m_ctr);
+    return STANDALONE_RC_OK;
+}
+
+static standalone_rc_t on_exit(void){
+    nfc_tag_14a_set_relay_hold(false);
+    nfc_tag_14a_set_frame_delay_max(0x00001000UL);
+    nfc_tag_14a_set_state(NFC_TAG_STATE_14A_IDLE);
+    memset(m_mk, 0, sizeof(m_mk));
+    return STANDALONE_RC_OK;
+}
+
+static standalone_rc_t on_tick(uint32_t now_ms){
+    (void)now_ms;
+    if (!m_tcl.m_apdu_pending) return STANDALONE_RC_OK;
+    m_tcl.m_apdu_pending = false;
+
+    uint8_t ins = m_tcl.m_apdu_len >= 2 ? m_tcl.m_apdu_buf[1] : 0;
+    if (ins == ISO_INS_GET_RESPONSE && m_big_off < m_big_len) {
+        emit_chunk();                 /* continue a chained response */
+        return STANDALONE_RC_OK;
+    }
+    u2f_process(m_tcl.m_apdu_buf, m_tcl.m_apdu_len);
+    m_big_off = 0;
+    emit_chunk();
+    return STANDALONE_RC_OK;
+}
+
+static standalone_rc_t on_button(standalone_button_evt_t evt){ (void)evt; return STANDALONE_RC_OK; }
+
+const standalone_mode_iface_t mode_u2f_iface = {
+    .id               = STANDALONE_MODE_U2F,
+    .name             = "u2f",
+    .writes_tag       = false,
+    .writes_slot      = false,
+    .wants_tick       = true,
+    .tick_interval_ms = 5,          /* answer APDUs promptly within the WTX window */
+    .on_enter         = on_enter,
+    .on_exit          = on_exit,
+    .on_button        = on_button,
+    .on_tick          = on_tick,
+    .get_result_size  = NULL,
+    .read_result      = NULL,
+    .clear_result     = NULL,
+    .ensure_loaded    = NULL,
+};
