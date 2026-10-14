@@ -272,7 +272,9 @@ SRC_FILES += $(PROJ_DIR)/utils/gdb_rsp.c
 endif
 ifeq ($(strip $(STANDALONE_U2F)),1)
 SRC_FILES   += $(PROJ_DIR)/standalone_modes/mode_u2f.c
-# Vendored micro-ecc (kmackay/micro-ecc) — drop uECC.c/uECC.h into crypto/micro-ecc/
+# Vendored micro-ecc (kmackay/micro-ecc): copy the WHOLE repo into
+# crypto/micro-ecc/ — uECC.c #includes uECC.h, uECC_vli.h, types.h and the
+# curve/asm .inc files, so all of them must be present (only uECC.c is compiled).
 SRC_FILES   += $(PROJ_DIR)/crypto/micro-ecc/uECC.c
 INC_FOLDERS += $(PROJ_DIR)/crypto/micro-ecc/
 CFLAGS      += -DuECC_SUPPORTS_secp256r1=1 -DuECC_SUPPORTS_secp160r1=0 \

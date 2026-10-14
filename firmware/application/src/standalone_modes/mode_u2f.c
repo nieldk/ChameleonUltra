@@ -43,6 +43,7 @@ NRF_LOG_MODULE_REGISTER();
 #define SW_WRONG_LENGTH           0x6700
 #define SW_CLA_NOT_SUPPORTED      0x6E00
 #define SW_INS_NOT_SUPPORTED      0x6D00
+#define SW_FILE_NOT_FOUND         0x6A82
 
 /* ---- U2F / ISO7816 instructions ---- */
 #define U2F_INS_REGISTER     0x01
@@ -295,8 +296,14 @@ static uint16_t u2f_process(const uint8_t *a, uint16_t n){
 
     switch (ins) {
     case ISO_INS_SELECT:
-        memcpy(m_big, U2F_V2, sizeof(U2F_V2));
-        m_big_len = put_sw(m_big, sizeof(U2F_V2), SW_NO_ERROR);
+        /* SELECT by name (P1=0x04) of the U2F applet AID. */
+        if (p1 == 0x04 && body && lc >= sizeof(U2F_AID) &&
+                memcmp(body, U2F_AID, sizeof(U2F_AID)) == 0) {
+            memcpy(m_big, U2F_V2, sizeof(U2F_V2));
+            m_big_len = put_sw(m_big, sizeof(U2F_V2), SW_NO_ERROR);
+        } else {
+            m_big_len = put_sw(m_big, 0, SW_FILE_NOT_FOUND);
+        }
         break;
     case U2F_INS_VERSION:
         memcpy(m_big, U2F_V2, sizeof(U2F_V2));
@@ -373,14 +380,14 @@ static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len){
     /* master key: load, or create on first use */
     uint16_t mkl = sizeof(m_mk);
     if (!fds_read_sync(U2F_FDS_FILE, U2F_FDS_KEY_MK, &mkl, m_mk) || mkl != sizeof(m_mk)) {
-        if (!u2f_rng(m_mk, sizeof(m_mk))) return STANDALONE_RC_ERR;
+        if (!u2f_rng(m_mk, sizeof(m_mk))) return STANDALONE_RC_INVALID_STATE;
         fds_write_sync(U2F_FDS_FILE, U2F_FDS_KEY_MK, sizeof(m_mk), m_mk);
     }
     uint16_t cl = sizeof(m_ctr);
     if (!fds_read_sync(U2F_FDS_FILE, U2F_FDS_KEY_CTR, &cl, (uint8_t *)&m_ctr) || cl != sizeof(m_ctr))
         m_ctr = 0;
 
-    if (!u2f_rng(m_uid, sizeof(m_uid))) return STANDALONE_RC_ERR;
+    if (!u2f_rng(m_uid, sizeof(m_uid))) return STANDALONE_RC_INVALID_STATE;
     m_uid[0] = 0x08;   /* RID-style first byte; avoids 0x88 cascade marker clash */
 
     nfc_tag_14a_4_reset_state(&m_tcl);
