@@ -240,6 +240,10 @@ static bool apdu_parse(const uint8_t *a, uint16_t n, const uint8_t **data, uint1
 /* Build REGISTER response into m_big. */
 static uint16_t do_register(const uint8_t *body, uint16_t lc, uint8_t *out){
     if (lc != 64) return put_sw(out, 0, SW_WRONG_LENGTH);
+    /* Refuse if the attestation key isn't provisioned (all-zero) — signing with
+     * an invalid scalar can hang uECC. Run `hw u2f set-attestation` first. */
+    uint8_t az = 0; for (int i = 0; i < 32; i++) az |= m_att_priv[i];
+    if (az == 0) return put_sw(out, 0, SW_CONDITIONS_NOT_SAT);
     const uint8_t *chal=body, *app=body+32;
     uint8_t nonce[32], priv[32], pub[64], kh[KH_LEN], mac[32];
     uECC_Curve C = uECC_secp256r1();
@@ -449,12 +453,18 @@ static standalone_rc_t on_tick(uint32_t now_ms){
     if (!m_tcl.m_apdu_pending) return STANDALONE_RC_OK;
     m_tcl.m_apdu_pending = false;
 
-    uint8_t ins = m_tcl.m_apdu_len >= 2 ? m_tcl.m_apdu_buf[1] : 0;
+    /* The NFCT RX leaves the 2-byte ISO14443 CRC on the frame (hardware CRC
+     * strip is off and the 14a_4 layer doesn't remove it), so drop it before
+     * parsing — otherwise a body-less APDU's absent Lc reads the CRC as an
+     * extended length and fails. */
+    uint16_t alen = m_tcl.m_apdu_len >= 2 ? m_tcl.m_apdu_len - 2 : 0;
+
+    uint8_t ins = alen >= 2 ? m_tcl.m_apdu_buf[1] : 0;
     if (ins == ISO_INS_GET_RESPONSE && m_big_off < m_big_len) {
         emit_chunk();                 /* continue a chained response */
         return STANDALONE_RC_OK;
     }
-    u2f_process(m_tcl.m_apdu_buf, m_tcl.m_apdu_len);
+    u2f_process(m_tcl.m_apdu_buf, alen);
     m_big_off = 0;
     emit_chunk();
     return STANDALONE_RC_OK;
