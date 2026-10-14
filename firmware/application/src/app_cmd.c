@@ -267,19 +267,32 @@ static data_frame_tx_t *cmd_processor_fds_list(uint16_t cmd, uint16_t status, ui
 }
 
 static data_frame_tx_t *cmd_processor_fds_read(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    /* Dump one record straight from flash (zero-copy) by file_id + key, BE. */
-    if (length != 4) {
+    /* Dump a record slice (zero-copy) by file_id + key, from offset for up to
+       req bytes (req 0 = as much as fits). All fields big-endian. Records can be
+       up to one FDS page (8 KB) -- larger than a frame -- so the host chunks via
+       offset; a read past the end returns 0 bytes to end the loop. */
+    if (length != 8) {
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
     }
     uint16_t file_id = (uint16_t)((data[0] << 8) | data[1]);
     uint16_t key     = (uint16_t)((data[2] << 8) | data[3]);
+    uint16_t offset  = (uint16_t)((data[4] << 8) | data[5]);
+    uint16_t req     = (uint16_t)((data[6] << 8) | data[7]);
     fds_record_desc_t desc;
-    uint16_t len = 0;
-    const uint8_t *p = fds_peek(file_id, key, &len, &desc);
+    uint16_t rec_len = 0;
+    const uint8_t *p = fds_peek(file_id, key, &rec_len, &desc);
     if (p == NULL) {
         return data_frame_make(cmd, STATUS_FLASH_READ_FAIL, 0, NULL);
     }
-    data_frame_tx_t *tx = data_frame_make(cmd, STATUS_SUCCESS, len, (uint8_t *)p);
+    uint16_t n = 0;
+    if (offset < rec_len) {
+        uint16_t avail = (uint16_t)(rec_len - offset);
+        n = (req == 0 || req > avail) ? avail : req;
+        if (n > NETDATA_MAX_DATA_LENGTH) {
+            n = NETDATA_MAX_DATA_LENGTH;
+        }
+    }
+    data_frame_tx_t *tx = data_frame_make(cmd, STATUS_SUCCESS, n, n ? (uint8_t *)(p + offset) : NULL);
     fds_peek_close(&desc);
     return tx;
 }

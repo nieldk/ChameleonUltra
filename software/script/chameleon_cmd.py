@@ -2205,12 +2205,23 @@ class ChameleonCMD:
         return resp
 
     @expect_response(Status.SUCCESS)
-    def get_fds_record(self, file_id, key):
-        """Read one FDS record's raw bytes by file_id + key."""
-        resp = self.device.send_cmd_sync(Command.FDS_READ, struct.pack('!HH', file_id, key))
+    def _get_fds_chunk(self, file_id, key, offset, length):
+        resp = self.device.send_cmd_sync(Command.FDS_READ, struct.pack('!HHHH', file_id, key, offset, length))
         if resp.status == Status.SUCCESS:
             resp.parsed = resp.data
         return resp
+
+    def get_fds_record(self, file_id, key):
+        """Read a full FDS record by file_id + key (chunked; records may be up to 8 KB)."""
+        out = b''
+        while True:
+            chunk = self._get_fds_chunk(file_id, key, len(out), 0)
+            if not chunk:
+                break
+            out += chunk
+            if len(chunk) < 4096:
+                break
+        return out
 
     @expect_response(Status.SUCCESS)
     def get_device_capabilities(self):
