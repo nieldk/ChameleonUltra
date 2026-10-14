@@ -239,7 +239,6 @@ static bool apdu_parse(const uint8_t *a, uint16_t n, const uint8_t **data, uint1
 
 /* Build REGISTER response into m_big. */
 static uint16_t do_register(const uint8_t *body, uint16_t lc, uint8_t *out){
-    NRF_LOG_INFO("u2f reg lc=%u", lc);
     if (lc != 64) return put_sw(out, 0, SW_WRONG_LENGTH);
     /* Refuse if the attestation key isn't provisioned (all-zero) — signing with
      * an invalid scalar can hang uECC. Run `hw u2f set-attestation` first. */
@@ -255,7 +254,6 @@ static uint16_t do_register(const uint8_t *body, uint16_t lc, uint8_t *out){
         derive_priv(app, nonce, priv);
         if (uECC_compute_public_key(priv, pub, C)) break;   /* valid scalar */
     }
-    NRF_LOG_INFO("u2f reg keygen ok");
     derive_mac(app, nonce, mac);
     memcpy(kh, nonce, 32); memcpy(kh+32, mac, 32);
 
@@ -265,10 +263,8 @@ static uint16_t do_register(const uint8_t *body, uint16_t lc, uint8_t *out){
     sha256_init(&c); sha256_upd(&c,&pfx,1); sha256_upd(&c,app,32); sha256_upd(&c,chal,32);
     sha256_upd(&c,kh,KH_LEN); sha256_upd(&c,pub65,65); sha256_fin(&c,h);
     uint8_t sig_rs[64], sig_der[72];
-    NRF_LOG_INFO("u2f reg sign");
     if (!uECC_sign(m_att_priv, h, 32, sig_rs, C)) return put_sw(out,0,SW_WRONG_DATA);
     uint16_t sig_len = der_sig(sig_rs, sig_der);
-    NRF_LOG_INFO("u2f reg signed sig_len=%u", sig_len);
 
     /* attestation cert: provisioned record (FDS, zero-copy) or the fallback */
     fds_record_desc_t cdesc; uint16_t clen = 0;
@@ -455,10 +451,7 @@ static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len){
 
     standalone_led_set_mode_color(STANDALONE_MODE_U2F, RGB_BLUE);
     standalone_led_solid();
-    /* BUILD stamp — bump this string when you change this file, then confirm it
-     * in the token log on arm. If the log shows an older stamp, the flash did
-     * not replace the app. */
-    NRF_LOG_INFO("u2f: armed BUILD=crcfix ctr=%lu", (unsigned long)m_ctr);
+    NRF_LOG_INFO("u2f: armed ctr=%lu", (unsigned long)m_ctr);
     return STANDALONE_RC_OK;
 }
 
@@ -475,10 +468,6 @@ static standalone_rc_t on_tick(uint32_t now_ms){
     if (!m_tcl.m_apdu_pending) return STANDALONE_RC_OK;
     m_tcl.m_apdu_pending = false;
 
-    NRF_LOG_INFO("u2f rx apdu_len=%u", m_tcl.m_apdu_len);
-    NRF_LOG_HEXDUMP_INFO(m_tcl.m_apdu_buf,
-                         m_tcl.m_apdu_len > 24 ? 24 : m_tcl.m_apdu_len);
-
     /* The NFCT RX leaves the 2-byte ISO14443 CRC on the frame (hardware CRC
      * strip is off and the 14a_4 layer doesn't remove it), so drop it before
      * parsing — otherwise a body-less APDU's absent Lc reads the CRC as an
@@ -491,8 +480,6 @@ static standalone_rc_t on_tick(uint32_t now_ms){
         return STANDALONE_RC_OK;
     }
     u2f_process(m_tcl.m_apdu_buf, alen);
-    NRF_LOG_INFO("u2f tx len=%u sw=%04X", m_big_len,
-                 m_big_len >= 2 ? (m_big[m_big_len-2]<<8)|m_big[m_big_len-1] : 0);
     m_big_off = 0;
     emit_chunk();
     return STANDALONE_RC_OK;
