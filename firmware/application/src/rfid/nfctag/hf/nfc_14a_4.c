@@ -316,7 +316,8 @@ bool nfc_tag_14a_4_base_handler(nfc_tag_14a_4_tcl_state_t *m_tcl_session_state, 
                    &data[offset], frag);
             m_tcl_session_state->m_apdu_len   += frag;
             m_tcl_session_state->m_chaining_in = true;
-            m_tcl_session_state->m_apdu_pending = true;
+            /* Not a complete APDU yet — leave m_apdu_pending clear so on_tick /
+             * the relay path don't process a partial fragment. */
             m_tcl_session_state->m_response_ready = false;
             send_rack(m_tcl_session_state);         /* R(ACK) with current block num */
             m_tcl_session_state->m_block_num ^= 1;  /* advance for next chained block */
