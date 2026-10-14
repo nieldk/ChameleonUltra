@@ -436,7 +436,10 @@ static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len){
 
     standalone_led_set_mode_color(STANDALONE_MODE_U2F, RGB_BLUE);
     standalone_led_solid();
-    NRF_LOG_INFO("u2f: armed, ctr=%lu", (unsigned long)m_ctr);
+    /* BUILD stamp — bump this string when you change this file, then confirm it
+     * in the token log on arm. If the log shows an older stamp, the flash did
+     * not replace the app. */
+    NRF_LOG_INFO("u2f: armed BUILD=crcfix ctr=%lu", (unsigned long)m_ctr);
     return STANDALONE_RC_OK;
 }
 
