@@ -387,19 +387,6 @@ static void on_rescan_req(void) {
 }
 
 static void on_card_identity(const relay_card_identity_t *id) {
-    /* uid_len==0 is the READER's "card removed" sentinel: stop emulating and
-     * forget the UID so the CARD CU does not keep presenting a vanished card. */
-    if (id->uid_len == 0) {
-        if (m_st.identity_received) {
-            nfc_relay_tag_clear();
-            memset(&m_st.identity, 0, sizeof(m_st.identity));
-            m_st.identity_received = false;
-            m_st.sub = RS_CARD_AWAIT_IDENTITY;
-            NRF_LOG_INFO("relay card: card removed, emulation cleared");
-        }
-        return;
-    }
-
     /* Accept updates when already CARD_READY — card may have changed on
      * the READER side (periodic re-scan). Reinstall relay handler with
      * the new identity so CU1 presents the correct card to the reader.
@@ -1121,8 +1108,7 @@ static standalone_rc_t on_tick(uint32_t now_ticks) {
             }
             /* Re-broadcast identity every 1s */
             static uint32_t s_last_bcast = 0;
-            if (m_st.real_card_found &&
-                    app_timer_cnt_diff_compute(now_ticks, s_last_bcast)
+            if (app_timer_cnt_diff_compute(now_ticks, s_last_bcast)
                     >= APP_TIMER_TICKS(1000)) {
                 s_last_bcast = now_ticks;
                 ble_relay_send_card_identity(&m_st.identity);
@@ -1157,14 +1143,6 @@ static standalone_rc_t on_tick(uint32_t now_ticks) {
                      * It had no effect on pcd_14a_reader_scan_auto() anyway. */
                     picc_14a_tag_t new_card;
                     memset(&new_card, 0, sizeof(new_card));
-                    /* Field-cycle before scanning: a bare scan_auto on the
-                     * continuously-on antenna misses a card dropped into a
-                     * static field, so only the first card (scanned via
-                     * reader_setup_card, which cycles) would ever register.
-                     * Safe here — the rescan only runs when the relay is idle. */
-                    pcd_14a_reader_reset();
-                    pcd_14a_reader_antenna_on();
-                    bsp_delay_ms(8);
                     if (pcd_14a_reader_scan_auto(&new_card) == STATUS_HF_TAG_OK) {
                         /* scan_auto already does RATS internally for SAK & 0x20 cards
                          * and stores the result in new_card.ats / new_card.ats_len.
@@ -1221,20 +1199,6 @@ static standalone_rc_t on_tick(uint32_t now_ticks) {
                         if (new_card.sak & 0x20) {
                             m_st.needs_reselect = true; /* scan_auto did RATS; re-select before next relay frame */
                         }
-                    } else if (m_st.real_card_found) {
-                        /* Idle scan failed while a card was present -> removed.
-                         * Clear and tell the CARD CU to stop emulating via a
-                         * uid_len=0 identity so it drops the stale UID. */
-                        m_st.real_card_found   = false;
-                        m_st.identity_received = false;
-                        memset(&m_st.real_card, 0, sizeof(m_st.real_card));
-                        memset(&m_st.identity,  0, sizeof(m_st.identity));
-                        relay_card_identity_t gone;
-                        memset(&gone, 0, sizeof(gone));
-                        ble_relay_send_card_identity(&gone);
-                        /* Re-acquire via the 500ms field-cycling scan path. */
-                        m_st.sub = RS_READER_SCAN;
-                        NRF_LOG_INFO("relay reader: card removed, re-scanning");
                     }
                 }
             }
