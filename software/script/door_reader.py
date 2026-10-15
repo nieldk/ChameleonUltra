@@ -74,36 +74,28 @@ def scan(cmd):
     return (tags[0] if tags else None), dt
 
 
-_last_n = 0
-
-def render_inplace(lines):
-    """Redraw `lines` over the previous block (no scrolling). \033[J after the
-    cursor-up clears to end of screen, so a shorter block erases the old one."""
-    global _last_n
-    out = (f"\033[{_last_n}A\033[J" if _last_n else "") + "\n".join(lines) + "\n"
-    sys.stdout.write(out)
-    sys.stdout.flush()
-    _last_n = len(lines)
-
-
 def door_once(cmd, args, allow):
-    """Scan once; return the display lines (no printing)."""
+    """Scan once; return (lines, sig). `sig` is the stable result identity
+    (no timing), so the caller can print only when the result changes —
+    every real event stays on screen, with no per-poll spam."""
     tag, dt = scan(cmd)
     if not tag:
-        return [f"{CY}… no card ({dt:.0f} ms){C0}"]
+        return [f"{CY}… no card{C0}"], "none"
 
     uid = hx(tag['uid'])
     sak = hx(tag['sak'])
+    sig = f"{uid}/{sak}"
     lines = [f"{CC}card{C0}  UID={uid}  SAK={sak}  ATQA={hx(tag['atqa'])}  "
              f"(scan {dt:.0f} ms)"]
 
     # Door decision by UID allow-list (UID-only access systems).
     if allow is not None:
         ok = uid.upper() in allow
+        sig += "/grant" if ok else "/deny"
         lines.append(f"  access: {CG+'GRANTED' if ok else CR+'DENIED'}{C0}  (UID {uid})")
 
     if not args.auth:
-        return lines
+        return lines, sig
 
     # MIFARE Classic auth + read — the relay-timing stress test.
     key = bytes.fromhex(args.key)
@@ -116,6 +108,7 @@ def door_once(cmd, args, allow):
         ok = False
         err = e
     dt = (time.perf_counter() - t0) * 1000
+    sig += f"/auth{int(bool(ok))}"
     if err is not None:
         lines.append(f"  {CR}auth error: {err}{C0}")
     lines.append(f"  auth blk {args.block} key{args.key_type.upper()} {args.key}: "
@@ -126,9 +119,11 @@ def door_once(cmd, args, allow):
             data = cmd.mf1_read_one_block(args.block, ktype, key)
             dt = (time.perf_counter() - t0) * 1000
             lines.append(f"  read blk {args.block}: {hx(data)}  ({dt:.0f} ms)")
+            sig += "/" + hx(data)
         except Exception as e:
             lines.append(f"  {CR}read failed: {e}{C0}")
-    return lines
+            sig += "/readerr"
+    return lines, sig
 
 
 def main():
@@ -159,13 +154,21 @@ def main():
     cmd.set_device_reader_mode(True)
     print(f"{CG}Reader ready.{C0}  Present the relay's CARD (blue) CU to this one.")
 
+    last_sig = None
     try:
         while True:
-            lines = door_once(cmd, args, allow)
+            lines, sig = door_once(cmd, args, allow)
             if args.once:
                 print("\n".join(lines))
                 break
-            render_inplace(lines)          # redraw in place, no scrolling
+            # Print only when the result changes: one persistent line per real
+            # event (new card, grant/deny, card gone), no per-poll scroll spam.
+            if sig != last_sig:
+                ts = time.strftime("%H:%M:%S")
+                print(f"[{ts}] {lines[0]}")
+                for l in lines[1:]:
+                    print(l)
+                last_sig = sig
             time.sleep(args.interval)
     except KeyboardInterrupt:
         print(f"\n{CY}Stopped.{C0}")
