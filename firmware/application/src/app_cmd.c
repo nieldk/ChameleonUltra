@@ -40,6 +40,7 @@ extern void nfc_tag_14a_set_tx_sniff_cb(void (*cb)(const uint8_t *, uint16_t));
 extern void nfc_tag_14a_clear_tx_sniff_cb(void);
 extern void nfc_tag_14a_set_sniff_passive(bool passive);
 #include "nfc_14a_4.h"
+#include "app_standalone.h"   /* app_standalone_get_state() — reject reader/mode cmds while armed */
 #if defined(PROJECT_DESFIRE_EMULATION)
 #include "dfc_der.h"
 #include "dfc_command.h"
@@ -339,6 +340,13 @@ static data_frame_tx_t *cmd_processor_get_device_model(uint16_t cmd, uint16_t st
 static data_frame_tx_t *cmd_processor_change_device_mode(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     if ((length != 1) || (data[0] > 1)) {
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    /* Refuse a mode switch while a standalone mode is armed: flipping an armed
+     * relay CU into reader mode mid-session collapses the emulation and can hang
+     * it. A mis-targeted USB client (e.g. a reader script on the wrong port)
+     * must not be able to break a running mode. */
+    if (app_standalone_get_state() != STANDALONE_STATE_DISARMED) {
+        return data_frame_make(cmd, STATUS_DEVICE_MODE_ERROR, 0, NULL);
     }
 
     if (data[0] == 1) {
@@ -2579,6 +2587,11 @@ static data_frame_tx_t *cmd_processor_delete_all_ble_bonds(uint16_t cmd, uint16_
  * we must to wait some time, to init picc(power).
  */
 static data_frame_tx_t *before_reader_run(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    /* Reader commands while a standalone mode is armed would drive the RC522
+     * underneath a live relay/emulation and hang it — reject them. */
+    if (app_standalone_get_state() != STANDALONE_STATE_DISARMED) {
+        return data_frame_make(cmd, STATUS_DEVICE_MODE_ERROR, 0, NULL);
+    }
     device_mode_t mode = get_device_mode();
     if (mode != DEVICE_MODE_READER) {
         return data_frame_make(cmd, STATUS_DEVICE_MODE_ERROR, 0, NULL);
