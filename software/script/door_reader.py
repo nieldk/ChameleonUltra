@@ -74,45 +74,61 @@ def scan(cmd):
     return (tags[0] if tags else None), dt
 
 
+_last_n = 0
+
+def render_inplace(lines):
+    """Redraw `lines` over the previous block (no scrolling). \033[J after the
+    cursor-up clears to end of screen, so a shorter block erases the old one."""
+    global _last_n
+    out = (f"\033[{_last_n}A\033[J" if _last_n else "") + "\n".join(lines) + "\n"
+    sys.stdout.write(out)
+    sys.stdout.flush()
+    _last_n = len(lines)
+
+
 def door_once(cmd, args, allow):
+    """Scan once; return the display lines (no printing)."""
     tag, dt = scan(cmd)
     if not tag:
-        print(f"{CY}… no card ({dt:.0f} ms){C0}")
-        return
+        return [f"{CY}… no card ({dt:.0f} ms){C0}"]
+
     uid = hx(tag['uid'])
     sak = hx(tag['sak'])
-    print(f"\n{CC}card{C0}  UID={uid}  SAK={sak}  ATQA={hx(tag['atqa'])}  "
-          f"(scan {dt:.0f} ms)")
+    lines = [f"{CC}card{C0}  UID={uid}  SAK={sak}  ATQA={hx(tag['atqa'])}  "
+             f"(scan {dt:.0f} ms)"]
 
     # Door decision by UID allow-list (UID-only access systems).
     if allow is not None:
         ok = uid.upper() in allow
-        print(f"  access: {CG+'GRANTED' if ok else CR+'DENIED'}{C0}  (UID {uid})")
+        lines.append(f"  access: {CG+'GRANTED' if ok else CR+'DENIED'}{C0}  (UID {uid})")
 
     if not args.auth:
-        return
+        return lines
 
     # MIFARE Classic auth + read — the relay-timing stress test.
     key = bytes.fromhex(args.key)
     ktype = MfcKeyType.A if args.key_type.upper() == 'A' else MfcKeyType.B
     t0 = time.perf_counter()
+    err = None
     try:
         ok = cmd.mf1_auth_one_key_block(args.block, ktype, key)
     except Exception as e:
         ok = False
-        print(f"  {CR}auth error: {e}{C0}")
+        err = e
     dt = (time.perf_counter() - t0) * 1000
-    print(f"  auth blk {args.block} key{args.key_type.upper()} {args.key}: "
-          f"{CG+'OK' if ok else CR+'FAIL'}{C0}  ({dt:.0f} ms)")
-    if not ok:
-        return
-    t0 = time.perf_counter()
-    try:
-        data = cmd.mf1_read_one_block(args.block, ktype, key)
-        dt = (time.perf_counter() - t0) * 1000
-        print(f"  read blk {args.block}: {hx(data)}  ({dt:.0f} ms)")
-    except Exception as e:
-        print(f"  {CR}read failed: {e}{C0}")
+    if err is not None:
+        lines.append(f"  {CR}auth error: {err}{C0}")
+    lines.append(f"  auth blk {args.block} key{args.key_type.upper()} {args.key}: "
+                 f"{CG+'OK' if ok else CR+'FAIL'}{C0}  ({dt:.0f} ms)")
+    if ok:
+        t0 = time.perf_counter()
+        try:
+            data = cmd.mf1_read_one_block(args.block, ktype, key)
+            dt = (time.perf_counter() - t0) * 1000
+            lines.append(f"  read blk {args.block}: {hx(data)}  ({dt:.0f} ms)")
+        except Exception as e:
+            lines.append(f"  {CR}read failed: {e}{C0}")
+    return lines
 
 
 def main():
@@ -145,9 +161,11 @@ def main():
 
     try:
         while True:
-            door_once(cmd, args, allow)
+            lines = door_once(cmd, args, allow)
             if args.once:
+                print("\n".join(lines))
                 break
+            render_inplace(lines)          # redraw in place, no scrolling
             time.sleep(args.interval)
     except KeyboardInterrupt:
         print(f"\n{CY}Stopped.{C0}")
