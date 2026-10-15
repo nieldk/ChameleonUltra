@@ -963,6 +963,14 @@ void nfc_tag_14a_event_callback(nrfx_nfct_evt_t const *p_event) {
                         if (m_fdt_timeouts != UINT16_MAX) m_fdt_timeouts++;
                         NRF_LOG_ERROR("NRFX_NFCT_ERROR_FRAMEDELAYTIMEOUT: %d", m_tag_state_14a);
                     }
+                    /* nrfx clears the error but does NOT recover RX, so a single
+                     * missed deadline leaves the tag permanently deaf (no further
+                     * frames) until a field drop. Drop any orphaned deferred
+                     * response and re-arm the receiver so emulation survives a
+                     * transient timing hiccup under sustained relay/emulation. */
+                    m_response_deferred = false;
+                    nfc_fdt_reset();
+                    NRFX_NFCT_RX_BYTES
                     break;
                 }
                 case NRFX_NFCT_ERROR_NUM: {
