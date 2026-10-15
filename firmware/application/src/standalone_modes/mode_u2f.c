@@ -1,11 +1,16 @@
 /*
- * mode_u2f.c — FIDO U2F (CTAP1) authenticator over NFC, standalone mode.
+ * mode_u2f.c — FIDO2 (CTAP2) + U2F (CTAP1) authenticator over NFC, standalone.
  *
- * Emulates an ISO-14443-4 token that answers the FIDO U2F applet. The tested
- * T=CL engine (nfc_14a_4 base_handler/base_respond) does all ISO-DEP framing;
- * this mode owns its own session state, presents a fixed identity, and answers
- * U2F APDUs. APDUs are processed in on_tick: while the response is computed the
- * engine sends S(WTX) to keep the reader alive, so slow ECDSA does not time out.
+ * Emulates an ISO-14443-4 token on the FIDO applet AID. SELECT answers
+ * "FIDO_2_0" so phones drive it over CTAP2 (NFCCTAP_MSG, INS 0x10): GetInfo,
+ * MakeCredential, GetAssertion in CBOR. U2F APDUs (INS 0x01/0x02) stay handled
+ * as a CTAP1 fallback for PC/second-CU readers. The tested T=CL engine
+ * (nfc_14a_4) does all ISO-DEP framing; responses are processed in on_tick so
+ * S(WTX) keeps the reader waiting while ECDSA runs, and 61xx chaining returns
+ * oversized results.
+ *
+ * NOTE: CTAP2 here is non-UV (up-only, non-resident) — no clientPIN. Works for
+ * UV-discouraged / second-factor WebAuthn; passkeys (UV-required) need PIN.
  *
  * Stateless key wrapping — no per-credential flash:
  *   priv = HMAC-SHA256(mk, 0x01 | appId32 | nonce32)   (P-256 scalar)
@@ -62,6 +67,39 @@ NRF_LOG_MODULE_REGISTER();
 static const uint8_t U2F_AID[]   = {0xA0, 0x00, 0x00, 0x06, 0x47, 0x2F, 0x00, 0x01};
 static const uint8_t U2F_V2[]    = {'U','2','F','_','V','2'};
 #define KH_LEN 64   /* nonce(32) | mac(32) */
+
+/* ---- CTAP2 / FIDO2 (NFCCTAP) ---- */
+#define NFCCTAP_MSG          0x10   /* CLA 0x80: carries a CTAP2 command         */
+#define NFCCTAP_GETRESPONSE  0x11   /* CLA 0x80: fetch more of a chained response */
+#define CTAP_CMD_MAKE_CRED   0x01
+#define CTAP_CMD_GET_ASSERT  0x02
+#define CTAP_CMD_GET_INFO    0x04
+#define CTAP_CMD_CLIENT_PIN  0x06
+#define CTAP_CMD_RESET       0x07
+/* CTAP status bytes (first byte of a CTAP response) */
+#define CTAP2_OK                     0x00
+#define CTAP1_ERR_INVALID_CMD        0x01
+#define CTAP1_ERR_INVALID_LENGTH     0x03
+#define CTAP2_ERR_OPERATION_DENIED   0x27
+#define CTAP2_ERR_UNSUPPORTED_OPTION 0x2B
+#define CTAP2_ERR_NO_CREDENTIALS     0x2E
+
+static const uint8_t FIDO2_V[] = {'F','I','D','O','_','2','_','0'};
+
+/* AAGUID — fixed 16-byte authenticator model id (also embedded in GETINFO_CBOR).
+ * Used by MakeCredential (Step 2); marked unused so Step 1 builds under -Werror. */
+static const uint8_t AAGUID[16] __attribute__((unused)) = {
+    0x50,0x68,0x72,0x65,0x61,0x6b,0x62,0x79,0x74,0x65,0x55,0x32,0x46,0x32,0x00,0x01
+};
+
+/* authenticatorGetInfo response (static CBOR, non-UV up-only non-resident):
+ *   {1:["FIDO_2_0"], 3:h'<aaguid>', 4:{"rk":false,"up":true}} */
+static const uint8_t GETINFO_CBOR[] = {
+    0xA3,
+    0x01, 0x81, 0x68, 'F','I','D','O','_','2','_','0',
+    0x03, 0x50, 0x50,0x68,0x72,0x65,0x61,0x6b,0x62,0x79,0x74,0x65,0x55,0x32,0x46,0x32,0x00,0x01,
+    0x04, 0xA2, 0x62,'r','k',0xF4, 0x62,'u','p',0xF5
+};
 
 /* =====================================================================
  *  Attestation material is provisioned at RUNTIME, no code edit needed:
@@ -317,43 +355,76 @@ static uint16_t do_authenticate(uint8_t p1, const uint8_t *body, uint16_t lc, ui
     return i;
 }
 
-/* Full U2F APDU dispatch → writes to m_big, returns total length (incl SW). */
+/* Build a CTAP response into m_big: [status][cbor...] then SW 9000 (NFCCTAP
+ * always returns 9000 at the APDU layer; the CTAP status lives in byte 0). */
+static uint16_t ctap_err(uint8_t status){
+    m_big[0] = status;
+    m_big_len = put_sw(m_big, 1, SW_NO_ERROR);
+    return m_big_len;
+}
+
+/* CTAP2 command dispatch. `d` = command byte + CBOR; `len` includes the cmd. */
+static uint16_t ctap2_dispatch(const uint8_t *d, uint16_t len){
+    if (!d || len < 1) return ctap_err(CTAP1_ERR_INVALID_LENGTH);
+    uint8_t cmd = d[0];
+    NRF_LOG_INFO("ctap2 cmd=%02X len=%u", cmd, len);   /* step-1 trace; drop later */
+    switch (cmd) {
+    case CTAP_CMD_GET_INFO:
+        m_big[0] = CTAP2_OK;
+        memcpy(m_big + 1, GETINFO_CBOR, sizeof(GETINFO_CBOR));
+        m_big_len = put_sw(m_big, 1 + sizeof(GETINFO_CBOR), SW_NO_ERROR);
+        return m_big_len;
+    /* Step 2 will implement these; for now fail cleanly after GetInfo so the
+     * phone's acceptance of the token can be confirmed. */
+    case CTAP_CMD_MAKE_CRED:
+    case CTAP_CMD_GET_ASSERT:
+        return ctap_err(CTAP2_ERR_OPERATION_DENIED);
+    default:
+        return ctap_err(CTAP1_ERR_INVALID_CMD);
+    }
+}
+
+/* APDU dispatch → writes to m_big, returns total length (incl SW). */
 static uint16_t u2f_process(const uint8_t *a, uint16_t n){
     if (n < 4) { m_big_len = put_sw(m_big,0,SW_WRONG_LENGTH); return m_big_len; }
     uint8_t cla=a[0], ins=a[1], p1=a[2];
     const uint8_t *body; uint16_t lc;
-    if (cla != 0x00) { m_big_len = put_sw(m_big,0,SW_CLA_NOT_SUPPORTED); return m_big_len; }
     if (!apdu_parse(a,n,&body,&lc)) { m_big_len = put_sw(m_big,0,SW_WRONG_LENGTH); return m_big_len; }
 
-    switch (ins) {
-    case ISO_INS_SELECT:
-        /* SELECT by name (P1=0x04) of the U2F applet AID. */
+    /* ISO SELECT by name (CLA 00, INS A4, P1 04) — answer FIDO_2_0 so the
+     * platform drives CTAP2; a U2F-only reader that insists on U2F_V2 won't
+     * engage, which is the accepted trade for phone support. */
+    if (cla == 0x00 && ins == ISO_INS_SELECT) {
         if (p1 == 0x04 && body && lc >= sizeof(U2F_AID) &&
                 memcmp(body, U2F_AID, sizeof(U2F_AID)) == 0) {
-            memcpy(m_big, U2F_V2, sizeof(U2F_V2));
-            m_big_len = put_sw(m_big, sizeof(U2F_V2), SW_NO_ERROR);
+            memcpy(m_big, FIDO2_V, sizeof(FIDO2_V));
+            m_big_len = put_sw(m_big, sizeof(FIDO2_V), SW_NO_ERROR);
         } else {
             m_big_len = put_sw(m_big, 0, SW_FILE_NOT_FOUND);
         }
-        break;
-    case U2F_INS_VERSION:
-        memcpy(m_big, U2F_V2, sizeof(U2F_V2));
-        m_big_len = put_sw(m_big, sizeof(U2F_V2), SW_NO_ERROR);
-        break;
-    case U2F_INS_REGISTER:
-        m_big_len = do_register(body, lc, m_big);
-        break;
-    case U2F_INS_AUTHENTICATE:
-        m_big_len = do_authenticate(p1, body, lc, m_big);
-        break;
-    case ISO_INS_GET_RESPONSE:
-        /* handled by the chunker in on_tick; should not reach here */
-        m_big_len = put_sw(m_big,0,SW_INS_NOT_SUPPORTED);
-        break;
-    default:
-        m_big_len = put_sw(m_big,0,SW_INS_NOT_SUPPORTED);
-        break;
+        return m_big_len;
     }
+
+    /* CTAP2: NFCCTAP_MSG (CLA 80, INS 10) carries cmd byte + CBOR. */
+    if (cla == 0x80 && ins == NFCCTAP_MSG) {
+        return ctap2_dispatch(body, lc);
+    }
+
+    /* U2F / CTAP1 fallback (CLA 00). */
+    if (cla == 0x00) {
+        switch (ins) {
+        case U2F_INS_VERSION:
+            memcpy(m_big, U2F_V2, sizeof(U2F_V2));
+            m_big_len = put_sw(m_big, sizeof(U2F_V2), SW_NO_ERROR);
+            return m_big_len;
+        case U2F_INS_REGISTER:
+            return (m_big_len = do_register(body, lc, m_big));
+        case U2F_INS_AUTHENTICATE:
+            return (m_big_len = do_authenticate(p1, body, lc, m_big));
+        }
+    }
+
+    m_big_len = put_sw(m_big, 0, SW_INS_NOT_SUPPORTED);
     return m_big_len;
 }
 
