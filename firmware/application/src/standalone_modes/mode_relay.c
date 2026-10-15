@@ -1157,6 +1157,14 @@ static standalone_rc_t on_tick(uint32_t now_ticks) {
                      * It had no effect on pcd_14a_reader_scan_auto() anyway. */
                     picc_14a_tag_t new_card;
                     memset(&new_card, 0, sizeof(new_card));
+                    /* Field-cycle before scanning: a bare scan_auto on the
+                     * continuously-on antenna misses a card dropped into a
+                     * static field, so only the first card (scanned via
+                     * reader_setup_card, which cycles) would ever register.
+                     * Safe here — the rescan only runs when the relay is idle. */
+                    pcd_14a_reader_reset();
+                    pcd_14a_reader_antenna_on();
+                    bsp_delay_ms(8);
                     if (pcd_14a_reader_scan_auto(&new_card) == STATUS_HF_TAG_OK) {
                         /* scan_auto already does RATS internally for SAK & 0x20 cards
                          * and stores the result in new_card.ats / new_card.ats_len.
@@ -1224,7 +1232,9 @@ static standalone_rc_t on_tick(uint32_t now_ticks) {
                         relay_card_identity_t gone;
                         memset(&gone, 0, sizeof(gone));
                         ble_relay_send_card_identity(&gone);
-                        NRF_LOG_INFO("relay reader: card removed, cleared");
+                        /* Re-acquire via the 500ms field-cycling scan path. */
+                        m_st.sub = RS_READER_SCAN;
+                        NRF_LOG_INFO("relay reader: card removed, re-scanning");
                     }
                 }
             }
