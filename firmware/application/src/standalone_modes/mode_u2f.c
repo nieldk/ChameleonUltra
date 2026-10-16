@@ -476,6 +476,10 @@ static void u2f_cb_state(uint8_t *data, uint16_t szBits){
     uint16_t alen = m_tcl.m_apdu_len >= 2 ? m_tcl.m_apdu_len - 2 : 0;
     uint8_t  ins  = alen >= 2 ? m_tcl.m_apdu_buf[1] : 0;
 
+    /* debug: dump every completed inbound APDU (fast + slow paths). Drop later. */
+    NRF_LOG_INFO("rx alen=%u", alen);
+    NRF_LOG_HEXDUMP_INFO(m_tcl.m_apdu_buf, alen > 32 ? 32 : alen);
+
     /* Continue a chained response (already built). */
     if (ins == ISO_INS_GET_RESPONSE && m_big_off < m_big_len) {
         m_tcl.m_apdu_pending = false;
@@ -571,10 +575,6 @@ static standalone_rc_t on_tick(uint32_t now_ms){
      * parsing — otherwise a body-less APDU's absent Lc reads the CRC as an
      * extended length and fails. */
     uint16_t alen = m_tcl.m_apdu_len >= 2 ? m_tcl.m_apdu_len - 2 : 0;
-
-    NRF_LOG_INFO("rx alen=%u", alen);   /* debug: raw inbound APDU */
-    NRF_LOG_HEXDUMP_INFO(m_tcl.m_apdu_buf, alen > 32 ? 32 : alen);
-
     uint8_t ins = alen >= 2 ? m_tcl.m_apdu_buf[1] : 0;
     if (ins == ISO_INS_GET_RESPONSE && m_big_off < m_big_len) {
         emit_chunk();                 /* continue a chained response */
