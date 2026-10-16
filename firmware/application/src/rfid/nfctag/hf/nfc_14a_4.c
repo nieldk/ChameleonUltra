@@ -158,35 +158,44 @@ static bool find_static_response(const uint8_t *apdu, uint16_t apdu_len,
 /*  TX helpers                                                          */
 /* ------------------------------------------------------------------ */
 
-static void send_iblock(nfc_tag_14a_4_tcl_state_t *m_tcl_session_state) {
-    uint16_t total = m_tcl_session_state->m_resp_len;
+static void send_iblock(nfc_tag_14a_4_tcl_state_t *s) {
+    uint16_t total = s->m_resp_len;
     if (total > NFC_14A_4_MAX_APDU) total = NFC_14A_4_MAX_APDU;
 
-    /* Outbound chaining: send the slice at m_tx_off, set the chaining bit while
-     * more remains. When m_tx_chaining is false this reduces to the original
-     * single-block send (start 0, whole buffer, no chain bit). */
-    uint16_t start = m_tcl_session_state->m_tx_chaining ? m_tcl_session_state->m_tx_off : 0;
-    uint16_t len   = total - start;
-    bool more = false;
-    if (m_tcl_session_state->m_tx_chaining && m_tcl_session_state->m_tx_frag
-            && len > m_tcl_session_state->m_tx_frag) {
-        len  = m_tcl_session_state->m_tx_frag;
-        more = true;
+    if (!s->m_tx_chaining) {
+        /* Original single-block send — unchanged for all non-chaining callers. */
+        uint8_t pcb = 0x02 | (s->m_block_num & 0x01);
+        if (s->m_cid_supported) pcb |= PCB_CID_FOLLOWING;
+        uint8_t off = 0;
+        m_tx_buf[off++] = pcb;
+        if (s->m_cid_supported) m_tx_buf[off++] = s->m_cid & 0x0F;
+        memcpy(&m_tx_buf[off], s->m_resp_buf, total);
+        nfc_tag_14a_tx_bytes(m_tx_buf, off + total, true);
+        s->m_block_num ^= 1;
+        return;
     }
 
-    uint8_t pcb = 0x02 | (m_tcl_session_state->m_block_num & 0x01);
+    /* Outbound chaining: every fragment carries the SAME block number (captured
+     * at the first fragment, = the command's block), and m_block_num advances by
+     * exactly one net toggle when the last fragment goes out — so the reader's
+     * next command stays in step regardless of the fragment count. */
+    if (s->m_tx_off == 0) s->m_tx_blk = s->m_block_num & 0x01;
+    uint16_t len = total - s->m_tx_off;
+    bool more = (s->m_tx_frag && len > s->m_tx_frag);
+    if (more) len = s->m_tx_frag;
+
+    uint8_t pcb = 0x02 | (s->m_tx_blk & 0x01);
     if (more) pcb |= PCB_CHAIN;
-    if (m_tcl_session_state->m_cid_supported) pcb |= PCB_CID_FOLLOWING;
+    if (s->m_cid_supported) pcb |= PCB_CID_FOLLOWING;
     uint8_t off = 0;
     m_tx_buf[off++] = pcb;
-    if (m_tcl_session_state->m_cid_supported) m_tx_buf[off++] = m_tcl_session_state->m_cid & 0x0F;
-    memcpy(&m_tx_buf[off], &m_tcl_session_state->m_resp_buf[start], len);
+    if (s->m_cid_supported) m_tx_buf[off++] = s->m_cid & 0x0F;
+    memcpy(&m_tx_buf[off], &s->m_resp_buf[s->m_tx_off], len);
     nfc_tag_14a_tx_bytes(m_tx_buf, off + len, true);
-    m_tcl_session_state->m_block_num ^= 1;
-
-    if (m_tcl_session_state->m_tx_chaining) {
-        m_tcl_session_state->m_tx_off = start + len;
-        if (!more) m_tcl_session_state->m_tx_chaining = false;   /* last fragment sent */
+    s->m_tx_off += len;
+    if (!more) {
+        s->m_block_num   = s->m_tx_blk ^ 1;   /* one net toggle for the whole response */
+        s->m_tx_chaining = false;
     }
 }
 
@@ -430,6 +439,7 @@ void nfc_tag_14a_4_reset_state(nfc_tag_14a_4_tcl_state_t *m_tcl_session_state) {
     m_tcl_session_state->m_tx_chaining    = false;
     m_tcl_session_state->m_tx_off         = 0;
     m_tcl_session_state->m_tx_frag        = 0;
+    m_tcl_session_state->m_tx_blk         = 0;
 }
 
 void nfc_tag_14a_4_reset_handler(void) {
