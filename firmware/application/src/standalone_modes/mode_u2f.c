@@ -143,9 +143,17 @@ static nfc_tag_14a_uid_size s_uid_size = NFC_TAG_14A_UID_DOUBLE_SIZE;
 static uint8_t  s_atqa[2]  = {0x44, 0x00};
 static uint8_t  s_sak[1]   = {0x20};
 static nfc_tag_14a_coll_res_reference_t s_coll;
-/* TL,T0(TA/TB/TC,FSCI=8),TA,TB,TC — FSCI=8 (FSC=256), high FWI for slow ECDSA.
- * Tune on the bench if a given reader is fussy. */
-static nfc_14a_ats_t s_ats = { .length = 5, .data = {0x05, 0x78, 0x80, 0x90, 0x00} };
+/* ATS: TL,T0(TA/TB/TC,FSCI=8),TA=80,TB=90(high FWI for slow ECDSA),TC=00, then
+ * ISO7816-4 historical bytes: 80 (category) | 73 C0 21 C0 (card-capabilities TLV,
+ * full ISO7816-4 — identical to a YubiKey 5) | 5A "Phreakbyte" (issuer-data TLV).
+ * Without historical bytes iOS classifies the tag as storage/DESFire and probes
+ * GetVersion; these route it to the ISO7816/FIDO path, same as a real key. */
+static nfc_14a_ats_t s_ats = {
+    .length = 21,
+    .data = {0x15, 0x78, 0x80, 0x90, 0x00,
+             0x80, 0x73, 0xC0, 0x21, 0xC0,
+             0x5A, 'P','h','r','e','a','k','b','y','t','e'}
+};
 
 static nfc_tag_14a_coll_res_reference_t *u2f_get_coll_res(void) {
     s_coll.size = &s_uid_size;
@@ -646,6 +654,7 @@ static uint16_t u2f_process(const uint8_t *a, uint16_t n){
  * ends with 61 XX and the reader follows up with GET RESPONSE (00 C0 ..). */
 static void emit_chunk(void){
     uint16_t remain = m_big_len - m_big_off;
+    m_tcl.m_tx_chaining = false;          /* U2F path never layer-4 chains */
     /* U2F/CTAP1 path: 58-byte ISO7816 GET-RESPONSE chunks (fits a 64-byte-FIFO
      * reader). CTAP2 responses use layer-4 chaining instead (see emit_ctap). */
     uint16_t max = 58;
@@ -674,10 +683,18 @@ static void emit_ctap(void){
     uint16_t len = m_big_len;
     if (len > NFC_14A_4_MAX_APDU) len = NFC_14A_4_MAX_APDU;   /* CTAP resp fits (<=~211) */
     memcpy(m_tcl.m_resp_buf, m_big, len);
-    m_tcl.m_resp_len       = len;
-    m_tcl.m_tx_off         = 0;
-    m_tcl.m_tx_frag        = 58;
-    m_tcl.m_tx_chaining    = (len > 58);
+    m_tcl.m_resp_len = len;
+
+    /* Fragment to the reader's advertised frame size (RATS FSDI) minus PCB+CRC.
+     * A phone (FSD 256) takes the whole response in one frame — no chaining. A
+     * 64-byte-FIFO reader (a second CU) advertises a small FSD and gets it in
+     * chained I-block fragments it can actually receive. */
+    uint16_t fsd = nfc_tag_14a_get_reader_fsd();
+    uint16_t frag = (fsd > 3) ? (fsd - 3) : 58;              /* 1 PCB + 2 CRC */
+    if (frag > NFC_14A_4_MAX_APDU) frag = NFC_14A_4_MAX_APDU;
+    m_tcl.m_tx_off      = 0;
+    m_tcl.m_tx_frag     = frag;
+    m_tcl.m_tx_chaining = (len > frag);
     m_tcl.m_response_ready = true;
 }
 
