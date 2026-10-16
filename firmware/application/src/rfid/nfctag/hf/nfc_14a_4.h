@@ -66,6 +66,7 @@ typedef struct __attribute__((packed)) {
     bool     m_tx_chaining;   /* response being sent as chained I-blocks */
     uint16_t m_tx_off;        /* bytes of m_resp_buf already sent */
     uint16_t m_tx_frag;       /* max payload per chained I-block */
+    uint8_t  m_tx_blk;        /* block number shared by all fragments of a chain */
 }
 nfc_tag_14a_4_tcl_state_t;
 
