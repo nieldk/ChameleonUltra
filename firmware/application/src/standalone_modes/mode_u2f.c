@@ -588,7 +588,6 @@ static uint16_t ctap_get_assertion(const uint8_t *d, uint16_t len){
 static uint16_t ctap2_dispatch(const uint8_t *d, uint16_t len){
     if (!d || len < 1) return ctap_err(CTAP1_ERR_INVALID_LENGTH);
     uint8_t cmd = d[0];
-    NRF_LOG_INFO("ctap2 cmd=%02X len=%u", cmd, len);   /* trace; drop later */
     switch (cmd) {
     case CTAP_CMD_GET_INFO:
         m_big[0] = CTAP2_OK;
@@ -781,10 +780,6 @@ static standalone_rc_t on_tick(uint32_t now_ms){
      * parsing — otherwise a body-less APDU's absent Lc reads the CRC as an
      * extended length and fails. */
     uint16_t alen = m_tcl.m_apdu_len >= 2 ? m_tcl.m_apdu_len - 2 : 0;
-
-    NRF_LOG_INFO("rx alen=%u", alen);   /* debug: raw inbound APDU — drop later */
-    NRF_LOG_HEXDUMP_INFO(m_tcl.m_apdu_buf, alen > 32 ? 32 : alen);
-
     uint8_t cla = alen >= 1 ? m_tcl.m_apdu_buf[0] : 0;
     uint8_t ins = alen >= 2 ? m_tcl.m_apdu_buf[1] : 0;
     /* Chained-response continuation: ISO GET RESPONSE (00 C0) for U2F, or
@@ -796,7 +791,6 @@ static standalone_rc_t on_tick(uint32_t now_ms){
         return STANDALONE_RC_OK;
     }
     u2f_process(m_tcl.m_apdu_buf, alen);
-    NRF_LOG_INFO("u2f tx len=%u b0=%02X", m_big_len, m_big[0]);
     if (m_ctap2_resp) {
         emit_ctap();                  /* CTAP2: layer-4 chained response */
     } else {
