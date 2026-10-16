@@ -60,6 +60,12 @@ typedef struct __attribute__((packed)) {
     uint16_t m_resp_len;
     bool     m_response_ready;
     bool     m_chaining_in;   /* mid inbound (reader->card) I-block chain */
+    /* Outbound (card->reader) I-block chaining. Off by default: when
+     * m_tx_chaining is false the send path is byte-identical to before, so
+     * only a handler that opts in (the CTAP2 mode) is affected. */
+    bool     m_tx_chaining;   /* response being sent as chained I-blocks */
+    uint16_t m_tx_off;        /* bytes of m_resp_buf already sent */
+    uint16_t m_tx_frag;       /* max payload per chained I-block */
 }
 nfc_tag_14a_4_tcl_state_t;
 
