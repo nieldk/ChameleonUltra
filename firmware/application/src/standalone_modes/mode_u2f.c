@@ -133,6 +133,10 @@ static uint8_t  m_att_priv[32] __attribute__((aligned(4)));   /* from FDS or def
 static uint8_t  m_big[640];
 static uint16_t m_big_len;
 static uint16_t m_big_off;
+/* CTAP2 (NFCCTAP) responses must go out in one ISO-DEP frame: this phone does
+ * not continue an NFCCTAP response via 61 XX / GET RESPONSE (it re-SELECTs). The
+ * U2F path keeps small-frame 61 XX chaining, which real U2F readers do follow. */
+static bool     m_ctap2_resp;
 
 /* fixed anti-collision identity: ISO-14443-4 (SAK bit 0x20) + a minimal ATS */
 static nfc_tag_14a_uid_size s_uid_size = NFC_TAG_14A_UID_DOUBLE_SIZE;
@@ -487,23 +491,18 @@ static uint16_t ctap_make_credential(const uint8_t *d, uint16_t len){
     memcpy(ad + ap, credId, KH_LEN); ap += KH_LEN;
     ap += cose_p256(ad + ap, pub);
 
-    /* self attestation: sig over SHA-256(authData | clientDataHash) by credPriv */
-    uint8_t h[32];
-    sha256_init(&sc); sha256_upd(&sc, ad, ap); sha256_upd(&sc, cdh, 32); sha256_fin(&sc, h);
-    uint8_t sig_rs[64], sig_der[72];
-    if (!uECC_sign(priv, h, 32, sig_rs, C)) return ctap_err(CTAP2_ERR_OPERATION_DENIED);
-    uint16_t sl = der_sig(sig_rs, sig_der);
+    (void)cdh;   /* "none" attestation signs nothing at registration */
 
-    /* response map {1:"packed", 2:authData, 3:{alg:-7, sig:...}} */
+    /* response map {1:"none", 2:authData, 3:{}} — "none" attestation keeps the
+     * response in a single frame (packed self-attestation would overrun the
+     * 260-byte frame buffer). The RP records the pubkey from authData; the
+     * credential proves possession at GetAssertion. */
     uint8_t *o = m_big; uint16_t i = 0;
     o[i++] = CTAP2_OK;
     o[i++] = 0xA3;
-    o[i++] = 0x01; o[i++] = 0x66; memcpy(o + i, "packed", 6); i += 6;
+    o[i++] = 0x01; o[i++] = 0x64; memcpy(o + i, "none", 4); i += 4;
     o[i++] = 0x02; o[i++] = 0x58; o[i++] = (uint8_t)ap; memcpy(o + i, ad, ap); i += ap;
-    o[i++] = 0x03; o[i++] = 0xA2;
-    o[i++] = 0x63; o[i++]='a'; o[i++]='l'; o[i++]='g'; o[i++] = 0x26;
-    o[i++] = 0x63; o[i++]='s'; o[i++]='i'; o[i++]='g'; o[i++] = 0x58; o[i++] = (uint8_t)sl;
-    memcpy(o + i, sig_der, sl); i += sl;
+    o[i++] = 0x03; o[i++] = 0xA0;                        /* attStmt: {} */
     m_big_len = put_sw(o, i, SW_NO_ERROR);
     return m_big_len;
 }
@@ -599,6 +598,7 @@ static uint16_t ctap2_dispatch(const uint8_t *d, uint16_t len){
 
 /* APDU dispatch → writes to m_big, returns total length (incl SW). */
 static uint16_t u2f_process(const uint8_t *a, uint16_t n){
+    m_ctap2_resp = false;
     if (n < 4) { m_big_len = put_sw(m_big,0,SW_WRONG_LENGTH); return m_big_len; }
     uint8_t cla=a[0], ins=a[1], p1=a[2];
     const uint8_t *body; uint16_t lc;
@@ -620,6 +620,7 @@ static uint16_t u2f_process(const uint8_t *a, uint16_t n){
 
     /* CTAP2: NFCCTAP_MSG (CLA 80, INS 10) carries cmd byte + CBOR. */
     if (cla == 0x80 && ins == NFCCTAP_MSG) {
+        m_ctap2_resp = true;                 /* single-frame response */
         return ctap2_dispatch(body, lc);
     }
 
@@ -645,12 +646,9 @@ static uint16_t u2f_process(const uint8_t *a, uint16_t n){
  * ends with 61 XX and the reader follows up with GET RESPONSE (00 C0 ..). */
 static void emit_chunk(void){
     uint16_t remain = m_big_len - m_big_off;
-    /* Bound a chunk so the resulting I-block fits the most constrained reader.
-     * A ChameleonUltra used as the reader has a 64-byte RC522 FIFO, so an
-     * on-air I-block (PCB + CID? + payload + 2 CRC) must stay <= 64. 58 payload
-     * bytes (+2 for the 61 XX trailer) leaves room for PCB/CID/CRC. Phones can
-     * take far more, but a smaller chunk just costs extra GET-RESPONSE rounds. */
-    uint16_t max = 58;
+    /* CTAP2 responses go in one frame (<= phone FSC, no 61 XX). U2F keeps the
+     * 58-byte chunking a 64-byte-FIFO reader (e.g. a second CU) needs. */
+    uint16_t max = m_ctap2_resp ? 250 : 58;
     if (remain <= max) {
         memcpy(m_tcl.m_resp_buf, m_big + m_big_off, remain);
         m_tcl.m_resp_len = remain;
