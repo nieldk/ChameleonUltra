@@ -545,6 +545,9 @@ static standalone_rc_t on_tick(uint32_t now_ms){
      * extended length and fails. */
     uint16_t alen = m_tcl.m_apdu_len >= 2 ? m_tcl.m_apdu_len - 2 : 0;
 
+    NRF_LOG_INFO("rx alen=%u", alen);   /* debug: raw inbound APDU */
+    NRF_LOG_HEXDUMP_INFO(m_tcl.m_apdu_buf, alen > 32 ? 32 : alen);
+
     uint8_t ins = alen >= 2 ? m_tcl.m_apdu_buf[1] : 0;
     if (ins == ISO_INS_GET_RESPONSE && m_big_off < m_big_len) {
         emit_chunk();                 /* continue a chained response */
