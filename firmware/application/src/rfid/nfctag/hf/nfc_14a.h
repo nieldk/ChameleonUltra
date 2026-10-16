@@ -150,6 +150,7 @@ void nfc_tag_14a_set_frame_delay_max(uint32_t ticks);
  * for the duration of a relay session instead of being clamped to the default.
  * Set true by the relay on install, false on clear. */
 void nfc_tag_14a_set_relay_hold(bool hold);
+uint16_t nfc_tag_14a_get_reader_fsd(void);
 /* Relay support: call from a tag handler's cb_state (ISR) to signal that a
  * response will be transmitted asynchronously after the ISR returns. Keeps
  * the NFCT response window open for the deferred TX. */
