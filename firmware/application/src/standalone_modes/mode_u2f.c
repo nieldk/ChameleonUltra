@@ -458,51 +458,14 @@ static void emit_chunk(void){
 /* ===================================================================== */
 /*  ISO-DEP handler (ISR) — delegate framing to the 14a_4 engine          */
 /* ===================================================================== */
-/* Commands with no ECDSA — safe to answer in the ISR, no S(WTX) round-trip.
- * Fewer frames survive a flaky phone tap where the field keeps dropping. */
-static bool cmd_is_fast(uint8_t cla, uint8_t ins, const uint8_t *body, uint16_t lc){
-    if (cla == 0x00 && (ins == ISO_INS_SELECT || ins == U2F_INS_VERSION)) return true;
-    if (cla == 0x80 && ins == NFCCTAP_MSG && body && lc >= 1 && body[0] == CTAP_CMD_GET_INFO)
-        return true;
-    return false;
-}
-
 static void u2f_cb_state(uint8_t *data, uint16_t szBits){
     /* nfc_14a delivers the frame length in BITS; the 14a_4 engine works in
      * bytes. ISO-DEP frames are byte-aligned, so divide. */
     uint16_t szBytes = szBits / 8;
     if (!nfc_tag_14a_4_base_handler(&m_tcl, data, szBytes)) return;
 
-    uint16_t alen = m_tcl.m_apdu_len >= 2 ? m_tcl.m_apdu_len - 2 : 0;
-    uint8_t  ins  = alen >= 2 ? m_tcl.m_apdu_buf[1] : 0;
-
-    /* debug: dump every completed inbound APDU (fast + slow paths). Drop later. */
-    NRF_LOG_INFO("rx alen=%u", alen);
-    NRF_LOG_HEXDUMP_INFO(m_tcl.m_apdu_buf, alen > 32 ? 32 : alen);
-
-    /* Continue a chained response (already built). */
-    if (ins == ISO_INS_GET_RESPONSE && m_big_off < m_big_len) {
-        m_tcl.m_apdu_pending = false;
-        emit_chunk();
-        nfc_tag_14a_4_base_respond(&m_tcl);
-        return;
-    }
-
-    /* Answer fast commands immediately (SELECT / VERSION / GetInfo). */
-    const uint8_t *body = NULL; uint16_t lc = 0;
-    apdu_parse(m_tcl.m_apdu_buf, alen, &body, &lc);
-    if (cmd_is_fast(alen >= 1 ? m_tcl.m_apdu_buf[0] : 0, ins, body, lc)) {
-        m_tcl.m_apdu_pending = false;
-        u2f_process(m_tcl.m_apdu_buf, alen);
-        NRF_LOG_INFO("u2f tx(isr) len=%u b0=%02X", m_big_len, m_big[0]);
-        m_big_off = 0;
-        emit_chunk();
-        nfc_tag_14a_4_base_respond(&m_tcl);   /* response ready → sent now, no WTX */
-        return;
-    }
-
-    /* ECDSA commands (MakeCredential/GetAssertion/REGISTER/AUTH): defer to
-     * on_tick; base_respond sends S(WTX) to hold the reader meanwhile. */
+    /* Complete APDU assembled. Hold the reader with S(WTX) and build the answer
+     * in on_tick — far too slow for the ISR once ECDSA is involved. */
     nfc_tag_14a_4_base_respond(&m_tcl);
 }
 
@@ -575,6 +538,10 @@ static standalone_rc_t on_tick(uint32_t now_ms){
      * parsing — otherwise a body-less APDU's absent Lc reads the CRC as an
      * extended length and fails. */
     uint16_t alen = m_tcl.m_apdu_len >= 2 ? m_tcl.m_apdu_len - 2 : 0;
+
+    NRF_LOG_INFO("rx alen=%u", alen);   /* debug: raw inbound APDU — drop later */
+    NRF_LOG_HEXDUMP_INFO(m_tcl.m_apdu_buf, alen > 32 ? 32 : alen);
+
     uint8_t ins = alen >= 2 ? m_tcl.m_apdu_buf[1] : 0;
     if (ins == ISO_INS_GET_RESPONSE && m_big_off < m_big_len) {
         emit_chunk();                 /* continue a chained response */
