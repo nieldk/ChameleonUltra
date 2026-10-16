@@ -150,7 +150,7 @@ static nfc_tag_14a_coll_res_reference_t s_coll;
  * GetVersion; these route it to the ISO7816/FIDO path, same as a real key. */
 static nfc_14a_ats_t s_ats = {
     .length = 21,
-    .data = {0x15, 0x78, 0x80, 0x90, 0x00,
+    .data = {0x15, 0x78, 0x80, 0x84, 0x00,      /* TA1=80 (106k), TB1=84 (SFGI4/FWI8, as YubiKey), TC1=00 */
              0x80, 0x73, 0xC0, 0x21, 0xC0,
              0x5A, 'P','h','r','e','a','k','b','y','t','e'}
 };
