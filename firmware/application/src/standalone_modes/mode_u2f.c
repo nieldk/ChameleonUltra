@@ -646,9 +646,9 @@ static uint16_t u2f_process(const uint8_t *a, uint16_t n){
  * ends with 61 XX and the reader follows up with GET RESPONSE (00 C0 ..). */
 static void emit_chunk(void){
     uint16_t remain = m_big_len - m_big_off;
-    /* CTAP2 responses go in one frame (<= phone FSC, no 61 XX). U2F keeps the
-     * 58-byte chunking a 64-byte-FIFO reader (e.g. a second CU) needs. */
-    uint16_t max = m_ctap2_resp ? 250 : 58;
+    /* U2F/CTAP1 path: 58-byte ISO7816 GET-RESPONSE chunks (fits a 64-byte-FIFO
+     * reader). CTAP2 responses use layer-4 chaining instead (see emit_ctap). */
+    uint16_t max = 58;
     if (remain <= max) {
         memcpy(m_tcl.m_resp_buf, m_big + m_big_off, remain);
         m_tcl.m_resp_len = remain;
@@ -663,6 +663,21 @@ static void emit_chunk(void){
         m_tcl.m_resp_buf[max+1] = xx;
         m_tcl.m_resp_len = max + 2;
     }
+    m_tcl.m_response_ready = true;
+}
+
+/* Hand the whole CTAP2 response to the engine for ISO-DEP layer-4 chaining:
+ * it goes out in <=58-byte I-block fragments, each ACKed by the reader. This
+ * works for a 64-byte-FIFO reader (a second CU) and for a phone alike, unlike a
+ * single large frame or ISO7816 61 XX (which this phone won't continue). */
+static void emit_ctap(void){
+    uint16_t len = m_big_len;
+    if (len > NFC_14A_4_MAX_APDU) len = NFC_14A_4_MAX_APDU;   /* CTAP resp fits (<=~211) */
+    memcpy(m_tcl.m_resp_buf, m_big, len);
+    m_tcl.m_resp_len       = len;
+    m_tcl.m_tx_off         = 0;
+    m_tcl.m_tx_frag        = 58;
+    m_tcl.m_tx_chaining    = (len > 58);
     m_tcl.m_response_ready = true;
 }
 
@@ -765,8 +780,12 @@ static standalone_rc_t on_tick(uint32_t now_ms){
     }
     u2f_process(m_tcl.m_apdu_buf, alen);
     NRF_LOG_INFO("u2f tx len=%u b0=%02X", m_big_len, m_big[0]);
-    m_big_off = 0;
-    emit_chunk();
+    if (m_ctap2_resp) {
+        emit_ctap();                  /* CTAP2: layer-4 chained response */
+    } else {
+        m_big_off = 0;
+        emit_chunk();                 /* U2F: 61 XX GET-RESPONSE chunks */
+    }
     return STANDALONE_RC_OK;
 }
 
