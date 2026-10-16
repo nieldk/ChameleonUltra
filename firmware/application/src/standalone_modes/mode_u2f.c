@@ -389,7 +389,7 @@ static bool cbor_head(cbor_t *c, uint8_t *major, uint64_t *val){
     return true;
 }
 
-/* Read a byte or text string: set *ptr/*len to its body, advance past it. */
+/* Read a byte or text string: point ptr/len at its body, advance past it. */
 static bool cbor_str(cbor_t *c, const uint8_t **ptr, uint64_t *len){
     uint8_t m; uint64_t v;
     if (!cbor_head(c, &m, &v) || (m != 2 && m != 3) || c->p + v > c->end) return false;
