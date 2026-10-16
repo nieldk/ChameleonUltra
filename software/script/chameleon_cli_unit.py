@@ -474,6 +474,78 @@ class HWFreeMemory(DeviceRequiredUnit):
         except chameleon_com.CMDInvalidException:
             print(" - Free memory not supported by current firmware, please update")
 
+# FSCI -> max frame size (bytes); 9..15 are RFU, treated as 256.
+_FSCI_FSC = [16, 24, 32, 40, 48, 64, 96, 128, 256]
+# compact-TLV tag number -> name (ISO7816-4 historical bytes)
+_CTLV_TAG = {
+    0x1: "country code", 0x2: "issuer id", 0x3: "card service data",
+    0x4: "initial access data", 0x5: "card issuer data",
+    0x6: "pre-issuing data", 0x7: "card capabilities", 0x8: "status indicator",
+}
+
+
+def _ats_bitrates(bits, mapping):
+    # mapping: {bitmask: divisor}; 106 kbit/s (divisor 1) is always supported
+    divs = [1] + [d for m, d in mapping.items() if bits & m]
+    return ", ".join(f"{d*106 if d == 1 else 106*d}k" for d in sorted(set(divs)))
+
+
+def decode_ats(ats: bytes):
+    """Decode an ISO14443-4 ATS into human-readable lines (interface bytes +
+    historical-bytes compact-TLV). Returns a list of strings to print."""
+    out = []
+    if len(ats) < 1:
+        return out
+    tl = ats[0]
+    out.append(f"TL  = {tl}  (ATS length {tl} bytes)")
+    ta = tb = tc = None
+    i = 1
+    if len(ats) >= 2:
+        t0 = ats[1]
+        i = 2
+        fsci = t0 & 0x0F
+        fsc = _FSCI_FSC[fsci] if fsci < len(_FSCI_FSC) else 256
+        out.append(f"T0  = 0x{t0:02X}  FSCI={fsci} (FSC={fsc})  "
+                   f"TA1:{'y' if t0 & 0x10 else 'n'} TB1:{'y' if t0 & 0x20 else 'n'} "
+                   f"TC1:{'y' if t0 & 0x40 else 'n'}")
+        if t0 & 0x10 and i < len(ats): ta = ats[i]; i += 1
+        if t0 & 0x20 and i < len(ats): tb = ats[i]; i += 1
+        if t0 & 0x40 and i < len(ats): tc = ats[i]; i += 1
+    if ta is not None:
+        same = "same divisor both dirs" if ta & 0x80 else "DR!=DS allowed"
+        ds = _ats_bitrates(ta, {0x40: 8, 0x20: 4, 0x10: 2})   # PICC->PCD
+        dr = _ats_bitrates(ta, {0x04: 8, 0x02: 4, 0x01: 2})   # PCD->PICC
+        out.append(f"TA1 = 0x{ta:02X}  {same}  DS(PICC->PCD): {ds}  DR(PCD->PICC): {dr}")
+    if tb is not None:
+        fwi = (tb >> 4) & 0x0F
+        sfgi = tb & 0x0F
+        fwt = 302 * (1 << fwi)        # ~ (256*16/fc) * 2^FWI, in us
+        out.append(f"TB1 = 0x{tb:02X}  FWI={fwi} (FWT~{fwt/1000:.1f} ms)  SFGI={sfgi}")
+    if tc is not None:
+        out.append(f"TC1 = 0x{tc:02X}  CID:{'y' if tc & 0x02 else 'n'}  NAD:{'y' if tc & 0x01 else 'n'}")
+    # historical bytes
+    hist = ats[i:]
+    if hist:
+        out.append(f"Historical: {hist.hex().upper()}")
+        if hist[0] == 0x80:          # compact-TLV
+            j = 1
+            while j < len(hist):
+                tag = hist[j] >> 4
+                ln = hist[j] & 0x0F
+                val = hist[j + 1:j + 1 + ln]
+                name = _CTLV_TAG.get(tag, f"tag {tag}")
+                txt = f"  [{name}] {val.hex().upper()}"
+                if val and all(0x20 <= b < 0x7F for b in val):
+                    txt += f"  \"{val.decode('ascii')}\""
+                out.append(txt)
+                j += 1 + ln
+        elif hist[0] == 0x00:
+            out.append("  status indicator / proprietary")
+        else:
+            out.append("  proprietary format")
+    return out
+
+
 @hf_14a.command("scan")
 class HF14AScan(ReaderRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
@@ -543,6 +615,8 @@ class HF14AScan(ReaderRequiredUnit):
                 print(f"- SAK  : {data_tag['sak'].hex().upper()}")
                 if len(data_tag["ats"]) > 0:
                     print(f"- ATS  : {data_tag['ats'].hex().upper()}")
+                    for line in decode_ats(data_tag["ats"]):
+                        print(f"    {line}")
                 if deep:
                     self.sak_info(data_tag)
                     # TODO: following checks cannot be done yet if multiple cards are present
