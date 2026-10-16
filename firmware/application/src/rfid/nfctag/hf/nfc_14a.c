@@ -75,6 +75,13 @@ static volatile bool m_relay_hold_fdt_max = false;
 void nfc_tag_14a_set_relay_hold(bool hold) {
     m_relay_hold_fdt_max = hold;
 }
+
+/* Max frame size (bytes incl CRC) the current reader advertised in its RATS
+ * FSDI; 0 until a RATS is seen. Used to size outbound I-block chaining. */
+static volatile uint16_t m_reader_fsd = 0;
+uint16_t nfc_tag_14a_get_reader_fsd(void) {
+    return m_reader_fsd;
+}
 // Receiving buffer
 static uint8_t m_nfc_rx_buffer[MAX_NFC_RX_BUFFER_SIZE] = { 0x00 };
 
@@ -676,6 +683,7 @@ void nfc_tag_14a_data_process(uint8_t *p_data) {
                     // Make sure the sub -packaging opens the support of ATS
                     if (auto_coll_res->ats->length > 0) {
                         // Take out FSD and return according to the maximum FSD
+                        m_reader_fsd = ats_fsdi_table[p_data[1] >> 4 & 0x0F];  // reader's max frame (for TX chaining)
                         uint8_t fsd = ats_fsdi_table[p_data[1] >> 4 & 0x0F] - 2;
                         // If the FSD is larger than the set of ATS, then returns normal ATS data, otherwise the data of the FSD limited length will be returned
                         uint8_t len = fsd >= auto_coll_res->ats->length ? auto_coll_res->ats->length : fsd;
