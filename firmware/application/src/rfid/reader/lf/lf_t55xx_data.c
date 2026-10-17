@@ -38,10 +38,20 @@ static bool t55xx_anchor_en;            // arm the edge capture after the downli
 static volatile bool t55xx_g_armed;     // edge callback records intervals
 static volatile uint32_t t55xx_edges;   // edges queued, debug
 
+// Gap width stats in CPU cycles (64 MHz), debug.
+static volatile uint32_t t55xx_gap_min, t55xx_gap_max, t55xx_gap_n;
+
 void t55xx_send_gap(uint32_t nus) {
+    uint32_t c0 = DWT->CYCCNT;
     stop_lf_125khz_radio();  // turn off 125khz field
     bsp_delay_us(nus);
     start_lf_125khz_radio();  // turn on 125khz field
+    uint32_t d = DWT->CYCCNT - c0;
+    if (nus == write_gap) {
+        if (t55xx_gap_n == 0 || d < t55xx_gap_min) t55xx_gap_min = d;
+        if (d > t55xx_gap_max) t55xx_gap_max = d;
+        t55xx_gap_n++;
+    }
 }
 
 void t55xx_tx_bit(uint8_t data) {
@@ -214,8 +224,15 @@ void t55xx_send_cmd(uint8_t opcode, uint32_t *passwd, uint8_t lock_bit, uint32_t
         t55xx_dl_build();
     }
 
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    t55xx_gap_n = 0;
+    t55xx_gap_max = 0;
+
     // request timing, and wait for the order operation to complete
     request_timeslot(37 * 1000, t55xx_timeslot_callback);
+    NRF_LOG_INFO("t55: gaps n=%u min=%uus max=%uus (target %uus)", t55xx_gap_n,
+                 t55xx_gap_min / 64, t55xx_gap_max / 64, write_gap);
 
     if (t55xx_read_mode) {
         // no EEPROM write to wait for; the tag is already answering
