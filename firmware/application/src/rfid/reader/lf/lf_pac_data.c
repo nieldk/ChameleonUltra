@@ -15,7 +15,7 @@
 #include "nrf_log_default_backends.h"
 NRF_LOG_MODULE_REGISTER();
 
-#define PAC_BUFFER_SIZE (6144)
+#define PAC_BUFFER_SIZE (3072)  // 6 KB; the whole heap is ~9 KB
 
 static circular_buffer cb;
 
@@ -41,6 +41,10 @@ static void uninit_pac_hw(void) {
 
 bool pac_read(uint8_t *data, uint32_t timeout_ms) {
     void *codec = pac.alloc();
+    if (!codec) {
+        NRF_LOG_ERROR("PAC: alloc failed");
+        return false;
+    }
     pac.decoder.start(codec, 0);
 
     // Start carrier first, then wait for T55XX POR (~5ms) before
@@ -49,7 +53,12 @@ bool pac_read(uint8_t *data, uint32_t timeout_ms) {
     start_lf_125khz_radio();
     bsp_delay_ms(10);
 
-    cb_init(&cb, PAC_BUFFER_SIZE, sizeof(uint16_t));
+    if (!cb_init(&cb, PAC_BUFFER_SIZE, sizeof(uint16_t))) {
+        NRF_LOG_ERROR("PAC: cb_init failed (heap exhaustion)");
+        stop_lf_125khz_radio();
+        pac.free(codec);
+        return false;
+    }
     init_pac_hw();
 
     bool ok = false;

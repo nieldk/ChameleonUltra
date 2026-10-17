@@ -17,7 +17,7 @@
 #include "nrf_log_default_backends.h"
 NRF_LOG_MODULE_REGISTER();
 
-#define HIDPROX_BUFFER_SIZE (6144)
+#define HIDPROX_BUFFER_SIZE (3072)  // 6 KB; the whole heap is ~9 KB
 
 static circular_buffer cb;
 
@@ -41,9 +41,17 @@ static void uninit_hidprox_hw(void) {
 
 bool hidprox_read(uint8_t *data, uint8_t format_hint, uint32_t timeout_ms) {
     void *codec = hidprox.alloc();
+    if (!codec) {
+        NRF_LOG_ERROR("HID: alloc failed");
+        return false;
+    }
     hidprox.decoder.start(codec, format_hint);
 
-    cb_init(&cb, HIDPROX_BUFFER_SIZE, sizeof(uint16_t));
+    if (!cb_init(&cb, HIDPROX_BUFFER_SIZE, sizeof(uint16_t))) {
+        NRF_LOG_ERROR("HID: cb_init failed (heap exhaustion)");
+        hidprox.free(codec);
+        return false;
+    }
     init_hidprox_hw();
     start_lf_125khz_radio();
 
