@@ -9,6 +9,7 @@ from cli_core import *  # noqa: F401,F403 - foundation: bases, groups, helpers, 
 import cli_core
 from fdxb_country import ISO3166_NUMERIC
 from canary_cmd import canary_cmd_name
+import hf14a_info
 # re-export everything cli_core defined so command bodies resolve names
 globals().update({k: v for k, v in vars(cli_core).items() if not k.startswith('__')})
 
@@ -558,22 +559,23 @@ class HF14AScan(ReaderRequiredUnit):
         prng_type = None
         magic_gen = None
         if self.cmd.mf1_detect_support():
-            # detect prng
-            print("- Mifare Classic technology")
             prng_type = self.cmd.mf1_detect_prng()
-            print(f"  # Prng: {MifareClassicPrngType(prng_type)}")
             # read-only magic-card probe (gen1a/gen3/gen4); see cli_hf_mf for
             # why gen2/CUID isn't (reliably) probeable here
             magic_gen = cli_hf_mf.identify_magic_gen(self.cmd)
             if magic_gen:
-                print(f"  # Magic: {CY}{magic_gen}{C0} backdoor detected")
+                print(f"Magic capabilities. {CY}{magic_gen}{C0} backdoor detected")
+            if prng_type == MifareClassicPrngType.STATIC:
+                print(f"Static nonce....... {CY}yes{C0}")
+            elif prng_type == MifareClassicPrngType.WEAK:
+                print(f"Prng detection..... {CG}weak{C0}")
+            else:
+                print(f"Prng detection..... {CY}hard{C0}")
         self._recommend(prng_type=prng_type, magic_gen=magic_gen)
 
     def sak_info(self, data_tag):
         # detect the technology in use based on SAK
         int_sak = data_tag["sak"][0]
-        if int_sak in type_id_SAK_dict:
-            print(f"- Guessed type(s) from SAK: {type_id_SAK_dict[int_sak]}")
         self._sak = int_sak
         self._has_ats = len(data_tag.get("ats", b"")) > 0
 
@@ -603,30 +605,126 @@ class HF14AScan(ReaderRequiredUnit):
         elif has_ats and sak in (0x20, None):
             print(f"  # {CY}Recommended:{C0} hf des chk --pattern1b")
 
+    def _get_version(self, tag):
+        """GetVersion for 4-byte or NXP 7-byte UIDs, like pm3. Returns the 7
+        HW bytes or None. L4 cards: 90 60 00 00 00 over T=CL; L3 cards: 0x60."""
+        uid = tag["uid"]
+        if not (len(uid) == 4 or (len(uid) == 7 and uid[0] == 0x04)):
+            return None
+        try:
+            if tag["ats"]:
+                resp = self.cmd.hf14a_4_reader_apdu(bytes([0x90, 0x60, 0, 0, 0]))
+                d = resp.data
+                if resp.status in (Status.SUCCESS, Status.HF_TAG_OK) and len(d) == 9:
+                    return bytes(d[:7])
+                return None
+            opt = {"activate_rf_field": 0, "wait_response": 1, "append_crc": 1,
+                   "auto_select": 1, "keep_rf_field": 0, "check_response_crc": 1}
+            d = self.cmd.hf14a_raw(options=opt, resp_timeout_ms=200, data=b"\x60")
+            return bytes(d[1:8]) if len(d) >= 8 else None
+        except Exception:
+            return None
+
+    def _types(self, tag, hw=None):
+        """Offline pm3-style identification. Returns (types, flags)."""
+        uid, sak = tag["uid"], tag["sak"][0]
+        atqa = int.from_bytes(tag["atqa"], byteorder="little")
+        ats = tag.get("ats", b"")
+        hist = b""
+        if ats:
+            # pm3 passes the history including the 2 CRC bytes (its ats_len
+            # counts them); the ==9 length checks depend on that
+            pos = 0
+            if len(ats) > 1 and ats[0] > 1:
+                pos = 2 + sum(1 for m in (0x10, 0x20, 0x40) if ats[1] & m)
+            hist = ats[pos:] + b"\x00\x00"
+        if len(uid) <= 4 or uid[0] == 0x04:
+            types, flags = hf14a_info.detect_types(sak, atqa, len(ats) > 0, hist, hw)
+            if flags & hf14a_info.MTULTRALIGHT and sak == 0x00 and not hw:
+                types = [type_id_SAK_dict[0x00]]
+            return types, flags
+        r = hf14a_info.multi_uid_types(uid, sak, atqa)
+        return r if r else ([], 0)
+
+    def _print_basic(self, data_tag, hw=None):
+        uid = data_tag["uid"]
+        print(f"- UID  : {uid.hex().upper()} {hf14a_info.uid_type(uid)}".rstrip())
+        print(
+            f"- ATQA : {data_tag['atqa'].hex().upper()} "
+            f"(0x{int.from_bytes(data_tag['atqa'], byteorder='little'):04x})"
+        )
+        print(f"- SAK  : {data_tag['sak'].hex().upper()}")
+        if len(uid) > 4:
+            print(f"- Manufacturer: {CY}{hf14a_info.manufacturer(uid[0])}{C0}")
+            label = hf14a_info.UID_LABELS.get((uid[0], uid[1]))
+            if label:
+                print(f"    {CY}{label}{C0}")
+        types, flags = self._types(data_tag, hw)
+        print("- Possible types:")
+        for t in types:
+            print(f"    {CY}{t}{C0}")
+        if not types:
+            print(f"    {CR}failed to fingerprint{C0}")
+        return flags
+
+    def _print_ats_deep(self, ats):
+        lines, hist, fl = hf14a_info.ats_lines(
+            ats, hl=lambda x: f"{CY}{x}{C0}", no=lambda x: f"{CR}{x}{C0}")
+        print(f"----------------------- {CC}ATS{C0} -----------------------")
+        for line in lines:
+            print(line)
+        if hist:
+            print(f"-------------------- {CC}Historical bytes{C0} ---------------------")
+            for line in hist:
+                print(line)
+        return fl
+
     def scan(self, deep=False):
         resp = self.cmd.hf14a_scan()
         if resp is not None:
+            if deep:
+                print(f"---------- {CC}ISO14443-A Information{C0} ----------")
             for data_tag in resp:
-                print(f"- UID  : {data_tag['uid'].hex().upper()}")
-                print(
-                    f"- ATQA : {data_tag['atqa'].hex().upper()} "
-                    f"(0x{int.from_bytes(data_tag['atqa'], byteorder='little'):04x})"
-                )
-                print(f"- SAK  : {data_tag['sak'].hex().upper()}")
+                hw = self._get_version(data_tag) if deep and len(resp) == 1 else None
+                flags = self._print_basic(data_tag, hw)
+                ats_flags = {}
                 if len(data_tag["ats"]) > 0:
-                    print(f"- ATS  : {data_tag['ats'].hex().upper()}")
-                    for line in decode_ats(data_tag["ats"]):
-                        print(f"    {line}")
+                    if deep:
+                        ats_flags = self._print_ats_deep(data_tag["ats"])
+                    else:
+                        print(f"- ATS  : {data_tag['ats'].hex().upper()}")
+                        for line in decode_ats(data_tag["ats"]):
+                            print(f"    {line}")
+                elif deep:
+                    print("Proprietary non iso14443-4 card found, RATS not supported")
                 if deep:
                     self.sak_info(data_tag)
                     # TODO: following checks cannot be done yet if multiple cards are present
                     if len(resp) == 1:
                         self.check_mf1_nt()
-                        # TODO: check for ATS support on 14A3 tags
+                        self._hints(flags, ats_flags, data_tag)
                     else:
                         print("Multiple tags detected, skipping deep tests...")
         else:
             print("ISO14443-A Tag no found")
+
+    def _hints(self, flags, ats_flags, tag):
+        """pm3 'Hint: Try ...' lines, mapped to the commands this CLI has."""
+        h = hf14a_info
+        uid = tag["uid"]
+        hints = []
+        if flags & h.MTDESFIRE:
+            hints.append("hf des info")
+        if flags & h.MTULTRALIGHT:
+            hints.append("hf mfu version")
+        if (flags & h.MTPLUS) or ats_flags.get("plus"):
+            hints.append("hf mfplus info")
+        if ats_flags.get("desfire"):
+            hints.append("hf des info")
+        if len(uid) > 4 and uid[0] == 0x02:
+            hints.append("hf st25ta info" if tag["ats"] else "hf mfu version")
+        for hint in dict.fromkeys(hints):
+            print(f"Hint: Try `{CY}{hint}{C0}`")
 
     def on_exec(self, args: argparse.Namespace):
         self.scan()

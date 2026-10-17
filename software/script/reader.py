@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-read_uid.py — Show the UID a ChameleonUltra relay has captured, displayed large.
+read_uid.py — Monitor a ChameleonUltra relay: show the captured UID, and when
+there isn't one yet, show *why* (BLE/role/sub state), so a stalled relay is
+visible instead of a blind row of dots.
 
-Connects to one of the two relay CUs and reads the relay's diagnostic state
-(STANDALONE_RELAY_DIAG) over USB/BLE. It does NOT scan RF and does NOT switch
-the device into reader mode, so it is safe to run against a live RELAY_CARD or
-RELAY_READER CU without disturbing the relay.
+Reads STANDALONE_RELAY_DIAG only — no RF, no mode change — so it is safe to run
+against a live RELAY_CARD or RELAY_READER CU.
 
 Usage:
-    py read_uid.py [--port COM3] [--ble] [--watch]
+    read_uid.py [--port COM3] [--ble] [--watch]
 
 Requirements:
-    py -m pip install pyfiglet
+    pip install pyfiglet          # optional, for the large UID banner
     Place this script alongside chameleon_com.py etc.
 """
 
@@ -29,7 +29,7 @@ try:
         return pyfiglet.figlet_format(text, font=font)
 except ImportError:
     print("[!] pyfiglet not found – falling back to plain text. "
-          "Run: py -m pip install pyfiglet", file=sys.stderr)
+          "Run: pip install pyfiglet", file=sys.stderr)
     def big(text: str, font: str = "big") -> str:
         return f"\n  {text}\n"
 
@@ -46,7 +46,13 @@ ANSI_RESET  = "\033[0m"
 ANSI_CYAN   = "\033[96m"
 ANSI_BOLD   = "\033[1m"
 
-_ROLE = {0: "RELAY_CARD (faces reader)", 1: "RELAY_READER (faces real card)"}
+# decode maps mirror `standalone status` in chameleon_cli_unit.py
+_ROLE  = {0: "RELAY_CARD (faces reader)", 1: "RELAY_READER (faces real card)"}
+_STATE = {0: "IDLE", 1: "STARTING", 2: "CONNECTING", 3: "DISCOVERING",
+          4: "NEGOTIATING", 5: "READY", 6: "ACTIVE", 7: "ERROR"}
+_SUB   = {0: "INIT", 1: "LINKING", 2: "CARD_AWAIT_IDENTITY", 3: "CARD_READY",
+          4: "CARD_AWAIT_RESPONSE", 5: "READER_SCAN", 6: "READER_READY",
+          7: "READER_RELAY", 8: "ERROR"}
 
 
 def format_uid(uid_bytes: bytes) -> str:
@@ -72,27 +78,72 @@ def clear_last_output():
     _last_line_count = 0
 
 
-def print_uid(uid_bytes: bytes, role: int) -> None:
+def _emit(lines):
     global _last_line_count
+    clear_last_output()
+    output = "\n".join(lines) + "\n"
+    sys.stdout.write(output)
+    sys.stdout.flush()
+    _last_line_count = len(lines)
+
+
+def print_uid(uid_bytes: bytes, role: int) -> None:
     uid_spaced  = format_uid(uid_bytes)
     uid_compact = format_uid_compact(uid_bytes)
-    uid_len     = uid_length_name(len(uid_bytes))
-
-    clear_last_output()
-
     lines = [""]
     lines.append("─" * 40)
     for l in big(uid_compact).splitlines():
         lines.append(ANSI_GREEN + l + ANSI_RESET)
     lines.append(f"  UID (hex)  :  {uid_spaced}")
-    lines.append(f"  Length     :  {uid_len}")
+    lines.append(f"  Length     :  {uid_length_name(len(uid_bytes))}")
     lines.append(f"  Source     :  {_ROLE.get(role, f'role {role}')}")
     lines.append("─" * 40)
+    _emit(lines)
 
-    output = "\n".join(lines) + "\n"
-    sys.stdout.write(output)
-    sys.stdout.flush()
-    _last_line_count = len(lines)
+
+def _hint(d: dict) -> str:
+    """One line saying where a UID-less relay is stuck (mirrors `standalone status`)."""
+    reports = d.get("adv_reports", 0)
+    hits    = d.get("relay_hits", 0)
+    state   = d.get("ble_state", 0)
+    role    = d.get("ble_role", 0)
+    if reports == 0:
+        return f"{ANSI_RED}scanning not working (RC522/scan side){ANSI_RESET}"
+    if hits == 0:
+        return f"{ANSI_YELLOW}no relay HELLO seen — other CU not armed or out of range{ANSI_RESET}"
+    if state < 5:
+        return f"{ANSI_YELLOW}HELLO seen but not connected — check both CUs armed{ANSI_RESET}"
+    if role == 1:
+        return f"{ANSI_YELLOW}no card on the READER (green) CU — present one{ANSI_RESET}"
+    return f"{ANSI_YELLOW}waiting for card identity from RELAY_READER{ANSI_RESET}"
+
+
+def print_state(d: dict) -> None:
+    role  = d.get("ble_role", 0)
+    state = d.get("ble_state", 0)
+    sub   = d.get("sub_state", 0)
+    lines = [""]
+    lines.append("─" * 40)
+    lines.append(f"  {ANSI_YELLOW}no UID captured yet{ANSI_RESET}")
+    lines.append(f"  role   :  {_ROLE.get(role, f'role {role}')}")
+    lines.append(f"  ble    :  {_STATE.get(state, f'UNKNOWN({state})')}"
+                 f"   sub={_SUB.get(sub, f'UNKNOWN({sub})')}")
+    lines.append(f"  counts :  {d.get('adv_reports', 0)} scan reports  "
+                 f"{d.get('relay_hits', 0)} relay hits")
+    lines.append(f"  -> {_hint(d)}")
+    lines.append("─" * 40)
+    _emit(lines)
+
+
+def print_unavailable() -> None:
+    lines = [""]
+    lines.append("─" * 40)
+    lines.append(f"  {ANSI_RED}relay diag unavailable{ANSI_RESET}")
+    lines.append("  The CU didn't answer STANDALONE_RELAY_DIAG. Either this")
+    lines.append("  firmware was built without STANDALONE_RELAY=1, or the CU")
+    lines.append("  is not in relay mode (standalone set-mode relay).")
+    lines.append("─" * 40)
+    _emit(lines)
 
 
 # ── device ──────────────────────────────────────────────────────────────────
@@ -118,31 +169,30 @@ def open_device(port, use_ble):
     return dev
 
 
-def relay_uid(cmd):
-    """Return (uid_bytes, role) the relay has captured, or (None, None).
-
-    Reads STANDALONE_RELAY_DIAG — relay state only, no RF, no mode change. A
-    UID is present once identity_rx (CARD side) or card_found (READER side) and
-    uid_len is set.
-    """
+def relay_diag(cmd):
+    """Return the relay diag dict, or None if the command isn't available."""
     try:
         d = cmd.relay_get_diag()
     except Exception:
-        return None, None
-    if not d:
-        return None, None
+        return None
+    return d or None
+
+
+def diag_uid(d: dict):
+    """(uid_bytes, role) if the relay has captured a UID, else (None, role)."""
+    role    = d.get("ble_role", 0)
     uid_len = d.get("uid_len", 0)
     have    = d.get("identity_rx", 0) or d.get("card_found", 0)
     if not have or not uid_len:
-        return None, None
+        return None, role
     uid = bytes(d.get("uid", [])[:uid_len])
-    return (uid if uid else None), d.get("ble_role", 0)
+    return (uid if uid else None), role
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
-        description="Show the UID a ChameleonUltra relay has captured, displayed large."
+        description="Monitor a ChameleonUltra relay: captured UID, or why there isn't one."
     )
     parser.add_argument("--port", "-p", metavar="DEV",
                         help="Serial port (e.g. COM3). Auto-detected if omitted.")
@@ -178,26 +228,28 @@ def main():
                   file=sys.stderr)
 
     print(f"{ANSI_GREEN}Connected.{ANSI_RESET}  Reading relay state "
-          "(arm RELAY on both CUs, present the card to the READER CU) …\n")
+          "(arm RELAY on both CUs, present the card to the READER CU) …")
 
-    last_uid = None
+    last_sig = object()
     try:
         while True:
-            uid, role = relay_uid(cmd)
-
-            if uid is None:
-                last_uid = None
-                if args.watch:
-                    print(".", end="", flush=True)
-                else:
-                    print(f"{ANSI_YELLOW}[!] No UID yet — relay not linked or no card "
-                          f"on the READER CU.{ANSI_RESET}")
+            d = relay_diag(cmd)
+            if d is None:
+                sig = "unavailable"
+                if sig != last_sig:
+                    print_unavailable()
+                    last_sig = sig
             else:
-                if uid != last_uid:
-                    if args.watch:
-                        print()
-                    print_uid(uid, role)
-                    last_uid = uid
+                uid, role = diag_uid(d)
+                if uid is not None:
+                    sig = ("uid", uid)
+                    if sig != last_sig:
+                        print_uid(uid, role)
+                        last_sig = sig
+                else:
+                    # re-render state each poll so counts/sub update live
+                    print_state(d)
+                    last_sig = ("state",)
 
             if not args.watch:
                 break
