@@ -416,11 +416,15 @@ Mifare Classic darkside recover key
 
 #### `hf mf dump`
 
-Mifare Classic dump tag
+Mifare Classic dump tag (pm3-style: .bin + .json)
 
-- `-t`, `--dump-file-type` — Dump file content type (choices: bin, hex)
-- `-f`, `--dump-file` — Dump file to write data from tag (required)
-- `-d`, `--dic` — Read keys (to communicate with tag to dump) from .dic format file (required)
+- `--mini` — MIFARE Classic Mini / S20
+- `--1k` — MIFARE Classic 1k / S50 (default)
+- `--2k` — MIFARE Classic/Plus 2k
+- `--4k` — MIFARE Classic 4k / S70
+- `-f`, `--file` — Dump filename base, or .bin/.json (default: hf-mf-<uid>-dump)
+- `-k`, `--keys` — Key dictionary file, one 12-hex-digit key per line (required)
+- `--ns` — No save to file
 
 #### `hf mf econfig`
 
