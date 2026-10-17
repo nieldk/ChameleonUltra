@@ -5,6 +5,7 @@ Indala, T55xx, and generic LF. Includes the LF *ArgsUnit base classes moved
 out of cli_core. Split out of chameleon_cli_unit; foundation imported
 explicitly from cli_core."""
 
+import os
 import re
 import struct
 import argparse
@@ -1225,6 +1226,71 @@ class LFT55xxWipe(ReaderRequiredUnit):
         )
 
 
+def _t55_load_dict(path):
+    """Parse a pm3-format password dictionary: one 8-hex-digit value per line,
+    '#' comments and blank lines ignored."""
+    out = []
+    with open(path) as f:
+        for line in f:
+            line = line.split("#", 1)[0].strip()
+            if line:
+                out.append(line)
+    return out
+
+
+_T55_DEFAULT_DICT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "dictionaries", "t55xx_default_pwds.dic"
+)
+
+
+@lf_t55xx.command("bruteforce")
+class LFT55xxBruteforce(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "Try a password dictionary against a T55xx block. A wrong password gets no "
+            "response from the tag (PWD-gated read), so a stable 32-bit block decode is "
+            "proof the password was accepted. Default dictionary is pm3's "
+            "t55xx_default_pwds.dic (126 known cloner/default keys)."
+        )
+        parser.add_argument("-b", "--block", type=int, default=0, metavar="<0-7>")
+        parser.add_argument("--rf", type=int, default=None, metavar="<n>")
+        parser.add_argument("--pg1", action="store_true", help="Target page 1")
+        parser.add_argument(
+            "--dict",
+            type=str,
+            default=None,
+            metavar="<file>",
+            help="Password dictionary file (default: built-in t55xx_default_pwds.dic)",
+        )
+        _t55_add_dl_args(parser)
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        dl = _t55_dl(args)
+        rf = args.rf or _T55_DETECTED["rf"] or 32
+        path = args.dict or _T55_DEFAULT_DICT
+        try:
+            cands = _t55_load_dict(path)
+        except OSError as e:
+            print(f"{CR} - can't open {path}: {e}{C0}")
+            return
+        print(f"{CY} - trying {len(cands)} password(s) against block {args.block} (RF/{rf})...{C0}")
+        for i, cand in enumerate(cands):
+            try:
+                pwd = _t55_hex4(cand, "dict entry")
+            except ArgsParserError:
+                continue
+            bits = _t55_decode_bits(self.cmd, args.block, rf, pwd, args.pg1, modulation=0, dl=dl)
+            period, unit = _t55_stream_block(bits) if bits else (None, None)
+            if period == 32:
+                print(f"{CG} - password found: {cand.upper()} (block {args.block} = {int(unit, 2):08X}){C0}")
+                return
+            if (i + 1) % 20 == 0:
+                print(f"   ...{i + 1}/{len(cands)}")
+        print(f"{CR} - no password in the dictionary unlocked block {args.block}.{C0}")
+
+
 @lf_t55xx.command("detect")
 class LFT55xxDetect(ReaderRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
@@ -1245,12 +1311,25 @@ class LFT55xxDetect(ReaderRequiredUnit):
             metavar="<hex>",
             help="Password, 4 hex bytes (if block 0 is read-protected)",
         )
+        parser.add_argument(
+            "-o",
+            "--override",
+            action="store_true",
+            help="override safety check",
+        )
         _t55_add_dl_args(parser)
         return parser
 
     def on_exec(self, args: argparse.Namespace):
         dl = _t55_dl(args)
         pwd = _t55_hex4(args.pwd, "pwd") if args.pwd else None
+        if pwd is not None and not args.override:
+            # A password read on a tag without PWD is a plain write of pwd<<1 to block 0.
+            print(f"{CR} - Refusing: detect with a password can overwrite block 0 of a "
+                  f"tag that has no PWD bit.{C0}")
+            print(f"{CY}   Run `lf t55xx detect` without -p first. Use -o only if you "
+                  f"know the tag is password-protected.{C0}")
+            return
         # The winner is the rate+modulation whose block-0 decode is a clean 32-bit
         # word AND self-consistent: block 0 must say <that modulation> at the very
         # rate we read it at. That consistency check is what makes a hit trustworthy.
