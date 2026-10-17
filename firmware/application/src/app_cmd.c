@@ -1062,8 +1062,8 @@ static data_frame_tx_t *cmd_processor_em410x_scan(uint16_t cmd, uint16_t status,
 #define LF_SEARCH_PER_PROTO_MS      180u
 #define LF_SEARCH_DEFAULT_MS        500u   /* module default restored after the sweep */
 
-/* Feed the WDT and log the stage so a stalled scan shows in the boot log. */
-#define LF_SEARCH_STAGE(name) do { bsp_wdt_feed(); NRF_LOG_INFO("lf_search: %s", name); } while (0)
+/* Feed the WDT and flush a stage line: deferred logs are lost if a scan blocks. */
+#define LF_SEARCH_STAGE(name) do { bsp_wdt_feed(); NRF_LOG_INFO("lf_search: %s", name); NRF_LOG_FLUSH(); } while (0)
 
 static data_frame_tx_t *cmd_processor_lf_search(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     (void)status; (void)length; (void)data;
