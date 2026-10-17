@@ -338,7 +338,7 @@ static data_frame_tx_t *cmd_processor_get_device_model(uint16_t cmd, uint16_t st
 
 
 static data_frame_tx_t *cmd_processor_change_device_mode(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    NRF_LOG_INFO("mode: change req len=%d", length);
+    NRF_LOG_INFO("mode: change req len=%d [diag4]", length);
     NRF_LOG_FLUSH();
     if ((length != 1) || (data[0] > 1)) {
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
@@ -1076,6 +1076,7 @@ static data_frame_tx_t *cmd_processor_lf_search(uint16_t cmd, uint16_t status, u
     uint16_t out_len = 0;
     uint8_t  st = STATUS_LF_TAG_NO_FOUND;
 
+    LF_SEARCH_STAGE("start [diag4]");
     set_scan_tag_timeout(LF_SEARCH_PER_PROTO_MS);
 
     // DIAGNOSTIC: Indala moved to run FIRST in the sweep, before anything
