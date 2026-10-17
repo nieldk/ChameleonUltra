@@ -2204,102 +2204,92 @@ class HFMFView(MF1AuthArgsUnit):
 
 
 @hf_mf.command("dump")
-class HFMFDump(MF1AuthArgsUnit):
+class HFMFDump(ReaderRequiredUnit):
+    # pm3-equivalent of CmdHF14AMfDump: card-size aware, dictionary key search
+    # per sector, saves .bin + .json ('mfc v2') like pm3_save_mf_dump always
+    # does. Auto-names from the UID when -f is omitted, like pm3's dump.
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
-        parser.description = "Mifare Classic dump tag"
-        parser.add_argument(
-            "-t",
-            "--dump-file-type",
-            type=str,
-            required=False,
-            help="Dump file content type",
-            choices=["bin", "hex"],
-        )
-        parser.add_argument(
-            "-f",
-            "--dump-file",
-            type=argparse.FileType("wb"),
-            required=True,
-            help="Dump file to write data from tag",
-        )
-        parser.add_argument(
-            "-d",
-            "--dic",
-            type=argparse.FileType("r"),
-            required=True,
-            help="Read keys (to communicate with tag to dump) from .dic format file",
-        )
+        parser.description = "Mifare Classic dump tag (pm3-style: .bin + .json)"
+        size_group = parser.add_mutually_exclusive_group()
+        size_group.add_argument("--mini", action="store_const", dest="maxSectors", const=5,
+                                 help="MIFARE Classic Mini / S20")
+        size_group.add_argument("--1k", action="store_const", dest="maxSectors", const=16,
+                                 help="MIFARE Classic 1k / S50 (default)")
+        size_group.add_argument("--2k", action="store_const", dest="maxSectors", const=32,
+                                 help="MIFARE Classic/Plus 2k")
+        size_group.add_argument("--4k", action="store_const", dest="maxSectors", const=40,
+                                 help="MIFARE Classic 4k / S70")
+        parser.add_argument("-f", "--file", type=str, default=None, metavar="<fn>",
+                             help="Dump filename base, or .bin/.json (default: hf-mf-<uid>-dump)")
+        parser.add_argument("-k", "--keys", type=argparse.FileType("r"), required=True,
+                             metavar="<fn>", help="Key dictionary file, one 12-hex-digit key per line")
+        parser.add_argument("--ns", action="store_true", help="No save to file")
         return parser
 
     def on_exec(self, args: argparse.Namespace):
-        # check dump type
-        if args.dump_file_type is None:
-            if args.dump_file.name.endswith(".bin"):
-                content_type = "bin"
-            elif args.dump_file.name.endswith(".eml"):
-                content_type = "hex"
-            else:
-                raise Exception(
-                    "Unknown file format, Specify content type with -t option"
-                )
-        else:
-            content_type = args.dump_file_type
+        max_sectors = args.maxSectors or 16
+        keys = [bytes.fromhex(line.strip()) for line in args.keys if line.strip()]
+        if not keys:
+            print(f"{CR} - Key dictionary is empty.{C0}")
+            return
 
-        # read keys from file
-        keys = [bytes.fromhex(line[:-1]) for line in args.dic.readlines()]
-
-        # data to write from dump file
-        buffer = bytearray()
-
-        # iterate over sectors
-        for s in range(16):
-            # find working keys for this sector (both A and B)
-            type_a = type_b = None
+        blocks = {}
+        for s in range(max_sectors):
             key_a = key_b = None
             for key in keys:
-                if type_b is None:
-                    try:
-                        self.cmd.mf1_read_one_block(4 * s, MfcKeyType.B, key)
-                        type_b = MfcKeyType.B
-                        key_b = key
-                    except UnexpectedResponseError:
-                        pass
-                if type_a is None:
+                if key_a is None:
                     try:
                         self.cmd.mf1_read_one_block(4 * s, MfcKeyType.A, key)
-                        type_a = MfcKeyType.A
                         key_a = key
                     except UnexpectedResponseError:
                         pass
-                if type_a is not None and type_b is not None:
+                if key_b is None:
+                    try:
+                        self.cmd.mf1_read_one_block(4 * s, MfcKeyType.B, key)
+                        key_b = key
+                    except UnexpectedResponseError:
+                        pass
+                if key_a is not None and key_b is not None:
                     break
-            if type_a is None and type_b is None:
-                raise Exception(f"No key found for sector {s}")
+            if key_a is None and key_b is None:
+                print(f"{CR} - No key found for sector {s}, filling with zeros.{C0}")
 
-            typ = type_a if type_a is not None else type_b
-            key = key_a if type_a is not None else key_b
-            # iterate over blocks
+            typ, key = (MfcKeyType.A, key_a) if key_a is not None else (MfcKeyType.B, key_b)
             for b in range(3):
-                block_data = self.cmd.mf1_read_one_block(4 * s + b, typ, key)
-                if content_type == "bin":
-                    buffer.extend(block_data)
-                elif content_type == "hex":
-                    buffer.extend(block_data.hex().encode("utf-8"))
-
-            # sector trailer: fill key bytes from known keys
-            trailer = bytearray(self.cmd.mf1_read_one_block(4 * s + 3, typ, key))
+                block_num = 4 * s + b
+                try:
+                    blocks[block_num] = bytes(self.cmd.mf1_read_one_block(block_num, typ, key)) \
+                        if key is not None else bytes(16)
+                except UnexpectedResponseError:
+                    blocks[block_num] = bytes(16)
+            trailer_num = 4 * s + 3
+            try:
+                trailer = bytearray(self.cmd.mf1_read_one_block(trailer_num, typ, key)) \
+                    if key is not None else bytearray(16)
+            except UnexpectedResponseError:
+                trailer = bytearray(16)
             if key_a is not None:
                 trailer[0:6] = key_a
             if key_b is not None:
                 trailer[10:16] = key_b
-            trailer = bytes(trailer)
-            if content_type == "bin":
-                buffer.extend(trailer)
-            elif content_type == "hex":
-                buffer.extend(trailer.hex().encode("utf-8"))
-        # write buffer to file
-        args.dump_file.write(buffer)
+            blocks[trailer_num] = bytes(trailer)
+
+        raw = b"".join(blocks[i] for i in sorted(blocks))
+        if args.ns:
+            print(f" - {len(blocks)} blocks read, not saved (--ns).")
+            return
+
+        resp = self.cmd.hf14a_scan()
+        uid, atqa, sak = (resp[0]["uid"], resp[0]["atqa"], resp[0]["sak"][0]) if resp else (b"", b"", 0)
+        base = args.file or f"hf-mf-{uid.hex()}-dump"
+        if base.lower().endswith((".bin", ".json")):
+            base = base.rsplit(".", 1)[0]
+        with open(base + ".bin", "wb") as fh:
+            fh.write(raw)
+        with open(base + ".json", "w") as fh:
+            json.dump(chameleon_pm3.mfc_blocks_to_json(uid, atqa, sak, blocks), fh, indent=4)
+        print(f" {CG}[+]{C0}  Card dumped to {base}.bin and {base}.json (Proxmark3 'mfc v2')")
 
 
 def _gen3_raw(cmd, apdu: bytes):
