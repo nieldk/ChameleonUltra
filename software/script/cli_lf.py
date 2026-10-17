@@ -701,7 +701,9 @@ class LFSearch(ReaderRequiredUnit):
         if tag_type == TagSpecificType.Indala and len(id_bytes) == 8:
             print(f" {indala_format_output(bytes(id_bytes[:8]))}")
             return
-        if tag_type == TagSpecificType.EM410X and len(id_bytes) == 5:
+        if tag_type in (TagSpecificType.EM410X, TagSpecificType.EM410X_16,
+                        TagSpecificType.EM410X_32, TagSpecificType.EM410X_64) \
+                and len(id_bytes) == 5:
             _print_em410x(id_bytes)
             return
         if tag_type == TagSpecificType.Viking and len(id_bytes) == 4:
