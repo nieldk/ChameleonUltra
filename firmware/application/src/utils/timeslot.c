@@ -8,6 +8,7 @@
 #include "nrf_log_default_backends.h"
 NRF_LOG_MODULE_REGISTER();
 
+#include "app_timer.h"
 #include "timeslot.h"
 
 
@@ -19,6 +20,8 @@ static nrf_radio_signal_callback_return_param_t signal_callback_return_param;
 static timeslot_callback_t  m_callback = NULL;
 static volatile bool m_is_timeslot_running = false;
 static volatile bool m_is_timeslot_working = false;
+static volatile uint32_t m_ts_blocked;
+static volatile uint32_t m_ts_canceled;
 
 
 /**@brief Configure next timeslot event in earliest configuration
@@ -56,8 +59,13 @@ static void t55xx_soc_evt_handler(uint32_t evt_id, void *p_context) {
             //NRF_LOG_INFO("NRF_EVT_RADIO_SESSION_CLOSED");
             m_is_timeslot_working = false;
             break;
-        case NRF_EVT_RADIO_BLOCKED: // Fall through
+        case NRF_EVT_RADIO_BLOCKED:
+            m_ts_blocked++;
+            err_code = request_next_event_earliest();
+            APP_ERROR_CHECK(err_code);
+            break;
         case NRF_EVT_RADIO_CANCELED:
+            m_ts_canceled++;
             err_code = request_next_event_earliest();
             APP_ERROR_CHECK(err_code);
             break;
@@ -101,6 +109,9 @@ void request_timeslot(uint32_t time_us, timeslot_callback_t callback) {
 
     m_slot_length = time_us;    // The time for configuration application
     m_callback    = callback;   // The configuration time application is applied to the operation after execution
+    m_ts_blocked  = 0;
+    m_ts_canceled = 0;
+    uint32_t t_req = app_timer_cnt_get();
 
     // Open the session
     err_code = sd_radio_session_open(radio_callback);
@@ -114,6 +125,8 @@ void request_timeslot(uint32_t time_us, timeslot_callback_t callback) {
     while (!m_is_timeslot_working) {
         NRF_LOG_PROCESS();
     }
+
+    uint32_t t_grant = app_timer_cnt_get();
 
     // Enter the critical point
     NVIC_DisableIRQ(RADIO_IRQn);
@@ -133,6 +146,7 @@ void request_timeslot(uint32_t time_us, timeslot_callback_t callback) {
     NVIC_EnableIRQ(GPIOTE_IRQn);
     NVIC_EnableIRQ(RTC1_IRQn);
     NVIC_EnableIRQ(MWU_IRQn);
+    uint32_t t_done = app_timer_cnt_get();
 
     // Close the session and wait for the closure to complete
     err_code = sd_radio_session_close();
@@ -143,6 +157,9 @@ void request_timeslot(uint32_t time_us, timeslot_callback_t callback) {
 
     // The task process is completed and the ending work
     m_is_timeslot_running = false;
+    NRF_LOG_INFO("ts: wait=%u run=%u ticks blocked=%u canceled=%u",
+                 (t_grant - t_req) & 0xFFFFFF, (t_done - t_grant) & 0xFFFFFF,
+                 m_ts_blocked, m_ts_canceled);
 }
 
 /**

@@ -36,6 +36,7 @@ static struct {
 static bool t55xx_read_mode;            // reading: skip the EEPROM wait
 static bool t55xx_anchor_en;            // arm the edge capture after the downlink
 static volatile bool t55xx_g_armed;     // edge callback records intervals
+static volatile uint32_t t55xx_edges;   // edges queued, debug
 
 void t55xx_send_gap(uint32_t nus) {
     stop_lf_125khz_radio();  // turn off 125khz field
@@ -280,6 +281,7 @@ static void t55xx_edge_cb(void) {
         return;  // downlink edges, before the capture anchor
     }
     uint16_t val = (cnt > 0xff) ? 0xff : (uint16_t)(cnt & 0xff);
+    t55xx_edges++;
     cb_push_back(&t55xx_g_cb, &val);
 }
 
@@ -342,13 +344,17 @@ uint16_t t55xx_read(uint8_t rf_n, uint8_t mode, uint8_t modulation, uint8_t down
 
     /* Modes 0/1: edge front-end. Match em410x_read ordering — hook the edge
      * front-end BEFORE the field. */
-    cb_init(&t55xx_g_cb, T55XX_CB_SIZE, sizeof(uint16_t));
+    if (!cb_init(&t55xx_g_cb, T55XX_CB_SIZE, sizeof(uint16_t))) {
+        NRF_LOG_ERROR("t55: cb_init failed (heap exhaustion)");
+        return 0;
+    }
     register_rio_callback(t55xx_edge_cb);
     lf_125khz_radio_gpiote_enable();
     start_lf_125khz_radio();
     bsp_delay_ms(2);  /* antenna settle, like raw_read_to_buffer */
 
     t55xx_g_armed = false;
+    t55xx_edges = 0;
     if (downlink) {
         /* data=NULL, lock_bit=0 => READ downlink; field left on, no RESET.
          * The timeslot callback arms the capture right after the last gap. */
@@ -420,6 +426,8 @@ uint16_t t55xx_read(uint8_t rf_n, uint8_t mode, uint8_t modulation, uint8_t down
     }
 
     t55xx_g_armed = false;
+    NRF_LOG_INFO("t55: dl=%u mode=%u rf=%u edges=%u items=%u",
+                 downlink, mode, t55xx_g_rf_n, t55xx_edges, n);
     bsp_return_timer(p_at);
     lf_125khz_radio_gpiote_disable();
     unregister_rio_callback();
