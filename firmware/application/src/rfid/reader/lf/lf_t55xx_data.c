@@ -17,8 +17,7 @@
 #include "nrf_log_default_backends.h"
 NRF_LOG_MODULE_REGISTER();
 
-const uint32_t start_gap = 50 * 8;     // 50Tc: reads, more power-up/reset margin for weakly coupled tags
-const uint32_t start_gap_write = 30 * 8;  // 30Tc: writes, mid-spec (T5577 allows 8..50Tc; gap overhead must stay below the limit)
+const uint32_t start_gap = 30 * 8;     // 30Tc
 const uint32_t write_gap = 9 * 8;      // 9Tc
 const uint32_t gap_sep_zero = 24 * 8;  // 24Tc
 const uint32_t gap_sep_one = 54 * 8;   // 54Tc
@@ -137,7 +136,7 @@ static void t55xx_dl_send(void) {
 
 // t55xx high-precision timing control function
 static void t55xx_timeslot_tx(void) {
-    t55xx_send_gap(t55xx_read_mode ? start_gap : start_gap_write);
+    t55xx_send_gap(start_gap);
 
     if (t55xx_dl_mode != T55XX_DL_FIXED) {
         t55xx_dl_send();
