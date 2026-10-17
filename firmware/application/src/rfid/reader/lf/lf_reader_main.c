@@ -137,6 +137,9 @@ uint8_t scan_fdxb(uint8_t *data) {
  * Try reset t55XX tag passwords by enumerating old passwords.
  */
 static void try_reset_t55xx_passwd(uint32_t new_passwd, uint8_t *old_passwds, uint8_t old_passwd_count) {
+    // Open write of block 7 first: a tag without PWD has no password, and the
+    // config written later sets PWD, so block 7 must already hold new_passwd.
+    t55xx_send_cmd(T5577_OPCODE_PAGE0, NULL, 0, &new_passwd, 7);
     for (uint8_t i = 0; i < old_passwd_count; i++) {
         uint32_t old_passwd = bytes_to_num(old_passwds + i * 4, 4);
         t55xx_reset_passwd(old_passwd, new_passwd);
