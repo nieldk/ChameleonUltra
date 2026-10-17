@@ -74,3 +74,76 @@ def ioprox_line(ver, fc, cn, raw8, hl=lambda s: s, ok=lambda s: s, bad=lambda s:
     crc = int("".join(map(str, bits[54:62])), 2)
     st = ok("( ok )") if crc == calc else bad(f"( fail ) 0x{crc:02X} != 0x{calc:02X}")
     return f"IO Prox - {hl(f'XSF({ver:02d}){fc:02x}:{cn:05d}')}, Raw: {raw8.hex()} {st}"
+
+
+def indala_lines(raw, fc, cn, hl=lambda s: s):
+    """pm3 demodIndala() 64-bit block. raw: 8-byte frame, fc/cn: Fmt 26 fields."""
+    bit = lambda n: (raw[n // 8] >> (7 - n % 8)) & 1
+    uid1 = int.from_bytes(raw[:4], "big")
+    uid2 = int.from_bytes(raw[4:], "big")
+    par = (bit(34) << 1) | bit(38)
+    p1 = 0
+    for n, sh in ((3, 8), (6, 5), (8, 4), (9, 3), (11, 1), (16, 6), (19, 7),
+                  (20, 10), (21, 2), (22, 0), (24, 9)):
+        p1 |= bit(32 + n) << sh
+    heden = 0
+    for n, w in ((8, 1), (10, 2), (14, 4), (15, 8), (12, 16), (28, 32), (3, 64),
+                 (11, 128), (19, 256), (26, 512), (17, 1024), (18, 2048),
+                 (20, 4096), (13, 8192), (7, 16384), (23, 32768)):
+        if bit(31 + n):
+            heden += w
+    return [
+        f"Indala (len 64)  Raw: {hl(raw.hex().upper())}",
+        f"Fmt {hl('26')} FC: {hl(fc)} Card: {hl(cn)} Parity: {hl(f'{par >> 1}{par & 1}')}",
+        "",
+        "Possible de-scramble patterns",
+        f"  Printed....... __{p1:04d}__  ( 0x{p1:X} )",
+        f"  Internal ID... {uid2 & 0x7FFFFFFF}",
+        f"  Heden-2L...... {heden}",
+    ]
+
+
+def fdxb_lines(frame, country, country_name, crc_ok, hl=lambda s: s,
+               ok=lambda s: s, bad=lambda s: s):
+    """pm3 'lf fdxb reader' verbose block. frame: 13-byte frame (LSB-first
+    fields, CRC-16 at 8..9, 24-bit extended data at 10..12)."""
+    v = int.from_bytes(frame[0:8], "little")
+    national = v & ((1 << 38) - 1)
+    data_blk = (v >> 48) & 1
+    rudi = (v >> 49) & 1
+    reserved = (v >> 50) & 0x1F
+    user = (v >> 55) & 0x1F
+    repl = (v >> 60) & 0x7
+    animal = (v >> 63) & 1
+    crc = int.from_bytes(frame[8:10], "little")
+    ext = int.from_bytes(frame[10:13], "little")
+    yes = lambda b, s="": hl("True") + s if b else "False"
+    out = [
+        "FDX-B / ISO 11784/5 Animal",
+        f"Animal ID......... {hl(f'{country:03d}-{national:012d}')}",
+        f"National Code..... {hl(f'{national:012d}')} ( 0x{national:X} )",
+        f"Country Code...... {hl(f'{country:03d}')} - {country_name}",
+        f"Reserved/RFU...... {reserved} (0x{reserved:04X})",
+        f"Animal bit set?... {yes(animal)}",
+        f"Data block?....... {yes(data_blk)}  ( 0x{ext:X} )",
+        f"RUDI bit?......... {yes(rudi, ' ( advanced transponder )')}",
+        f"User Info?........ {user} {'( RFU )' if user == 0 else ''}".rstrip(),
+        f"Replacement No?... {repl} {'( RFU )' if repl == 0 else ''}".rstrip(),
+        f"CRC-16............ 0x{crc:04X} ( {ok('ok') if crc_ok else bad('fail')} )",
+        f"Raw............... {hl(bytes(frame[:13]).hex())}",
+    ]
+    temp = ext & 0xFF
+    par = (ext >> 8) & 1
+    if par == (0 if bin(temp).count("1") & 1 else 1) and not ext & 0xE00:
+        f = 74 + temp * 0.2
+        out += ["", "Bio-Thermo detected",
+                f"  temperature... {hl(f'{f:.1f}')} F / {hl(f'{(f - 32) / 1.8:.1f}')} C"]
+    return out
+
+
+def idteck_line(frame, info, hl=lambda s: s, ok=lambda s: s, bad=lambda s: s):
+    """pm3 'IDTECK Tag Found' line. info: _idteck_frame_info() result."""
+    cid = info["card_id"]
+    st = ok("ok") if info["checksum_valid"] else bad("fail")
+    return (f"IDTECK Tag Found: Card ID {hl(cid)} ( 0x{cid:06X} ) "
+            f"Raw: {bytes(frame).hex().upper()}  chksum 0x{info['checksum']:02X} ( {st} )")

@@ -11,6 +11,7 @@ import argparse
 import sys
 
 import lf_info
+from fdxb_country import country_code_name
 from cli_core import (
     jablotron_card_id,
     pac_encode_raw,
@@ -42,6 +43,7 @@ from cli_core import (
     color_string,
     data,
     describe_country_code,
+    indala_decode_raw,
     hw,
     lf,
     lf_em_410x,
@@ -476,20 +478,7 @@ class LFFdxbRead(ReaderRequiredUnit):
         if not resp or not hasattr(resp, "parsed") or resp.parsed is None:
             return False
         tag_type, frame = resp.parsed
-        # Parse the 13-byte destuffed frame
-        v = int.from_bytes(frame[0:8], "little")
-        national = v & ((1 << 38) - 1)
-        country = (v >> 38) & 0x3FF
-        app_bit = (v >> 48) & 1
-        animal = (v >> 63) & 1
-        crc = int.from_bytes(frame[8:10], "little")
-
-        print(" FDX-B (ISO 11784/11785)")
-        print(f"  Country    : {describe_country_code(country)}")
-        print(f"  National ID: {color_string((CG, str(national)))}")
-        print(f"  Animal flag: {animal}")
-        print(f"  App bit    : {app_bit}")
-        print(f"  CRC-16     : 0x{crc:04x}")
+        _print_fdxb(frame)
         if show_raw:
             print(f"  Raw frame  : {frame.hex()}")
         return True
@@ -640,6 +629,30 @@ def _print_jablotron(code):
     print(f"Printed: {color_string((CG, lf_info.jablotron_printed(code)))}")
 
 
+def _print_indala(raw):
+    fc, cn = indala_decode_raw(bytes(raw[:8]))
+    for line in lf_info.indala_lines(bytes(raw[:8]), fc, cn,
+                                     hl=lambda x: color_string((CG, str(x)))):
+        print(line)
+
+
+def _print_fdxb(frame):
+    frame = bytes(frame[:13])
+    country = (int.from_bytes(frame[0:8], "little") >> 38) & 0x3FF
+    for line in lf_info.fdxb_lines(
+            frame, country, country_code_name(country), _fdxb_crc_ok(frame),
+            hl=lambda x: color_string((CG, str(x))),
+            ok=lambda x: color_string((CG, x)), bad=lambda x: color_string((CR, x))):
+        print(line)
+
+
+def _print_idteck(frame):
+    frame = bytes(frame[:8])
+    print(lf_info.idteck_line(
+        frame, _idteck_frame_info(frame), hl=lambda x: color_string((CG, str(x))),
+        ok=lambda x: color_string((CG, x)), bad=lambda x: color_string((CR, x))))
+
+
 def _print_ioprox(ver, fc, cn, raw8):
     print(lf_info.ioprox_line(
         ver, fc, cn, bytes(raw8), hl=lambda x: color_string((CG, x)),
@@ -673,16 +686,15 @@ class LFSearch(ReaderRequiredUnit):
                 print(f" OEM: {color_string((CG, oem))}")
             print(f" CN: {color_string((CG, cn))}")
             return
-        # IDTECK hands back the whole 64-bit frame; show the decoded card id
-        # alongside it rather than only the raw hex.
         if tag_type == TagSpecificType.IDTECK and len(id_bytes) == 8:
-            info = _idteck_frame_info(bytes(id_bytes))
-            cid = info["card_id"]
-            chk = info["checksum"]
-            print(f"IDTECK: {color_string((CG, id_bytes.hex().upper()))}")
-            print(f" Card ID: {color_string((CG, f'{cid} [0x{cid:06X}]'))}")
-            if not info["checksum_valid"]:
-                print(f" Checksum: {color_string((CY, f'0x{chk:02X} mismatch'))}")
+            _print_idteck(id_bytes)
+            return
+        if tag_type == TagSpecificType.FDXB and len(id_bytes) >= 13:
+            _print_fdxb(id_bytes)
+            return
+        if tag_type == TagSpecificType.EM410X_ELECTRA and len(id_bytes) == 13:
+            _print_em410x(id_bytes[:5])
+            print(f"Electra epilogue   : {bytes(id_bytes[5:]).hex().upper()}")
             return
         # PAC hands back the 8 ASCII characters of the card number, not a binary
         # id; hexdumping them prints the ASCII codes. Show the same fields as
@@ -699,7 +711,7 @@ class LFSearch(ReaderRequiredUnit):
         # Indala hands back the raw 64-bit frame; show the decoded FC/CN
         # alongside it rather than only the raw hex, same as 'lf indala read'.
         if tag_type == TagSpecificType.Indala and len(id_bytes) == 8:
-            print(f" {indala_format_output(bytes(id_bytes[:8]))}")
+            _print_indala(id_bytes)
             return
         if tag_type in (TagSpecificType.EM410X, TagSpecificType.EM410X_16,
                         TagSpecificType.EM410X_32, TagSpecificType.EM410X_64) \
@@ -2918,7 +2930,7 @@ class LFIndalaRead(ReaderRequiredUnit):
         if resp.status != Status.LF_TAG_OK:
             print(f" Indala scan failed: {resp.status}")
             return
-        print(f" {indala_format_output(resp.data[:8])}")
+        _print_indala(resp.data)
 
 
 @lf_indala.command("write")
