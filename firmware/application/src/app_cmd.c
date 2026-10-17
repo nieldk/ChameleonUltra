@@ -1056,6 +1056,9 @@ static data_frame_tx_t *cmd_processor_em410x_scan(uint16_t cmd, uint16_t status,
 #define LF_SEARCH_PER_PROTO_MS      180u
 #define LF_SEARCH_DEFAULT_MS        500u   /* module default restored after the sweep */
 
+/* Feed the WDT and log the stage so a stalled scan shows in the boot log. */
+#define LF_SEARCH_STAGE(name) do { bsp_wdt_feed(); NRF_LOG_INFO("lf_search: %s", name); } while (0)
+
 static data_frame_tx_t *cmd_processor_lf_search(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     (void)status; (void)length; (void)data;
     /* Response is always [tag_type(2, big-endian), id...]. The two reader
@@ -1074,6 +1077,7 @@ static data_frame_tx_t *cmd_processor_lf_search(uint16_t cmd, uint16_t status, u
     // running after other protocol scans within this same command, or
     // happens regardless of position. Not a proposed permanent fix.
     set_scan_tag_timeout(LF_SEARCH_DEFAULT_MS);
+    LF_SEARCH_STAGE("indala");
     if (st != STATUS_LF_TAG_OK && scan_indala(buf + 2) == STATUS_LF_TAG_OK) {
         buf[0] = (uint8_t)(TAG_TYPE_INDALA >> 8); buf[1] = (uint8_t)TAG_TYPE_INDALA;
         out_len = 2 + LF_INDALA_TAG_ID_SIZE; st = STATUS_LF_TAG_OK;
@@ -1082,32 +1086,39 @@ static data_frame_tx_t *cmd_processor_lf_search(uint16_t cmd, uint16_t status, u
 
     /* --- readers that already prefix [tag_type, id] --- */
 #if defined(PROJECT_CHAMELEON_ULTRA)
+    LF_SEARCH_STAGE("fdxb");
     if (st != STATUS_LF_TAG_OK && scan_fdxb(buf) == STATUS_LF_TAG_OK) {
         out_len = 2 + FDXB_DATA_SIZE; st = STATUS_LF_TAG_OK;
     }
 #endif
     /* --- readers that write only the raw id: scan into buf+2, prepend type --- */
+    LF_SEARCH_STAGE("hidprox");
     if (st != STATUS_LF_TAG_OK && scan_hidprox(buf + 2, 0) == STATUS_LF_TAG_OK) {
         buf[0] = (uint8_t)(TAG_TYPE_HID_PROX >> 8); buf[1] = (uint8_t)TAG_TYPE_HID_PROX;
         out_len = 2 + LF_HIDPROX_TAG_ID_SIZE; st = STATUS_LF_TAG_OK;
     }
+    LF_SEARCH_STAGE("ioprox");
     if (st != STATUS_LF_TAG_OK && scan_ioprox(buf + 2, 0) == STATUS_LF_TAG_OK) {
         buf[0] = (uint8_t)(TAG_TYPE_IOPROX >> 8); buf[1] = (uint8_t)TAG_TYPE_IOPROX;
         out_len = 2 + LF_IOPROX_TAG_ID_SIZE; st = STATUS_LF_TAG_OK;
     }
+    LF_SEARCH_STAGE("pac");
     if (st != STATUS_LF_TAG_OK && scan_pac(buf + 2) == STATUS_LF_TAG_OK) {
         buf[0] = (uint8_t)(TAG_TYPE_PAC >> 8); buf[1] = (uint8_t)TAG_TYPE_PAC;
         out_len = 2 + LF_PAC_TAG_ID_SIZE; st = STATUS_LF_TAG_OK;
     }
+    LF_SEARCH_STAGE("jablotron");
     if (st != STATUS_LF_TAG_OK && scan_jablotron(buf + 2) == STATUS_LF_TAG_OK) {
         buf[0] = (uint8_t)(TAG_TYPE_JABLOTRON >> 8); buf[1] = (uint8_t)TAG_TYPE_JABLOTRON;
         out_len = 2 + LF_JABLOTRON_TAG_ID_SIZE; st = STATUS_LF_TAG_OK;
     }
+    LF_SEARCH_STAGE("viking");
     if (st != STATUS_LF_TAG_OK && scan_viking(buf + 2) == STATUS_LF_TAG_OK) {
         buf[0] = (uint8_t)(TAG_TYPE_VIKING >> 8); buf[1] = (uint8_t)TAG_TYPE_VIKING;
         out_len = 2 + LF_VIKING_TAG_ID_SIZE; st = STATUS_LF_TAG_OK;
     }
     /* em410x reader prefixes [tag_type, id] itself; EM410x last (loosest match). */
+    LF_SEARCH_STAGE("em410x");
     if (st != STATUS_LF_TAG_OK && scan_em410x(buf) == STATUS_LF_TAG_OK) {
         tag_specific_type_t tt = (buf[0] << 8) | buf[1];
         out_len = 2 + ((tt == TAG_TYPE_EM410X_ELECTRA) ? LF_EM410X_ELECTRA_TAG_ID_SIZE : LF_EM410X_TAG_ID_SIZE);
@@ -1115,6 +1126,7 @@ static data_frame_tx_t *cmd_processor_lf_search(uint16_t cmd, uint16_t status, u
     }
 
     set_scan_tag_timeout(LF_SEARCH_DEFAULT_MS);
+    LF_SEARCH_STAGE("done");
 
     if (st != STATUS_LF_TAG_OK) {
         return data_frame_make(cmd, STATUS_LF_TAG_NO_FOUND, 0, NULL);
