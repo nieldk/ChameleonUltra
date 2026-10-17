@@ -1243,15 +1243,17 @@ _T55_DEFAULT_DICT = os.path.join(
 )
 
 
-@lf_t55xx.command("bruteforce")
-class LFT55xxBruteforce(ReaderRequiredUnit):
+@lf_t55xx.command("chk")
+class LFT55xxChk(ReaderRequiredUnit):
+    # pm3 naming: `chk` is the dictionary attack, `bruteforce` is a sequential
+    # numeric range sweep (-s/-e). Don't conflate the two — not built here yet.
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
         parser.description = (
-            "Try a password dictionary against a T55xx block. A wrong password gets no "
-            "response from the tag (PWD-gated read), so a stable 32-bit block decode is "
-            "proof the password was accepted. Default dictionary is pm3's "
-            "t55xx_default_pwds.dic (126 known cloner/default keys)."
+            "Dictionary attack on a T55xx block. A wrong password gets no response from "
+            "the tag (PWD-gated read), so a stable 32-bit block decode is proof the "
+            "password was accepted. Default dictionary is pm3's t55xx_default_pwds.dic "
+            "(126 known cloner/default keys)."
         )
         parser.add_argument("-b", "--block", type=int, default=0, metavar="<0-7>")
         parser.add_argument("--rf", type=int, default=None, metavar="<n>")
@@ -1324,12 +1326,14 @@ class LFT55xxDetect(ReaderRequiredUnit):
         dl = _t55_dl(args)
         pwd = _t55_hex4(args.pwd, "pwd") if args.pwd else None
         if pwd is not None and not args.override:
-            # A password read on a tag without PWD is a plain write of pwd<<1 to block 0.
-            print(f"{CR} - Refusing: detect with a password can overwrite block 0 of a "
-                  f"tag that has no PWD bit.{C0}")
-            print(f"{CY}   Run `lf t55xx detect` without -p first. Use -o only if you "
-                  f"know the tag is password-protected.{C0}")
-            return
+            # Matches pm3: detect can't confirm the PWD bit before reading (finding
+            # the config IS its job), and a password frame on an unprotected tag
+            # lands as a write. So warn and drop the password rather than send it,
+            # same as upstream CmdT55xxDetect - never abort.
+            print(f"{CY} - Safety check: Could not confirm PWD bit is set. Detecting "
+                  f"without password...{C0}")
+            print(f"{CY}   Hint: use -o to force detect with the password.{C0}")
+            pwd = None
         # The winner is the rate+modulation whose block-0 decode is a clean 32-bit
         # word AND self-consistent: block 0 must say <that modulation> at the very
         # rate we read it at. That consistency check is what makes a hit trustworthy.
