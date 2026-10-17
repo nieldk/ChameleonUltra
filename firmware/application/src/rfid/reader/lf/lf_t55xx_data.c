@@ -347,7 +347,7 @@ uint16_t t55xx_read(uint8_t rf_n, uint8_t mode, uint8_t modulation, uint8_t down
      * the field held on after the addressed downlink instead of self-managed. */
     if (mode == 2) {
         start_lf_125khz_radio();
-        bsp_delay_ms(2);
+        bsp_delay_ms(10);  // T5577 power-on delay before the downlink
         if (downlink) {
             t55xx_read_mode = true;
             t55xx_send_cmd(opcode, pwd_ptr, 0, NULL, block);  /* field stays on */
@@ -368,7 +368,7 @@ uint16_t t55xx_read(uint8_t rf_n, uint8_t mode, uint8_t modulation, uint8_t down
     register_rio_callback(t55xx_edge_cb);
     lf_125khz_radio_gpiote_enable();
     start_lf_125khz_radio();
-    bsp_delay_ms(2);  /* antenna settle, like raw_read_to_buffer */
+    bsp_delay_ms(10);  /* T5577 power-on delay before the downlink */
 
     t55xx_g_armed = false;
     t55xx_edges = 0;
