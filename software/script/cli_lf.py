@@ -10,6 +10,7 @@ import struct
 import argparse
 import sys
 
+import lf_info
 from cli_core import (
     jablotron_card_id,
     pac_encode_raw,
@@ -20,6 +21,7 @@ from cli_core import (
     ArgumentParserNoExit,
     BaseCLIUnit,
     C0,
+    CC,
     CG,
     CR,
     CY,
@@ -620,6 +622,30 @@ class LFFdxbClone(LFFdxbWriteT55xx):
         print(f" - FDX-B clone complete: {data_bytes.hex().upper()}")
 
 
+def _print_em410x(id_bytes):
+    for line in lf_info.em410x_lines(
+            bytes(id_bytes[:5]), hl=lambda x: color_string((CG, x)),
+            hd=lambda x: color_string((CC, x))):
+        print(line)
+
+
+def _print_viking(id_bytes):
+    raw = lf_info.viking_raw(bytes(id_bytes[:4]))
+    print(f"Viking - Card {color_string((CG, bytes(id_bytes[:4]).hex().upper()))}, Raw: {raw.hex().upper()}")
+
+
+def _print_jablotron(code):
+    raw = lf_info.jablotron_raw(bytes(code[:5]))
+    print(f"Jablotron - Card: {color_string((CG, str(jablotron_card_id(code))))}, Raw: {raw.hex().upper()}")
+    print(f"Printed: {color_string((CG, lf_info.jablotron_printed(code)))}")
+
+
+def _print_ioprox(ver, fc, cn, raw8):
+    print(lf_info.ioprox_line(
+        ver, fc, cn, bytes(raw8), hl=lambda x: color_string((CG, x)),
+        ok=lambda x: color_string((CG, x)), bad=lambda x: color_string((CR, x))))
+
+
 @lf.command("search")
 class LFSearch(ReaderRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
@@ -675,6 +701,19 @@ class LFSearch(ReaderRequiredUnit):
         if tag_type == TagSpecificType.Indala and len(id_bytes) == 8:
             print(f" {indala_format_output(bytes(id_bytes[:8]))}")
             return
+        if tag_type == TagSpecificType.EM410X and len(id_bytes) == 5:
+            _print_em410x(id_bytes)
+            return
+        if tag_type == TagSpecificType.Viking and len(id_bytes) == 4:
+            _print_viking(id_bytes)
+            return
+        if tag_type == TagSpecificType.Jablotron and len(id_bytes) == 5:
+            _print_jablotron(id_bytes)
+            return
+        if tag_type == TagSpecificType.ioProx and len(id_bytes) >= 12:
+            ver, fc, cn, raw8 = struct.unpack(">BBH8s", id_bytes[:12])
+            _print_ioprox(ver, fc, cn, raw8)
+            return
         print(
             f"{color_string((CG, str(tag_type)))}: {color_string((CG, id_bytes.hex()))}"
         )
@@ -689,6 +728,9 @@ class LFEMRead(ReaderRequiredUnit):
 
     def on_exec(self, args: argparse.Namespace):
         data = self.cmd.em410x_scan()
+        if len(data[1]) == 5:
+            _print_em410x(data[1])
+            return
         print(f"{TagSpecificType(data[0])}: {color_string((CG, data[1].hex()))}")
 
 
@@ -1979,11 +2021,8 @@ class LFIOProxRead(LFIOProxReadArgsUnit, ReaderRequiredUnit):
 
     def on_exec(self, args: argparse.Namespace):
         ver, fc, cn, raw8, *futureuse = self.cmd.ioprox_scan()
-        print(f"ioProx XSF format")
-        print(f"   Version: {color_string((CG, ver))}")
+        _print_ioprox(ver, fc, cn, raw8)
         print(f"   Facility: {color_string((CG, f'{fc} [0x{fc:02X}]'))}")
-        print(f"   ID: {color_string((CY, cn))}")
-        print(f"   Raw: {color_string((CY, raw8.hex().upper()))}")
 
 
 @lf_ioprox.command("write")
@@ -2256,7 +2295,7 @@ class LFVikingRead(ReaderRequiredUnit):
 
     def on_exec(self, args: argparse.Namespace):
         id = self.cmd.viking_scan()
-        print(f" Viking: {color_string((CG, id.hex()))}")
+        _print_viking(id)
 
 
 @lf_viking.command("write")
@@ -2621,9 +2660,7 @@ class LFJablotronRead(ReaderRequiredUnit):
 
     def on_exec(self, args: argparse.Namespace):
         id = self.cmd.jablotron_scan()
-        card_id = jablotron_card_id(id)
-        print(f" Jablotron ID: {color_string((CG, id.hex().upper()))}")
-        print(f" Card number:  {color_string((CY, str(card_id)))}")
+        _print_jablotron(id)
 
 
 @lf_jablotron.command("write")
