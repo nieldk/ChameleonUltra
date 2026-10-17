@@ -762,8 +762,11 @@ class LFEM410xWriteT55xx(LFEMIdArgsUnit, ReaderRequiredUnit):
                 "Writing to T55xx supports 5-byte EM410X (10 hex) or 13-byte Electra (26 hex) IDs."
             )
         id_bytes = bytes.fromhex(id_hex)
-        self.cmd.em410x_write_to_t55xx(id_bytes)
-        print(f" - EM410x ID write done: {id_hex}")
+        resp = self.cmd.em410x_write_to_t55xx(id_bytes)
+        if resp.status != Status.LF_TAG_OK:
+            print(f"{CR} - EM410x write failed: status {resp.status}{C0}")
+            return
+        print(f" - EM410x ID write sent: {id_hex} (verify with `lf em 410x read`)")
 
 
 def _t55_hex4(s: str, name: str) -> bytes:
