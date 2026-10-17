@@ -54,23 +54,27 @@ static void uninit_saadc_hw_passive(void) {
     lf_125khz_radio_saadc166_disable();
 }
 
-bool raw_read_to_buffer_ex(uint8_t *data, size_t maxlen, uint32_t timeout_ms, size_t *outlen, bool manage_field) {
+// passive: TIMER3 166.67 kHz sampling; otherwise 125 kHz, triggered by the carrier PWM.
+static bool raw_read_core(uint8_t *data, size_t maxlen, uint32_t timeout_ms, size_t *outlen,
+                          bool manage_field, bool passive) {
     *outlen = 0;
 
-    cb_init(&cb, CIRCULAR_BUFFER_SIZE, sizeof(uint16_t));
+    if (!cb_init(&cb, CIRCULAR_BUFFER_SIZE, sizeof(uint16_t))) {
+        return false;
+    }
 
-    if (manage_field) {
+    if (passive) {
+        init_saadc_hw_passive();
+    } else {
         init_saadc_hw();
+    }
+    if (manage_field) {
         start_lf_125khz_radio();
 
         /* Wait for antenna to settle before capturing.
          * The LC circuit rings for ~400µs on field startup, then takes
          * another ~800µs to reach steady state. Skip 2ms to be safe. */
         bsp_delay_ms(2);
-    } else {
-        /* Passive: field stays off, sampling driven by the independent
-         * TIMER3 166.67kHz path instead of the field PWM's own trigger. */
-        init_saadc_hw_passive();
     }
 
     autotimer *p_at = bsp_obtain_timer(0);
@@ -87,13 +91,25 @@ bool raw_read_to_buffer_ex(uint8_t *data, size_t maxlen, uint32_t timeout_ms, si
     bsp_return_timer(p_at);
     if (manage_field) {
         stop_lf_125khz_radio();
-        uninit_saadc_hw();
-    } else {
+    }
+    if (passive) {
         uninit_saadc_hw_passive();
+    } else {
+        uninit_saadc_hw();
     }
     cb_free(&cb);
 
     return true;
+}
+
+bool raw_read_to_buffer_ex(uint8_t *data, size_t maxlen, uint32_t timeout_ms, size_t *outlen, bool manage_field) {
+    // Field off (!manage_field) needs the independent 166.67 kHz sample clock.
+    return raw_read_core(data, maxlen, timeout_ms, outlen, manage_field, !manage_field);
+}
+
+bool raw_read_to_buffer_field_on(uint8_t *data, size_t maxlen, uint32_t timeout_ms, size_t *outlen) {
+    // Caller already runs the field: keep the 125 kHz carrier-synchronous sampling.
+    return raw_read_core(data, maxlen, timeout_ms, outlen, false, false);
 }
 
 bool raw_read_to_buffer(uint8_t *data, size_t maxlen, uint32_t timeout_ms, size_t *outlen) {

@@ -337,7 +337,7 @@ uint16_t t55xx_read(uint8_t rf_n, uint8_t mode, uint8_t modulation, uint8_t down
             t55xx_read_mode = false;
         }
         size_t outlen = 0;
-        raw_read_to_buffer_ex(out, max_out, timeout_ms, &outlen, false);
+        raw_read_to_buffer_field_on(out, max_out, timeout_ms, &outlen);
         stop_lf_125khz_radio();
         return (uint16_t)outlen;
     }

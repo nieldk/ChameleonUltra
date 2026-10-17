@@ -28,6 +28,7 @@ bool fdxb_read(uint8_t *data, uint32_t timeout_ms);
 
 bool raw_read_to_buffer(uint8_t *data, size_t maxlen, uint32_t timeout_ms, size_t *outlen);
 bool raw_read_to_buffer_ex(uint8_t *data, size_t maxlen, uint32_t timeout_ms, size_t *outlen, bool manage_field);
+bool raw_read_to_buffer_field_on(uint8_t *data, size_t maxlen, uint32_t timeout_ms, size_t *outlen);
 
 #ifdef __cplusplus
 }
