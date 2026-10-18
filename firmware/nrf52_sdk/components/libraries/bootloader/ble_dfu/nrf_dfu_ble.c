@@ -147,8 +147,9 @@ static uint32_t advertising_init(uint8_t adv_flags, ble_gap_adv_params_t const *
     /* Must leave room for the manufacturer-data block appended below, or the
      * name alone fills the 31-byte legacy PDU and sd_ble_gap_adv_set_configure()
      * rejects the whole thing - advertising never starts, silently. */
-    uint16_t actual_device_name_length = BLE_GAP_ADV_SET_DATA_SIZE_MAX - APP_ADV_DATA_HEADER_SIZE
-                                        - APP_ADV_MFG_DATA_SIZE;
+    uint16_t const name_budget = BLE_GAP_ADV_SET_DATA_SIZE_MAX - APP_ADV_DATA_HEADER_SIZE
+                                - APP_ADV_MFG_DATA_SIZE;
+    uint16_t actual_device_name_length = name_budget;
 
     /* This needs to be static because of SoftDevice API requirements. */
     static uint8_t m_enc_advdata[BLE_GAP_ADV_SET_DATA_SIZE_MAX];
@@ -179,6 +180,13 @@ static uint32_t advertising_init(uint8_t adv_flags, ble_gap_adv_params_t const *
     if (err_code != NRF_SUCCESS)
     {
         return err_code;
+    }
+    /* If the real name is longer than name_budget, the SoftDevice reports the
+     * full name length here (not what actually fit in the buffer) - clamp or
+     * we rebuild the same overflow one line down. */
+    if (actual_device_name_length > name_budget)
+    {
+        actual_device_name_length = name_budget;
     }
     // Set GAP device in advertising data.
     m_enc_advdata[7] = actual_device_name_length + 1; // (actual_length + ADV_AD_TYPE_FIELD_SIZE(1))
