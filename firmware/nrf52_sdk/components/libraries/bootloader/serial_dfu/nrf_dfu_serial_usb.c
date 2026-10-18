@@ -205,7 +205,9 @@ static void cdc_acm_user_ev_handler(app_usbd_class_inst_t const * p_inst,
     {
         case APP_USBD_CDC_ACM_USER_EVT_PORT_OPEN:
         {
-            ret_code = app_usbd_cdc_acm_read(&m_app_cdc_acm, m_rx_buf, 1);
+            // read_any takes whatever is already buffered (up to EPSIZE) in one
+            // shot instead of forcing a 1-byte transfer per USB packet.
+            ret_code = app_usbd_cdc_acm_read_any(&m_app_cdc_acm, m_rx_buf, NRF_DRV_USBD_EPSIZE);
             NRF_LOG_WARNING("Could not read from CDC. Error: 0x%x.", ret_code);
         } break;
 
@@ -213,8 +215,8 @@ static void cdc_acm_user_ev_handler(app_usbd_class_inst_t const * p_inst,
         {
             do
             {
-                on_rx_complete(&m_serial, m_rx_buf, 1);
-                ret_code = app_usbd_cdc_acm_read(&m_app_cdc_acm, m_rx_buf, 1);
+                on_rx_complete(&m_serial, m_rx_buf, app_usbd_cdc_acm_rx_size(&m_app_cdc_acm));
+                ret_code = app_usbd_cdc_acm_read_any(&m_app_cdc_acm, m_rx_buf, NRF_DRV_USBD_EPSIZE);
             } while (ret_code == NRF_SUCCESS);
         } break;
 
