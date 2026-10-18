@@ -391,11 +391,12 @@ class SecureDFU:
             window = data[offset : offset + max_size]
             is_final = tolerate_reset and idx == len(offsets) - 1
             crc_backup = crc
-            for _ in range(self.retries):
+            for attempt in range(self.retries):
                 self.create_object(obj_type, len(window))
                 try:
                     crc = self._stream(window, crc, offset)
-                except DFUTransferError:
+                except DFUTransferError as e:
+                    print(f"  [dfu] resync at offset {offset} (attempt {attempt + 1}): {e}")
                     self.select_object(obj_type)  # resync
                     crc = crc_backup
                     continue
