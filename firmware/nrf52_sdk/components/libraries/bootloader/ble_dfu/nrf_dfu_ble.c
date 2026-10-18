@@ -71,6 +71,7 @@ NRF_LOG_MODULE_REGISTER();
 #define APP_BLE_CONN_CFG_TAG                1                                                       /**< A tag identifying the SoftDevice BLE configuration. */
 
 #define APP_ADV_DATA_HEADER_SIZE            9                                                       /**< Size of encoded advertisement data header (not including device name). */
+#define APP_ADV_MFG_DATA_SIZE               14                                                      /**< Trailing manufacturer-data block (len+type+company+MAC+devtype+hwver+fwver) appended after the name. */
 #define APP_ADV_DURATION                    BLE_GAP_ADV_TIMEOUT_GENERAL_UNLIMITED                   /**< The advertising duration in units of 10 milliseconds. This is set to @ref BLE_GAP_ADV_TIMEOUT_GENERAL_UNLIMITED so that the advertisement is done as long as there there is a call to @ref dfu_transport_close function.*/
 
 #define GATT_HEADER_LEN                     3                                                       /**< GATT header length. */
@@ -143,7 +144,11 @@ NRF_BALLOC_DEF(m_buffer_pool, MAX_DFU_PKT_LEN, MAX_DFU_BUFFERS);
 static uint32_t advertising_init(uint8_t adv_flags, ble_gap_adv_params_t const * const p_adv_params)
 {
     uint32_t err_code;
-    uint16_t actual_device_name_length = BLE_GAP_ADV_SET_DATA_SIZE_MAX - APP_ADV_DATA_HEADER_SIZE;
+    /* Must leave room for the manufacturer-data block appended below, or the
+     * name alone fills the 31-byte legacy PDU and sd_ble_gap_adv_set_configure()
+     * rejects the whole thing - advertising never starts, silently. */
+    uint16_t actual_device_name_length = BLE_GAP_ADV_SET_DATA_SIZE_MAX - APP_ADV_DATA_HEADER_SIZE
+                                        - APP_ADV_MFG_DATA_SIZE;
 
     /* This needs to be static because of SoftDevice API requirements. */
     static uint8_t m_enc_advdata[BLE_GAP_ADV_SET_DATA_SIZE_MAX];
