@@ -1243,10 +1243,67 @@ _T55_DEFAULT_DICT = os.path.join(
 )
 
 
+@lf_t55xx.command("bruteforce")
+class LFT55xxBruteforce(ReaderRequiredUnit):
+    # pm3 naming: `chk` is the dictionary attack, `bruteforce` is this sequential
+    # numeric range sweep (-s/-e). Same block-7 default and -s/-e/--rN surface as
+    # pm3's `lf t55xx bruteforce` (cmdlft55xx.c); "found" reuses this fork's own
+    # chk heuristic (stable 32-bit decode) rather than pm3's config-block parse.
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "Sequential password range search on a T55xx block. Same accept test as "
+            "`chk`: a wrong password gets no response (PWD-gated read), so a stable "
+            "32-bit block decode is proof the password was accepted.\n"
+            "WARNING: may brick a non-password-protected chip — a password frame "
+            "sent to a tag with no password set is interpreted as a write."
+        )
+        parser.add_argument("-s", "--start", type=str, default="00000000", metavar="<hex>",
+                            help="search start password (4 hex bytes, default 00000000)")
+        parser.add_argument("-e", "--end", type=str, default="FFFFFFFF", metavar="<hex>",
+                            help="search end password (4 hex bytes, default FFFFFFFF)")
+        parser.add_argument("-b", "--block", type=int, default=7, metavar="<0-7>",
+                            help="block to probe (default 7, the config block)")
+        parser.add_argument("--rf", type=int, default=None, metavar="<n>")
+        parser.add_argument("--pg1", action="store_true", help="Target page 1")
+        _t55_add_dl_args(parser)
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        dl = _t55_dl(args)
+        rf = args.rf or _T55_DETECTED["rf"] or 32
+        start = int.from_bytes(_t55_hex4(args.start, "start"), "big")
+        end = int.from_bytes(_t55_hex4(args.end, "end"), "big")
+        if start > end:
+            print(f"{CR} - start password is larger than end password.{C0}")
+            return
+        total = end - start + 1
+        print(f"{CY} - searching [{start:08X} -> {end:08X}] ({total} candidates) "
+              f"against block {args.block} (RF/{rf})... Ctrl-C to stop.{C0}")
+        curr = start
+        try:
+            while True:
+                pwd = curr.to_bytes(4, "big")
+                bits = _t55_decode_bits(self.cmd, args.block, rf, pwd, args.pg1, modulation=0, dl=dl)
+                period, unit = _t55_stream_block(bits) if bits else (None, None)
+                if period == 32:
+                    print(f"{CG} - password found: {curr:08X} (block {args.block} = {int(unit, 2):08X}){C0}")
+                    return
+                if (curr - start + 1) % 256 == 0:
+                    print(f"   ...{curr - start + 1}/{total} ({curr:08X})")
+                if curr == end:
+                    break
+                curr += 1
+        except KeyboardInterrupt:
+            print(f"\n{CY} - stopped, last tried: {curr:08X}{C0}")
+            return
+        print(f"{CR} - bruteforce failed, last tried: {curr:08X}.{C0}")
+
+
 @lf_t55xx.command("chk")
 class LFT55xxChk(ReaderRequiredUnit):
     # pm3 naming: `chk` is the dictionary attack, `bruteforce` is a sequential
-    # numeric range sweep (-s/-e). Don't conflate the two — not built here yet.
+    # numeric range sweep (-s/-e), implemented above as LFT55xxBruteforce.
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
         parser.description = (
@@ -1370,6 +1427,239 @@ class LFT55xxDetect(ReaderRequiredUnit):
             f"use `lf fdxb`), or FSK/PSK (not wired into t55xx read), or a rate not tried. "
             f"`lf t55xx read -b 0 --adc` shows the raw envelope.{C0}"
         )
+
+
+def _t55_read_word(cmd, block, rf, pwd, page1, dl):
+    """Read a T55xx block and return its 32-bit value, or None if the stream
+    never settles to a clean 32-bit period. Same accept test as chk/bruteforce,
+    reused by protect/recoverpw/p1detect below."""
+    bits = _t55_decode_bits(cmd, block, rf, pwd, page1, modulation=0, dl=dl)
+    period, unit = _t55_stream_block(bits) if bits else (None, None)
+    return int(unit, 2) if period == 32 else None
+
+
+@lf_t55xx.command("config")
+class LFT55xxConfig(BaseCLIUnit):
+    # pm3's `lf t55xx config` is a big surface (FSK/PSK/NRZ demod selection,
+    # offset, q5/st toggles) because it feeds pm3's raw-sample demod chain.
+    # This fork has no raw-sample demod (Manchester/biphase only, see the
+    # phreakbyte-vs-pm3 gap list), so there's nothing to port for most of
+    # that. What IS portable: the same implicit-default pattern pm3 uses —
+    # `detect` already fills _T55_DETECTED and every other t55xx command
+    # falls back to it when --rf/--r0../-p are omitted. This just makes that
+    # state visible and directly settable, instead of only through `detect`.
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "View or set the default rf/downlink/password used by other t55xx "
+            "commands when their own flags are omitted (normally filled by `detect`)."
+        )
+        parser.add_argument("--rf", type=int, default=None, metavar="<n>",
+                            help="default bitrate divisor RF/n")
+        parser.add_argument("-p", "--pwd", type=str, default=None, metavar="<hex>",
+                            help="default password, 4 hex bytes")
+        parser.add_argument("--maxblock", type=int, default=None, metavar="<0-7>")
+        _t55_add_dl_args(parser)
+        parser.add_argument("--clear", action="store_true", help="reset to defaults")
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        if args.clear:
+            _T55_DETECTED.update({"rf": None, "mod": "manchester", "maxblock": 7,
+                                  "pwd_set": False, "pwd": None, "dl": 0})
+            print(f"{CY} - t55xx defaults cleared.{C0}")
+            return
+        if args.rf is not None:
+            _T55_DETECTED["rf"] = args.rf
+        if args.pwd is not None:
+            _T55_DETECTED["pwd"] = _t55_hex4(args.pwd, "pwd")
+            _T55_DETECTED["pwd_set"] = True
+        if args.maxblock is not None:
+            _T55_DETECTED["maxblock"] = args.maxblock
+        if sum((args.r0, args.r1, args.r2, args.r3)) > 1:
+            raise ArgsParserError("Error multiple downlink encoding")
+        if args.r0:
+            _T55_DETECTED["dl"] = 0
+        elif args.r1:
+            _T55_DETECTED["dl"] = 1
+        elif args.r2:
+            _T55_DETECTED["dl"] = 2
+        elif args.r3:
+            _T55_DETECTED["dl"] = 3
+        d = _T55_DETECTED
+        print(f"{CY} --- t55xx config -----------------------------{C0}")
+        print(f"   rf         : {d['rf'] if d['rf'] is not None else '(unset, read defaults to 32)'}")
+        print(f"   modulation : {d['mod']}")
+        print(f"   max block  : {d['maxblock']}")
+        print(f"   password   : {d['pwd'].hex().upper() if d['pwd'] else '(none)'}"
+              f" (set: {'yes' if d['pwd_set'] else 'no'})")
+        print(f"   downlink   : {_T55_DL_NAMES[d['dl']]}")
+
+
+@lf_t55xx.command("p1detect")
+class LFT55xxP1Detect(ReaderRequiredUnit):
+    # Simplified vs pm3's tryDetectP1(): pm3 runs FSK/ASK/NRZ/PSK clock
+    # detection and demod before checking the ISO11784/85 trace preamble.
+    # This fork's t55xx read path only has Manchester and biphase demod (no
+    # FSK/PSK/NRZ - same gap as `detect` above), so this is a presence probe,
+    # not a preamble match: page 1 answering with ANY clean, stable 32-bit
+    # period is good evidence of a populated page 1 (animal-tag trace data,
+    # most commonly), but unlike pm3 it is not confirmed as that trace format.
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "Probe for data on T55xx page 1 (the ISO11784/85 animal-tag trace block "
+            "on many T5577s). Presence only, via Manchester/biphase - this fork has "
+            "no FSK/PSK/NRZ demod, so pm3's trace-preamble match isn't ported; a hit "
+            "here means page 1 answers cleanly, not that it decodes as ISO11784/85."
+        )
+        _t55_add_dl_args(parser)
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        dl = _t55_dl(args)
+        rf = _T55_DETECTED["rf"] or 32
+        for modname, modcode in (("manchester", 0), ("biphase", 1)):
+            bits = _t55_decode_bits(self.cmd, 1, rf, None, True, modulation=modcode, dl=dl)
+            period, unit = _t55_stream_block(bits) if bits else (None, None)
+            if period == 32:
+                print(f"{CG} - page 1 data found ({modname}, block 1 = {int(unit, 2):08X}).{C0}")
+                print(f"{CY}   Not confirmed as ISO11784/85 trace - FSK/PSK/NRZ demod "
+                      f"isn't ported, so pm3's preamble check couldn't run.{C0}")
+                return
+        print(f"{CR} - no page 1 data found (tried manchester/biphase).{C0}")
+
+
+@lf_t55xx.command("protect")
+class LFT55xxProtect(ReaderRequiredUnit):
+    # Matches pm3's t55xxProtect(): read block 0, set the PWD bit, write the
+    # new password to block 7, verify, write the modified block 0, verify
+    # again. Same step order and same "use the new password going forward
+    # once the pwd bit was already set" logic (cmdlft55xx.c).
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "Set the password-protect bit on a T55xx and write a new password.\n"
+            f"{CR}WARNING{C0}: locks the tag - a wrong current password or a failed "
+            "write here can leave it needing the new password to do anything else."
+        )
+        parser.epilog = (
+            "examples:\n"
+            "  lf t55xx protect -n 01020304\n"
+            "  lf t55xx protect -p 11223344 -n 00000000"
+        )
+        parser.formatter_class = argparse.RawDescriptionHelpFormatter
+        parser.add_argument("-p", "--pwd", type=str, default=None, metavar="<hex>",
+                            help="current password, 4 hex bytes (omit if not yet protected)")
+        parser.add_argument("-n", "--new", type=str, required=True, metavar="<hex>",
+                            help="new password, 4 hex bytes")
+        _t55_add_dl_args(parser)
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        dl = _t55_dl(args)
+        rf = _T55_DETECTED["rf"] or 32
+        cur_pwd = _t55_hex4(args.pwd, "pwd") if args.pwd is not None else None
+        new_pwd = _t55_hex4(args.new, "new")
+
+        print(f"{CY} - reading current config (block 0)...{C0}")
+        block0 = _t55_read_word(self.cmd, 0, rf, cur_pwd, False, dl)
+        if block0 is None:
+            print(f"{CR} - failed to read block 0. Wrong password, or run `lf t55xx detect` first.{C0}")
+            return
+
+        pwd_already_set = bool((block0 >> 4) & 1)
+        if pwd_already_set and cur_pwd is None:
+            print(f"{CR} - PWD bit is already set but no -p was given; can't authenticate the write.{C0}")
+            return
+        use_pwd = pwd_already_set or cur_pwd is not None
+        block0 |= 1 << 4  # set PWD bit
+
+        print(f"{CY} - writing new password to block 7...{C0}")
+        self.cmd.lf_t55xx_write(7, new_pwd, cur_pwd if use_pwd else None, False, dl_mode=dl)
+        check_pwd = new_pwd if pwd_already_set else cur_pwd
+        if _t55_read_word(self.cmd, 7, rf, check_pwd, False, dl) != int.from_bytes(new_pwd, "big"):
+            print(f"{CR} - failed to validate the new password write. Aborting before touching block 0.{C0}")
+            return
+        print(f"{CG} - validated new password.{C0}")
+
+        curr_pwd = new_pwd if pwd_already_set else cur_pwd
+        print(f"{CY} - writing modified config block (PWD bit set, {block0:08X})...{C0}")
+        self.cmd.lf_t55xx_write(0, block0.to_bytes(4, "big"), curr_pwd, False, dl_mode=dl)
+        if _t55_read_word(self.cmd, 0, rf, new_pwd, False, dl) != block0:
+            print(f"{CR} - failed to validate config write. Tag may be left in an inconsistent state - "
+                  f"try reading block 0 and block 7 with the new password by hand.{C0}")
+            return
+        print(f"{CG} - success: tag is protected, new password {new_pwd.hex().upper()}.{C0}")
+
+
+@lf_t55xx.command("recoverpw")
+class LFT55xxRecoverPW(ReaderRequiredUnit):
+    # Matches pm3's CmdT55xxRecoverPW: assumes the password got mangled during
+    # a bad write (e.g. power loss mid-write) and tries to recover it from a
+    # known/expected password via single-bit flips, then low-bit-anchored and
+    # high-bit-anchored partial masks (same three passes, same order, same
+    # dedup-by-previous-candidate logic, as cmdlft55xx.c).
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "Recover a mangled T55xx password (e.g. from a write interrupted mid-EEPROM-"
+            "program) by probing bit-flips and bit-masked variants of a known/expected "
+            "password, same three passes pm3 uses.\n"
+            f"{CR}WARNING{C0}: like pm3's version, this sends password-gated frames "
+            "repeatedly and may brick a non-password-protected chip."
+        )
+        parser.add_argument("-p", "--pwd", type=str, default="51243648", metavar="<hex>",
+                            help="expected/original password (4 hex bytes, default 51243648 - "
+                                 "pm3's own default)")
+        parser.add_argument("-b", "--block", type=int, default=7, metavar="<0-7>",
+                            help="block to probe (default 7, the config block)")
+        _t55_add_dl_args(parser)
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        dl = _t55_dl(args)
+        rf = _T55_DETECTED["rf"] or 32
+        orig = int.from_bytes(_t55_hex4(args.pwd, "pwd"), "big")
+
+        def try_one(cand):
+            pwd = cand.to_bytes(4, "big")
+            return _t55_read_word(self.cmd, args.block, rf, pwd, False, dl) is not None
+
+        print(f"{CY} - pass 1/3: single-bit flips of {orig:08X}...{C0}")
+        for bit in range(32):
+            cand = orig ^ (1 << bit)
+            if try_one(cand):
+                print(f"{CG} - password found: {cand:08X}{C0}")
+                return
+
+        print(f"{CY} - pass 2/3: low-bit-anchored partial password...{C0}")
+        prev = None
+        mask = 0
+        for bit in range(32):
+            mask |= 1 << bit
+            cand = orig & mask
+            if cand == prev:
+                continue
+            prev = cand
+            if try_one(cand):
+                print(f"{CG} - password found: {cand:08X}{C0}")
+                return
+
+        print(f"{CY} - pass 3/3: high-bit-anchored partial password...{C0}")
+        prev = None
+        mask = 0xFFFFFFFF
+        for bit in range(32):
+            mask &= ~(1 << bit)
+            cand = orig & mask
+            if cand == prev:
+                continue
+            prev = cand
+            if try_one(cand):
+                print(f"{CG} - password found: {cand:08X}{C0}")
+                return
+
+        print(f"{CR} - recover password failed.{C0}")
 
 
 @lf_t55xx.command("read")
