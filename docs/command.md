@@ -1,6 +1,6 @@
 # Phreakbyte CLI Command Reference
 
-Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 44 command groups, 210 commands.
+Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 44 command groups, 215 commands.
 
 Notation: `<...>` are values you supply. Each option lists its flags, help, allowed `choices`, whether it is `required`, and its `default`. Run any command with `-h` in the client for the same information live.
 
@@ -1517,6 +1517,21 @@ Capture raw LF field ADC samples (125kHz, 8µs/sample). ~0x80 = field on, lower 
 
 T55xx/T5577 raw block commands
 
+#### `lf t55xx bruteforce`
+
+Sequential password range search on a T55xx block. Same accept test as `chk`: a wrong password gets no response (PWD-gated read), so a stable 32-bit block decode is proof the password was accepted.
+WARNING: may brick a non-password-protected chip — a password frame sent to a tag with no password set is interpreted as a write.
+
+- `-s`, `--start` — search start password (4 hex bytes, default 00000000) (default: 00000000)
+- `-e`, `--end` — search end password (4 hex bytes, default FFFFFFFF) (default: FFFFFFFF)
+- `-b`, `--block` — block to probe (default 7, the config block) (default: 7)
+- `--rf`
+- `--pg1` — Target page 1
+- `--r0` — downlink - fixed bit length
+- `--r1` — downlink - long leading reference
+- `--r2` — downlink - leading zero
+- `--r3` — downlink - 1 of 4 coding reference
+
 #### `lf t55xx chk`
 
 Dictionary attack on a T55xx block. A wrong password gets no response from the tag (PWD-gated read), so a stable 32-bit block decode is proof the password was accepted. Default dictionary is pm3's t55xx_default_pwds.dic (126 known cloner/default keys).
@@ -1529,6 +1544,19 @@ Dictionary attack on a T55xx block. A wrong password gets no response from the t
 - `--r1` — downlink - long leading reference
 - `--r2` — downlink - leading zero
 - `--r3` — downlink - 1 of 4 coding reference
+
+#### `lf t55xx config`
+
+View or set the default rf/downlink/password used by other t55xx commands when their own flags are omitted (normally filled by `detect`).
+
+- `--rf` — default bitrate divisor RF/n
+- `-p`, `--pwd` — default password, 4 hex bytes
+- `--maxblock`
+- `--r0` — downlink - fixed bit length
+- `--r1` — downlink - long leading reference
+- `--r2` — downlink - leading zero
+- `--r3` — downlink - 1 of 4 coding reference
+- `--clear` — reset to defaults
 
 #### `lf t55xx detect`
 
@@ -1588,6 +1616,33 @@ examples:
   lf t55xx info -c 6001805A --q5
 ```
 
+#### `lf t55xx p1detect`
+
+Probe for data on T55xx page 1 (the ISO11784/85 animal-tag trace block on many T5577s). Presence only, via Manchester/biphase - this fork has no FSK/PSK/NRZ demod, so pm3's trace-preamble match isn't ported; a hit here means page 1 answers cleanly, not that it decodes as ISO11784/85.
+
+- `--r0` — downlink - fixed bit length
+- `--r1` — downlink - long leading reference
+- `--r2` — downlink - leading zero
+- `--r3` — downlink - 1 of 4 coding reference
+
+#### `lf t55xx protect`
+
+Set the password-protect bit on a T55xx and write a new password.
+WARNING: locks the tag - a wrong current password or a failed write here can leave it needing the new password to do anything else.
+
+- `-p`, `--pwd` — current password, 4 hex bytes (omit if not yet protected)
+- `-n`, `--new` — new password, 4 hex bytes (required)
+- `--r0` — downlink - fixed bit length
+- `--r1` — downlink - long leading reference
+- `--r2` — downlink - leading zero
+- `--r3` — downlink - 1 of 4 coding reference
+
+```
+examples:
+  lf t55xx protect -n 01020304
+  lf t55xx protect -p 11223344 -n 00000000
+```
+
 #### `lf t55xx read`
 
 Read a T55xx block (Manchester) and dump the demodulated bitstream
@@ -1602,6 +1657,18 @@ Read a T55xx block (Manchester) and dump the demodulated bitstream
 - `--regread` — Diagnostic: skip the addressed downlink, capture the regular-read stream
 - `--mod` — Demod: manchester (SAADC amplitude, robust) or biphase (firmware diphase_feed). auto = whatever `detect` found (else manchester). (choices: auto, manchester, biphase; default: auto)
 - `-o`, `--override` — override safety check
+- `--r0` — downlink - fixed bit length
+- `--r1` — downlink - long leading reference
+- `--r2` — downlink - leading zero
+- `--r3` — downlink - 1 of 4 coding reference
+
+#### `lf t55xx recoverpw`
+
+Recover a mangled T55xx password (e.g. from a write interrupted mid-EEPROM-program) by probing bit-flips and bit-masked variants of a known/expected password, same three passes pm3 uses.
+WARNING: like pm3's version, this sends password-gated frames repeatedly and may brick a non-password-protected chip.
+
+- `-p`, `--pwd` — expected/original password (4 hex bytes, default 51243648 - pm3's own default) (default: 51243648)
+- `-b`, `--block` — block to probe (default 7, the config block) (default: 7)
 - `--r0` — downlink - fixed bit length
 - `--r1` — downlink - long leading reference
 - `--r2` — downlink - leading zero
