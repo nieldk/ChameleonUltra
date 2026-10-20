@@ -345,21 +345,31 @@ File Entry 00 Data: 12 34 56 78
             DfcCredential.parse_text(text)
         self.assertIn("expected 4", str(caught.exception))
 
-    def test_extended_text_field_is_recognised_but_not_emulated(self):
+    def test_extended_picc_text_field_round_trips(self):
+        # The firmware now builds with DFC_BUILD_PROFILE=FULL_EV3, so the
+        # EV2/EV3 PICC capability field is emulated and round-trips rather
+        # than being refused.
         text = self.V4.replace(
             "PICC File Count: 0",
-            "PICC EV2 Card Capabilities: 00 00 00 00 00 00\nPICC File Count: 0",
+            "PICC EV2 Card Capabilities: 01 02 03 04 05 06\nPICC File Count: 0",
         )
-        with self.assertRaises(DfcError) as caught:
-            DfcCredential.parse_text(text)
-        self.assertEqual(caught.exception.error_class, DfcErrorClass.UNSUPPORTED)
+        cred = DfcCredential.parse_text(text)
+        self.assertTrue(cred.picc_has_ev2_capabilities)
+        self.assertEqual(cred.picc_ev2_capabilities, bytes.fromhex("010203040506"))
+        blob = cred.to_wire()
+        self.assertEqual(DfcCredential.from_wire(blob).to_wire(), blob)
 
-    def test_extended_application_field_is_recognised_but_not_emulated(self):
+    def test_extended_application_text_field_round_trips(self):
+        # Same for application-level capability data: FULL_EV3 emulates it.
         text = self.V4.replace(
             "Application 00 File Count: 1",
-            "Application 00 Capability Data: 00 00 00 00 00 00\n"
+            "Application 00 Capability Data: 00 00 00 00 05 06 07 08 09 0A\n"
             "Application 00 File Count: 1",
         )
-        with self.assertRaises(DfcError) as caught:
-            DfcCredential.parse_text(text)
-        self.assertEqual(caught.exception.error_class, DfcErrorClass.UNSUPPORTED)
+        cred = DfcCredential.parse_text(text)
+        self.assertTrue(cred.apps[0].has_capability_data)
+        self.assertEqual(
+            cred.apps[0].capability_data, bytes.fromhex("00000000" "05060708090A")
+        )
+        blob = cred.to_wire()
+        self.assertEqual(DfcCredential.from_wire(blob).to_wire(), blob)
