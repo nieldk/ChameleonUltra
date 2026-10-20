@@ -524,7 +524,18 @@ static void do_write(uint8_t *apdu, uint16_t len) {
     respond(total, STATUS_OK);
 }
 
+// Default FRAMEDELAYMAX (set by nfc_fdt_reset()) is 4096 ticks (~302us) --
+// enough for a single AES block, not for do_auth2's four aes_cbc calls
+// (decrypt + two key-derivation encrypts + final encrypt). Same fix as
+// nfc_desfire.c's NFC_DESFIRE_FDT_MAX, for the same reason: without this the
+// card computes a correct response and calls respond(), but the hardware
+// silently drops the TX because by the time it's issued the 302us window has
+// already closed. Must be re-applied every frame, not once at load --
+// nfc_fdt_reset() clamps it back down after any frame we don't answer.
+#define NFC_MFPLUS_FDT_MAX 0x40000UL
+
 static void nfc_tag_mfplus_state_handler(uint8_t *data, uint16_t szBits) {
+    nfc_tag_14a_set_frame_delay_max(NFC_MFPLUS_FDT_MAX);
     // nfc_14a delivers the frame length in BITS; the 14a_4 engine (and this
     // handler's own length checks) work in bytes. ISO-DEP frames are
     // byte-aligned, so divide -- see mode_u2f.c's u2f_cb_state, which does
