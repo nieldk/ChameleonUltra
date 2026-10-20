@@ -16,7 +16,7 @@ CORE  := ../src
 PORT  := ../port
 HOST  := ../port/host
 
-CFLAGS  += -std=c11 -Wall -Wextra -I$(CORE) -I$(PORT) -I$(HOST) -Imunit
+CFLAGS  += -std=c11 -Wall -Wextra -I$(CORE) -I$(PORT) -I$(HOST) -Imunit -I/usr/include/mbedtls3
 
 # A release build compiles assertions out. The suite must pass either way, so
 # no assertion may carry an effect the engine depends on.
@@ -30,7 +30,8 @@ TINY_CRYPTO_DIR ?= ../../tiny-crypto-c
 
 ifeq ($(CRYPTO_BACKEND),mbedtls)
 CFLAGS  += -DDFC_CRYPTO_BACKEND_MBEDTLS=1
-LDFLAGS += -lmbedcrypto
+LDFLAGS += -lmbedcrypto -L/usr/lib/mbedtls3
+
 MBEDTLS_PREFIX := $(firstword $(wildcard /opt/homebrew/opt/mbedtls@3 /usr/local/opt/mbedtls@3))
 ifneq ($(MBEDTLS_PREFIX),)
 CFLAGS  += -I$(MBEDTLS_PREFIX)/include
