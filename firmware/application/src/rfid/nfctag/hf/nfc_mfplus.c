@@ -519,7 +519,11 @@ static void nfc_tag_mfplus_state_handler(uint8_t *data, uint16_t szBytes) {
     if (!nfc_tag_14a_4_base_handler(&m_tcl_session_state, data, szBytes)) return;
 
     uint8_t *apdu = m_tcl_session_state.m_apdu_buf;
-    uint16_t len = m_tcl_session_state.m_apdu_len;
+    // nfc_tag_14a_4_base_handler leaves the frame's trailing 2-byte CRC in
+    // m_apdu_len (CRCMODERX is off on RX -- see nfc_desfire.c's own "len -= 2"
+    // for the same reason). Every length check below assumes the pure
+    // command length, so strip it here once, before any of them run.
+    uint16_t len = (m_tcl_session_state.m_apdu_len >= 2) ? m_tcl_session_state.m_apdu_len - 2 : 0;
     m_tcl_session_state.m_resp_len = 0;
 
     if (len < 1) { respond_status(STATUS_LEN_ERR); return; }
