@@ -2023,4 +2023,3 @@ Read u2f result buffer
 - `--json` — emit parsed sessions as JSON
 - `--dump` — dump every frame in each session
 - `--pm3` — write each session as a Proxmark3 .trace (<prefix>-NN.trace)
-
