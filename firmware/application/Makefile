@@ -522,7 +522,7 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
     ${TINY_DES_DIR} \
     ${DESFIRE_DIR}/shim \
 
-  CFLAGS += -DDFC_BUILD_PROFILE=DFC_PROFILE_FULL_EV2
+  CFLAGS += -DDFC_BUILD_PROFILE=DFC_PROFILE_FULL_EV3
   # dfc-core's mbedTLS backend calls shim/mbedtls_compat.c, which routes AES to
   # nrf_crypto (CC310) and DES/3DES to the vendored tiny-DES-c.
   CFLAGS += -DDFC_CRYPTO_BACKEND_MBEDTLS=1
@@ -537,13 +537,11 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
 # persisted slot record layout -- changing any of them invalidates stored
 # DESFire slots, so treat them as frozen once released.
 #
-# The ceiling is the _Static_assert in nfc_desfire.c: the whole slot record has
-# to fit the 4500-octet shared HF tag buffer. At these limits the credential is
-# 4052 octets and the record 4344, leaving 156 spare there and 3848 spare
-# against the 8192-octet flash-record ceiling.
-#
-# EV2 records are large; trimmed so sizeof(DfcCredential) fits one 8192B FDS
-# page (FDS_VIRTUAL_PAGE_SIZE=2048 words). apps=4/keys=10/files=10/pool=1024 -> ~7992B.
+# Ceiling is the _Static_assert in nfc_desfire.c: slot record must fit one
+# 8192B FDS page (8136B after record overhead). x86-64 host build at these
+# limits (size_t is 8B here, 4B on the real target, so this over-estimates):
+# EV3 credential 5016B, record 5320B, ~2800B spare. Re-check on an ARM build
+# once a toolchain is available.
 CFLAGS += -DDFC_KEY_POOL_SIZE=448
 CFLAGS += -DDFC_MAX_APPS=4 -DDFC_MAX_KEYS=14 -DDFC_MAX_FILES=8
 CFLAGS += -DDFC_FILE_POOL_SIZE=1024 -DDFC_MAX_FILE_DATA=1024
