@@ -281,11 +281,13 @@ static void do_auth1(uint8_t *apdu, uint16_t len) {
 }
 
 static void do_auth2(uint8_t *apdu, uint16_t len) {
+    NRF_LOG_INFO("auth2: enter len=%d", len);
     if (len != 33) { respond_status(STATUS_LEN_ERR); return; }
     bool nonfirst = m_sess.nonfirst_pending;
     const uint8_t *key = m_sess.nonfirst_key;  // stashed by do_auth1, either case
 
     uint8_t raw[32];
+    NRF_LOG_INFO("auth2: pre-decrypt nonfirst=%d", nonfirst);
     if (nonfirst) {
         uint8_t ivw[16];
         uint8_t r_lo = (uint8_t)(m_sess.R_Ctr & 0xFF), r_hi = (uint8_t)(m_sess.R_Ctr >> 8);
@@ -300,6 +302,7 @@ static void do_auth2(uint8_t *apdu, uint16_t len) {
         uint8_t iv0[16] = {0};
         dfc_crypto_aes_cbc(false, key, MFPLUS_KEYSIZE, iv0, &apdu[1], raw, 32);
     }
+    NRF_LOG_INFO("auth2: post-decrypt");
 
     uint8_t RndA[16];
     memcpy(RndA, &raw[0], 16);
@@ -311,10 +314,12 @@ static void do_auth2(uint8_t *apdu, uint16_t len) {
     dfc_rotate_left(RndBp_expect, 16);
 
     if (memcmp(RndBp_recv, RndBp_expect, 16) != 0) {
+        NRF_LOG_INFO("auth2: RndB' mismatch");
         session_reset();
         respond_status(STATUS_AUTH_ERR);
         return;
     }
+    NRF_LOG_INFO("auth2: RndB' ok");
 
     uint8_t RndAp[16];
     memcpy(RndAp, RndA, 16);
@@ -338,6 +343,7 @@ static void do_auth2(uint8_t *apdu, uint16_t len) {
     memcpy(m_sess.Kenc, Kenc, 16);
     memcpy(m_sess.Kmac, Kmac, 16);
     memcpy(m_sess.RndA, RndA, 16);
+    NRF_LOG_INFO("auth2: keys derived, nonfirst=%d", nonfirst);
 
     if (nonfirst) {
         // TI, R_Ctr, W_Ctr carry over from the session this nonfirst auth
@@ -371,13 +377,16 @@ static void do_auth2(uint8_t *apdu, uint16_t len) {
     uint8_t iv0b[16] = {0};
     uint8_t enc[32];
     dfc_crypto_aes_cbc(true, key, MFPLUS_KEYSIZE, iv0b, plain, enc, 32);
+    NRF_LOG_INFO("auth2: final encrypt done");
 
     m_sess.R_Ctr = 0;
     m_sess.W_Ctr = 0;
     m_sess.authenticated = true;
 
     memcpy(&m_tcl_session_state.m_resp_buf[1], enc, 32);
+    NRF_LOG_INFO("auth2: calling respond(33)");
     respond(33, STATUS_OK);
+    NRF_LOG_INFO("auth2: respond(33) returned");
 }
 
 // ---- CMAC (8-byte truncated AES-CMAC with Kmac), matching CalculateMAC ----
