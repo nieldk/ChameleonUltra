@@ -206,8 +206,9 @@
 #define DATA_CMD_ST25TA_WRITE_NDEF              (4047)
 #define DATA_CMD_ST25TA_SET_CONFIG              (4048)
 #define DATA_CMD_MFPLUS_GET_INFO                (4049)
-#define DATA_CMD_MFPLUS_SET_KEY                 (4050)
+#define DATA_CMD_MFPLUS_WRITE_PERSO             (4050)  // in: addr_hi(1) addr_lo(1) key(16) -- was MFPLUS_SET_KEY
 #define DATA_CMD_MF1_MAGIC_AUTH                 (4051)
+#define DATA_CMD_MFPLUS_COMMIT_PERSO            (4052)  // no payload; SL0 -> SL3
 //
 // ******************************************************************
 

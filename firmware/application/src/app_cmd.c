@@ -1887,24 +1887,36 @@ static nfc_tag_mfplus_information_t *mfplus_active_info(void) {
     return (nfc_tag_mfplus_information_t *)buffer->buffer;
 }
 
-// out: block_max(1), default_key(16)
+// out: level(1), block_max(2, LE)
 static data_frame_tx_t *cmd_processor_mfplus_get_info(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    nfc_tag_mfplus_information_t *info = mfplus_active_info();
-    if (info == NULL) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
-    uint8_t out[1 + NFC_TAG_MFPLUS_KEY_SIZE];
-    out[0] = info->block_max;
-    memcpy(&out[1], info->default_key, NFC_TAG_MFPLUS_KEY_SIZE);
+    if (mfplus_active_info() == NULL) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    uint8_t out[3];
+    uint16_t block_max;
+    nfc_tag_mfplus_get_status(&out[0], &block_max);
+    out[1] = (uint8_t)(block_max & 0xFF);
+    out[2] = (uint8_t)(block_max >> 8);
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(out), out);
 }
 
-// in: key(16) -- shared AES key used for Key A and Key B on every sector (v1)
-static data_frame_tx_t *cmd_processor_mfplus_set_key(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    nfc_tag_mfplus_information_t *info = mfplus_active_info();
-    if (info == NULL || length != NFC_TAG_MFPLUS_KEY_SIZE) {
+// in: addr_hi(1), addr_lo(1), key(16) -- one WritePerso write (sector key or
+// one of the three mandatory admin keys). SL0 only.
+static data_frame_tx_t *cmd_processor_mfplus_write_perso(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (mfplus_active_info() == NULL || length != 2 + NFC_TAG_MFPLUS_KEY_SIZE) {
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
     }
-    memcpy(info->default_key, data, NFC_TAG_MFPLUS_KEY_SIZE);
-    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+    uint8_t level; uint16_t block_max;
+    nfc_tag_mfplus_get_status(&level, &block_max);
+    if (level != MFPLUS_LEVEL_SL0) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    uint8_t mfp_status = nfc_tag_mfplus_write_perso(data[0], data[1], &data[2]);
+    return data_frame_make(cmd, mfp_status == 0x90 ? STATUS_SUCCESS : STATUS_PAR_ERR, 1, &mfp_status);
+}
+
+// no input. Switches SL0 -> SL3 once the three mandatory admin keys
+// (CardMasterKey/CardConfigKey/L3SwitchKey) have been written.
+static data_frame_tx_t *cmd_processor_mfplus_commit_perso(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (mfplus_active_info() == NULL) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    uint8_t mfp_status = nfc_tag_mfplus_commit_perso();
+    return data_frame_make(cmd, mfp_status == 0x90 ? STATUS_SUCCESS : STATUS_PAR_ERR, 1, &mfp_status);
 }
 #endif // PROJECT_DESFIRE_EMULATION
 
@@ -4812,7 +4824,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_ST25TA_SET_CONFIG,              NULL,                      cmd_processor_st25ta_set_config,             NULL                   },
 #if defined(PROJECT_DESFIRE_EMULATION)
     {    DATA_CMD_MFPLUS_GET_INFO,                NULL,                      cmd_processor_mfplus_get_info,               NULL                   },
-    {    DATA_CMD_MFPLUS_SET_KEY,                 NULL,                      cmd_processor_mfplus_set_key,                NULL                   },
+    {    DATA_CMD_MFPLUS_WRITE_PERSO,             NULL,                      cmd_processor_mfplus_write_perso,            NULL                   },
+    {    DATA_CMD_MFPLUS_COMMIT_PERSO,            NULL,                      cmd_processor_mfplus_commit_perso,           NULL                   },
 #endif
 #if defined(PROJECT_CHAMELEON_ULTRA)
     // cmd_processor_mf1_magic_auth uses RC522 reader functions (auth_key_use_522_hw

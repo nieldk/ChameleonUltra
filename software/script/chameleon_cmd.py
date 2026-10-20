@@ -2715,19 +2715,34 @@ class ChameleonCMD:
 
     @expect_response(Status.SUCCESS)
     def mfplus_get_info(self):
+        """Returns the active MIFARE Plus slot's security level (0 = SL0,
+        not yet personalized; 3 = SL3, AES) and its block_max (128 for a
+        2K/S2K card, 256 for a 4K/S4K card)."""
         resp = self.device.send_cmd_sync(Command.MFPLUS_GET_INFO, None)
         if resp.status == Status.SUCCESS:
             resp.parsed = {
-                "block_max": resp.data[0],
-                "default_key": resp.data[1:17],
+                "level": resp.data[0],
+                "block_max": resp.data[1] | (resp.data[2] << 8),
             }
         return resp
 
     @expect_response(Status.SUCCESS)
-    def mfplus_set_key(self, key: bytes):
+    def mfplus_write_perso(self, addr_hi: int, addr_lo: int, key: bytes):
+        """One WritePerso write: addr_hi/addr_lo select the key slot per the
+        MIFARE Plus key-numbering scheme (0x40xx = per-sector Key A/B,
+        0x9000/0x9001/0x9003 = the three mandatory admin keys), key is the
+        16-byte AES key. Only valid while the card is in SL0."""
         if len(key) != 16:
             raise ValueError("MIFARE Plus key must be 16 bytes")
-        return self.device.send_cmd_sync(Command.MFPLUS_SET_KEY, key)
+        payload = bytes([addr_hi & 0xFF, addr_lo & 0xFF]) + key
+        return self.device.send_cmd_sync(Command.MFPLUS_WRITE_PERSO, payload)
+
+    @expect_response(Status.SUCCESS)
+    def mfplus_commit_perso(self):
+        """Switches the card from SL0 to SL3 once the three mandatory admin
+        keys (CardMasterKey 0x9000, CardConfigKey 0x9001, L3SwitchKey 0x9003)
+        have been written via mfplus_write_perso."""
+        return self.device.send_cmd_sync(Command.MFPLUS_COMMIT_PERSO, None)
 
     @expect_response([Status.HF_TAG_OK, Status.MF_ERR_AUTH])
     def mf1_magic_auth(self, auth_type: int, block: int, key: bytes, keep_field: bool):

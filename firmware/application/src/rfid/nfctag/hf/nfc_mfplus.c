@@ -1,21 +1,27 @@
 /**
  * @file nfc_mfplus.c
- * @brief MIFARE Plus SL3 (AES) emulation -- v1
+ * @brief MIFARE Plus SL0/SL3 (AES) emulation -- v2
  *
- * Scope: AuthenticateFirst, ReadBlock, WriteBlock, GetVersion. The card
- * starts already in SL3 (no SL0 personalization protocol) and does not
- * implement AuthenticateNonFirst. All sectors share one configurable AES
- * key for both Key A and Key B (real hardware has an independent key per
- * sector/keytype -- deliberate v1 simplification, noted in the header).
+ * Scope: WritePerso/CommitPerso (SL0 personalization, SL0->SL3 only, no
+ * SL1 leg), AuthenticateFirst, AuthenticateNonFirst, ReadBlock/WriteBlock,
+ * GetVersion. Per-sector Key A/B plus CardMasterKey (0x9000), CardConfigKey
+ * (0x9001) and L3SwitchKey (0x9003) are stored and enforced. Other
+ * WritePerso addresses RRG proxmark3's `hf mfp initp` writes (0x9002,
+ * 0x9004, 0x9006, 0x9007, 0xA000, 0xA001, 0xA080, 0xA081, 0xC000, 0xC001,
+ * 0xB000-0xB003) are accepted (ack'd) so that command completes, but not
+ * stored or interpreted -- their behaviour is in NXP's confidential MIFARE
+ * Plus functional spec, not the public datasheet.
  *
  * Protocol bytes, session-key derivation, CMAC construction and the data
  * block IV scheme are taken from RRG proxmark3 (GPLv3): client/src/mifare/
- * mifare4.c (MifareAuth4, CalculateMAC, MFPReadBlock, MFPWriteBlock) and
- * client/src/cmdhfmfp.c (mfp_data_crypt -- the corrected IV construction;
- * mifare4.c itself has an older, explicitly-marked-wrong version left in
- * as a comment). Before writing this file, the full handshake and a MACed
- * + encrypted ReadBlock were round-tripped standalone in Python against
- * this exact algorithm to confirm both sides actually agree.
+ * mifare4.c (MifareAuth4, MFPWritePerso, MFPCommitPerso, CalculateMAC,
+ * MFPReadBlock, MFPWriteBlock) and client/src/cmdhfmfp.c (mfp_data_crypt --
+ * the corrected IV construction; mifare4.c itself has an older, explicitly
+ * marked-wrong version left in as a comment). The AuthenticateNonFirst IV
+ * construction mirrors mifare4.c's own nonfirst branch verbatim, including
+ * proxmark3's own comment that it isn't confirmed against the confidential
+ * datasheet -- this keeps the firmware interoperable with proxmark3 as a
+ * reader, which is the only independently checkable reference available.
  */
 
 #include <string.h>
@@ -36,14 +42,19 @@
 #define CMD_GETVERSION       0x60
 #define CMD_GETVERSION_NEXT  0xAF
 #define CMD_AUTH_FIRST_1     0x70
-#define CMD_AUTH_FIRST_2     0x72
+#define CMD_AUTH_NONFIRST_1  0x76
+#define CMD_AUTH_2           0x72
+#define CMD_WRITEPERSO       0xA8
+#define CMD_COMMITPERSO      0xAA
 #define READ_BASE            0x31   // XOR 0x01=nomacres, 0x02=plain, 0x04=nomaccmd
 #define WRITE_BASE           0xA1   // XOR 0x01=nomacres, 0x02=plain
 #define STATUS_OK            0x90
 #define STATUS_AUTH_ERR      0x00
 #define STATUS_MAC_ERR       0x08
 #define STATUS_BLOCK_ERR     0x09
+#define STATUS_NOT_AVAIL     0x0B
 #define STATUS_LEN_ERR       0x0C
+#define STATUS_GENERAL_ERR   0x0F
 
 typedef struct {
     bool     authenticated;
@@ -54,7 +65,8 @@ typedef struct {
     uint8_t  Kmac[16];
     uint16_t R_Ctr;
     uint16_t W_Ctr;
-    uint8_t  auth_pending_cmd[4];   // stashed phase-1 state
+    bool     nonfirst_pending;
+    uint8_t  nonfirst_key[16];   // key being switched to, stashed between the two auth phases
 }
 mfplus_session_t;
 
@@ -89,6 +101,86 @@ static void respond(uint16_t data_len, uint8_t status) {
 
 static inline void respond_status(uint8_t status) {
     respond(1, status);
+}
+
+// 8-byte CMAC used on the wire is bytes 1,3,5,...,15 of the full 16-byte
+// AES-CMAC -- see proxmark3 crypto/libpcrypto.c aes_cmac8(). Taking the
+// first 8 bytes instead (as a naive truncation would) does not interop
+// with proxmark3 or real MIFARE Plus.
+static void cmac_truncate8(const uint8_t *full16, uint8_t *out8) {
+    for (int i = 0; i < 8; i++) out8[i] = full16[2 * i + 1];
+}
+
+// ---- key lookup -----------------------------------------------------
+// key_num wire encoding: apdu low byte = key_num low byte, apdu high byte
+// = key_num high byte (matches proxmark3's keyNum[1]/keyNum[0] split).
+// Returns NULL for an address this emulation doesn't enforce.
+static uint8_t *lookup_key(uint16_t key_num) {
+    uint8_t hi = (uint8_t)(key_num >> 8);
+    uint8_t lo = (uint8_t)key_num;
+    if (hi == 0x40) {
+        uint8_t sector  = lo / 2;
+        uint8_t keytype = lo % 2;
+        if (sector >= m_tag_information->num_sectors) return NULL;
+        return m_tag_information->sector_keys[sector][keytype];
+    }
+    if (hi == 0x90) {
+        switch (lo) {
+            case 0x00: return m_tag_information->master_key;
+            case 0x01: return m_tag_information->config_key;
+            case 0x03: return m_tag_information->l3_switch_key;
+            default: return NULL;
+        }
+    }
+    return NULL;
+}
+
+// ---- management API, shared by the wire WritePerso/CommitPerso handlers
+// (do_writeperso/do_commitperso) and the host-side debug/config commands
+// in app_cmd.c. Callers there are responsible for the SL0-only gate and
+// APDU length checks the wire path also enforces. ----
+uint8_t nfc_tag_mfplus_write_perso(uint8_t addr_hi, uint8_t addr_lo, const uint8_t *key) {
+    if (m_tag_information == NULL) return STATUS_GENERAL_ERR;
+    uint8_t hi = addr_hi, lo = addr_lo;
+
+    if (hi == 0x40) {
+        uint8_t sector  = lo / 2;
+        uint8_t keytype = lo % 2;
+        if (sector >= m_tag_information->num_sectors) return STATUS_BLOCK_ERR;
+        memcpy(m_tag_information->sector_keys[sector][keytype], key, 16);
+        return STATUS_OK;
+    }
+    if (hi == 0x90) {
+        switch (lo) {
+            case 0x00: memcpy(m_tag_information->master_key, key, 16); m_tag_information->master_key_written = 1; return STATUS_OK;
+            case 0x01: memcpy(m_tag_information->config_key, key, 16); m_tag_information->config_key_written = 1; return STATUS_OK;
+            case 0x03: memcpy(m_tag_information->l3_switch_key, key, 16); m_tag_information->l3_switch_key_written = 1; return STATUS_OK;
+            case 0x02: case 0x04: case 0x06: case 0x07: return STATUS_OK;  // accepted, not stored
+            default: return STATUS_BLOCK_ERR;
+        }
+    }
+    if (hi == 0xA0 && (lo == 0x00 || lo == 0x01 || lo == 0x80 || lo == 0x81)) return STATUS_OK;
+    if (hi == 0xC0 && (lo == 0x00 || lo == 0x01)) return STATUS_OK;
+    if (hi == 0xB0 && lo <= 0x03) return STATUS_OK;  // config blocks accepted, not interpreted
+
+    return STATUS_BLOCK_ERR;
+}
+
+uint8_t nfc_tag_mfplus_commit_perso(void) {
+    if (m_tag_information == NULL) return STATUS_GENERAL_ERR;
+    if (m_tag_information->level != MFPLUS_LEVEL_SL0) return STATUS_NOT_AVAIL;
+    if (!m_tag_information->master_key_written || !m_tag_information->config_key_written ||
+            !m_tag_information->l3_switch_key_written) {
+        return STATUS_GENERAL_ERR;
+    }
+    m_tag_information->level = MFPLUS_LEVEL_SL3;
+    session_reset();
+    return STATUS_OK;
+}
+
+void nfc_tag_mfplus_get_status(uint8_t *level, uint16_t *block_max) {
+    *level = (m_tag_information != NULL) ? m_tag_information->level : 0;
+    *block_max = (m_tag_information != NULL) ? m_tag_information->block_max : 0;
 }
 
 // ---- GetVersion: 3-frame DESFire-style response, hardware type bytes are
@@ -127,10 +219,35 @@ static void do_getversion_frame3(void) {
     respond(15, STATUS_OK);
 }
 
-// ---- AuthenticateFirst ----
+// ---- WritePerso / CommitPerso (SL0 only) -----------------------------
+static void do_writeperso(uint8_t *apdu, uint16_t len) {
+    if (m_tag_information->level != MFPLUS_LEVEL_SL0) { respond_status(STATUS_NOT_AVAIL); return; }
+    if (len != 19) { respond_status(STATUS_LEN_ERR); return; }
+
+    respond_status(nfc_tag_mfplus_write_perso(apdu[2], apdu[1], &apdu[3]));
+}
+
+static void do_commitperso(uint16_t len) {
+    if (len != 1) { respond_status(STATUS_LEN_ERR); return; }
+    respond_status(nfc_tag_mfplus_commit_perso());
+}
+
+// ---- AuthenticateFirst / AuthenticateNonFirst ----
 static void do_auth1(uint8_t *apdu, uint16_t len) {
-    if (len != 4) { respond_status(STATUS_LEN_ERR); return; }
-    session_reset();
+    bool nonfirst = (apdu[0] == CMD_AUTH_NONFIRST_1);
+    if (nonfirst) {
+        if (len != 3) { respond_status(STATUS_LEN_ERR); return; }
+        if (!m_sess.authenticated) { respond_status(STATUS_AUTH_ERR); return; }
+    } else {
+        if (len != 4) { respond_status(STATUS_LEN_ERR); return; }
+        session_reset();
+    }
+
+    if (m_tag_information->level != MFPLUS_LEVEL_SL3) { respond_status(STATUS_NOT_AVAIL); return; }
+
+    uint16_t key_num = ((uint16_t)apdu[2] << 8) | apdu[1];
+    uint8_t *key = lookup_key(key_num);
+    if (key == NULL) { respond_status(STATUS_BLOCK_ERR); return; }
 
     uint8_t RndB[16];
     // Software rand(), seeded once at boot from the hardware RNG -- same
@@ -138,9 +255,25 @@ static void do_auth1(uint8_t *apdu, uint16_t len) {
     // during live field exchanges (see nfc_tag_mf1_random_nonce()).
     for (int i = 0; i < 16; i++) RndB[i] = (uint8_t)rand();
 
-    uint8_t iv0[16] = {0};
+    // Stash the key for do_auth2, which gets no key number of its own on
+    // the wire (0x72 carries only the encrypted nonce exchange).
+    memcpy(m_sess.nonfirst_key, key, 16);
+    m_sess.nonfirst_pending = nonfirst;
+
     uint8_t enc[16];
-    dfc_crypto_aes_cbc(true, m_tag_information->default_key, MFPLUS_KEYSIZE, iv0, RndB, enc, 16);
+    if (nonfirst) {
+        uint8_t ivr[16];
+        uint8_t r_lo = (uint8_t)(m_sess.R_Ctr & 0xFF), r_hi = (uint8_t)(m_sess.R_Ctr >> 8);
+        uint8_t w_lo = (uint8_t)(m_sess.W_Ctr & 0xFF), w_hi = (uint8_t)(m_sess.W_Ctr >> 8);
+        ivr[0] = r_lo; ivr[1] = r_hi; ivr[2] = w_lo; ivr[3] = w_hi;
+        ivr[4] = r_lo; ivr[5] = r_hi; ivr[6] = w_lo; ivr[7] = w_hi;
+        ivr[8] = r_lo; ivr[9] = r_hi; ivr[10] = w_lo; ivr[11] = w_hi;
+        memcpy(&ivr[12], m_sess.TI, 4);
+        dfc_crypto_aes_cbc(true, key, MFPLUS_KEYSIZE, ivr, RndB, enc, 16);
+    } else {
+        uint8_t iv0[16] = {0};
+        dfc_crypto_aes_cbc(true, key, MFPLUS_KEYSIZE, iv0, RndB, enc, 16);
+    }
 
     memcpy(m_sess.RndB, RndB, 16);
     memcpy(&m_tcl_session_state.m_resp_buf[1], enc, 16);
@@ -149,10 +282,24 @@ static void do_auth1(uint8_t *apdu, uint16_t len) {
 
 static void do_auth2(uint8_t *apdu, uint16_t len) {
     if (len != 33) { respond_status(STATUS_LEN_ERR); return; }
+    bool nonfirst = m_sess.nonfirst_pending;
+    const uint8_t *key = m_sess.nonfirst_key;  // stashed by do_auth1, either case
 
-    uint8_t iv0[16] = {0};
     uint8_t raw[32];
-    dfc_crypto_aes_cbc(false, m_tag_information->default_key, MFPLUS_KEYSIZE, iv0, &apdu[1], raw, 32);
+    if (nonfirst) {
+        uint8_t ivw[16];
+        uint8_t r_lo = (uint8_t)(m_sess.R_Ctr & 0xFF), r_hi = (uint8_t)(m_sess.R_Ctr >> 8);
+        uint8_t w_lo = (uint8_t)(m_sess.W_Ctr & 0xFF), w_hi = (uint8_t)(m_sess.W_Ctr >> 8);
+        ivw[0] = r_lo; ivw[1] = r_hi; ivw[2] = w_lo; ivw[3] = w_hi;
+        ivw[4] = r_lo; ivw[5] = r_hi; ivw[6] = w_lo; ivw[7] = w_hi;
+        ivw[8] = r_lo; ivw[9] = r_hi; ivw[10] = w_lo; ivw[11] = w_hi;
+        ivw[12] = r_lo; ivw[13] = r_hi; ivw[14] = w_lo; ivw[15] = w_hi;
+        memcpy(ivw, m_sess.TI, 4);  // overwrites bytes 0..3, matches mifare4.c
+        dfc_crypto_aes_cbc(false, key, MFPLUS_KEYSIZE, ivw, &apdu[1], raw, 32);
+    } else {
+        uint8_t iv0[16] = {0};
+        dfc_crypto_aes_cbc(false, key, MFPLUS_KEYSIZE, iv0, &apdu[1], raw, 32);
+    }
 
     uint8_t RndA[16];
     memcpy(RndA, &raw[0], 16);
@@ -169,25 +316,10 @@ static void do_auth2(uint8_t *apdu, uint16_t len) {
         return;
     }
 
-    uint8_t TI[4];
-    for (int i = 0; i < 4; i++) TI[i] = (uint8_t)rand();
-
     uint8_t RndAp[16];
     memcpy(RndAp, RndA, 16);
     dfc_rotate_left(RndAp, 16);
 
-    uint8_t plain[32];
-    memcpy(&plain[0], TI, 4);
-    memcpy(&plain[4], RndAp, 16);
-    memset(&plain[20], 0, 6);  // PICCap2: no extended capabilities
-    memset(&plain[26], 0, 6);  // PCDCap2: echo (PCD sent none)
-
-    uint8_t iv0b[16] = {0};
-    uint8_t enc[32];
-    dfc_crypto_aes_cbc(true, m_tag_information->default_key, MFPLUS_KEYSIZE, iv0b, plain, enc, 32);
-
-    // Session key derivation (RndA/RndB as sent by the reader, matching
-    // mifare4.c MifareAuth4's kenc/kmac construction).
     uint8_t kenc_in[16], kmac_in[16];
     memcpy(&kenc_in[0], &RndA[11], 5);
     memcpy(&kenc_in[5], &m_sess.RndB[11], 5);
@@ -199,12 +331,47 @@ static void do_auth2(uint8_t *apdu, uint16_t len) {
     for (int i = 0; i < 5; i++) kmac_in[10 + i] = RndA[0 + i] ^ m_sess.RndB[0 + i];
     kmac_in[15] = 0x22;
 
+    uint8_t Kenc[16], Kmac[16];
     uint8_t iv0c[16] = {0}, iv0d[16] = {0};
-    dfc_crypto_aes_cbc(true, m_tag_information->default_key, MFPLUS_KEYSIZE, iv0c, kenc_in, m_sess.Kenc, 16);
-    dfc_crypto_aes_cbc(true, m_tag_information->default_key, MFPLUS_KEYSIZE, iv0d, kmac_in, m_sess.Kmac, 16);
-
+    dfc_crypto_aes_cbc(true, key, MFPLUS_KEYSIZE, iv0c, kenc_in, Kenc, 16);
+    dfc_crypto_aes_cbc(true, key, MFPLUS_KEYSIZE, iv0d, kmac_in, Kmac, 16);
+    memcpy(m_sess.Kenc, Kenc, 16);
+    memcpy(m_sess.Kmac, Kmac, 16);
     memcpy(m_sess.RndA, RndA, 16);
+
+    if (nonfirst) {
+        // TI, R_Ctr, W_Ctr carry over from the session this nonfirst auth
+        // was issued in.
+        uint8_t ivr[16];
+        uint8_t r_lo = (uint8_t)(m_sess.R_Ctr & 0xFF), r_hi = (uint8_t)(m_sess.R_Ctr >> 8);
+        uint8_t w_lo = (uint8_t)(m_sess.W_Ctr & 0xFF), w_hi = (uint8_t)(m_sess.W_Ctr >> 8);
+        ivr[0] = r_lo; ivr[1] = r_hi; ivr[2] = w_lo; ivr[3] = w_hi;
+        ivr[4] = r_lo; ivr[5] = r_hi; ivr[6] = w_lo; ivr[7] = w_hi;
+        ivr[8] = r_lo; ivr[9] = r_hi; ivr[10] = w_lo; ivr[11] = w_hi;
+        memcpy(&ivr[12], m_sess.TI, 4);
+        uint8_t enc[16];
+        dfc_crypto_aes_cbc(true, key, MFPLUS_KEYSIZE, ivr, RndAp, enc, 16);
+        memcpy(&m_tcl_session_state.m_resp_buf[1], enc, 16);
+        m_sess.authenticated = true;
+        m_sess.nonfirst_pending = false;
+        respond(17, STATUS_OK);
+        return;
+    }
+
+    uint8_t TI[4];
+    for (int i = 0; i < 4; i++) TI[i] = (uint8_t)rand();
     memcpy(m_sess.TI, TI, 4);
+
+    uint8_t plain[32];
+    memcpy(&plain[0], TI, 4);
+    memcpy(&plain[4], RndAp, 16);
+    memset(&plain[20], 0, 6);  // PICCap2: no extended capabilities
+    memset(&plain[26], 0, 6);  // PCDCap2: echo (PCD sent none)
+
+    uint8_t iv0b[16] = {0};
+    uint8_t enc[32];
+    dfc_crypto_aes_cbc(true, key, MFPLUS_KEYSIZE, iv0b, plain, enc, 32);
+
     m_sess.R_Ctr = 0;
     m_sess.W_Ctr = 0;
     m_sess.authenticated = true;
@@ -217,7 +384,7 @@ static void do_auth2(uint8_t *apdu, uint16_t len) {
 static void calc_mac(uint8_t cmd_or_status, uint16_t ctr, uint8_t block_num,
                       uint8_t block_count, const uint8_t *extra, uint16_t extra_len,
                       bool is_resp, bool is_write, uint8_t *mac_out) {
-    uint8_t md[64];
+    uint8_t md[96];  // worst case: 1+2+4+3+64(4 blocks) = 74
     uint16_t n = 0;
     md[n++] = cmd_or_status;
     md[n++] = (uint8_t)(ctr & 0xFF);
@@ -233,7 +400,9 @@ static void calc_mac(uint8_t cmd_or_status, uint16_t ctr, uint8_t block_num,
         memcpy(&md[n], extra, extra_len);
         n += extra_len;
     }
-    aes_cmac(m_sess.Kmac, 16, md, n, mac_out);  // mac_out gets 16 bytes; caller uses first 8
+    uint8_t full[16];
+    aes_cmac(m_sess.Kmac, 16, md, n, full);
+    cmac_truncate8(full, mac_out);
 }
 
 // ---- ReadBlock ----
@@ -253,7 +422,7 @@ static void do_read(uint8_t *apdu, uint16_t len) {
     uint8_t block_count = apdu[3];
 
     if (!nomaccmd) {
-        uint8_t mac[16];
+        uint8_t mac[8];
         calc_mac(apdu[0], m_sess.R_Ctr, block_num, block_count, &apdu[1], 3, false, false, mac);
         if (memcmp(mac, &apdu[4], 8) != 0) { respond_status(STATUS_MAC_ERR); return; }
     }
@@ -293,7 +462,7 @@ static void do_read(uint8_t *apdu, uint16_t len) {
         uint8_t status_and_data[1 + 16 * 4];
         status_and_data[0] = STATUS_OK;
         memcpy(&status_and_data[1], out, resp_data_len);
-        uint8_t mac[16];
+        uint8_t mac[8];
         calc_mac(STATUS_OK, m_sess.R_Ctr, block_num, block_count, &status_and_data[1], resp_data_len, true, false, mac);
         memcpy(&m_tcl_session_state.m_resp_buf[total], mac, 8);
         total += 8;
@@ -318,7 +487,7 @@ static void do_write(uint8_t *apdu, uint16_t len) {
 
     if (block_num >= m_tag_information->block_max) { respond_status(STATUS_BLOCK_ERR); return; }
 
-    uint8_t mac[16];
+    uint8_t mac[8];
     calc_mac(apdu[0], m_sess.W_Ctr, block_num, 1, &apdu[1], 18, false, true, mac);
     if (memcmp(mac, &apdu[19], 8) != 0) { respond_status(STATUS_MAC_ERR); return; }
 
@@ -338,7 +507,7 @@ static void do_write(uint8_t *apdu, uint16_t len) {
 
     uint16_t total = 1;
     if (!nomacres) {
-        uint8_t status_mac[16];
+        uint8_t status_mac[8];
         calc_mac(STATUS_OK, m_sess.W_Ctr, block_num, 1, NULL, 0, true, true, status_mac);
         memcpy(&m_tcl_session_state.m_resp_buf[1], status_mac, 8);
         total += 8;
@@ -364,8 +533,11 @@ static void nfc_tag_mfplus_state_handler(uint8_t *data, uint16_t szBytes) {
             else { do_getversion_frame3(); gv_frame = 0; }
             break;
         }
-        case CMD_AUTH_FIRST_1: do_auth1(apdu, len); break;
-        case CMD_AUTH_FIRST_2: do_auth2(apdu, len); break;
+        case CMD_WRITEPERSO:   do_writeperso(apdu, len); break;
+        case CMD_COMMITPERSO:  do_commitperso(len); break;
+        case CMD_AUTH_FIRST_1:
+        case CMD_AUTH_NONFIRST_1: do_auth1(apdu, len); break;
+        case CMD_AUTH_2: do_auth2(apdu, len); break;
         default:
             if ((apdu[0] & 0xF8) == 0x30) do_read(apdu, len);
             else if ((apdu[0] & 0xFC) == 0xA0) do_write(apdu, len);
@@ -417,7 +589,7 @@ bool nfc_tag_mfplus_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
     info->res_coll.size    = NFC_TAG_14A_UID_DOUBLE_SIZE;
     info->res_coll.atqa[0] = 0x44;
     info->res_coll.atqa[1] = 0x00;
-    info->res_coll.sak[0]  = 0x20;  // full ISO14443-4, SL3
+    info->res_coll.sak[0]  = 0x20;  // full ISO14443-4, SL0/SL3
     static const uint8_t default_uid[] = {0x04, 0x4D, 0x50, 0x33, 0x53, 0x4C, 0x33};
     memcpy(info->res_coll.uid, default_uid, 7);
 
@@ -425,12 +597,16 @@ bool nfc_tag_mfplus_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
     info->res_coll.ats.length = sizeof(default_ats);
     memcpy(info->res_coll.ats.data, default_ats, sizeof(default_ats));
 
-    info->block_max = (tag_type == TAG_TYPE_MIFARE_PLUS_S4K_SL3) ? 256 : 128;
-    memset(info->default_key, 0x00, 16);  // all-zero transport key, like SL0->SL3 default
+    bool is_4k = (tag_type == TAG_TYPE_MIFARE_PLUS_S4K_SL3);
+    info->block_max   = is_4k ? 256 : 128;
+    info->num_sectors = is_4k ? 40 : 32;
+    // Starts in SL0 (factory/transport state); `hf mfplus wrp`/`initp` then
+    // `commitp` personalizes it and switches it to SL3. All keys start
+    // zeroed, matching the real card's SL0 default transport key.
 
     fds_slot_record_map_t map_info;
     get_fds_map_by_slot_sense_type_for_dump(slot, TAG_SENSE_HF, &map_info);
     bool ret = fds_write_sync(map_info.id, map_info.key, sizeof(*info), info);
-    NRF_LOG_INFO("MIFARE Plus SL3 factory slot %d: %s", slot, ret ? "OK" : "FAIL");
+    NRF_LOG_INFO("MIFARE Plus SL0 factory slot %d: %s", slot, ret ? "OK" : "FAIL");
     return ret;
 }

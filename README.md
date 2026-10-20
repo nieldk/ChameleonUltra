@@ -14,6 +14,22 @@ and remains GPLv3. See [Credits and license](#credits-and-license).
 
 ![overview](docs/images/ultra-overview.png)
 
+## Legal / responsible use
+
+This firmware emulates and analyzes contactless card protocols (MIFARE
+Classic/Plus, MIFARE DESFire, and others) for security research, interoperability
+testing, and development purposes. It is intended for use on **cards and systems
+you own or are explicitly authorized to test**.
+
+Using this hardware or firmware to access, clone, or interfere with payment
+systems, transit systems, access-control systems, or any other card or system
+you do not own and are not authorized to test is illegal in most jurisdictions
+and is not an authorized or supported use of this project. The maintainer and
+contributors accept no responsibility for misuse.
+
+If you're doing authorized security research or a pentest engagement, keep your
+scope/authorization documentation on hand.
+
 ## Why Phreakbyte
 
 The stock firmware ships a signed Nordic Secure DFU bootloader, so every update

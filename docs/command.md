@@ -1,5 +1,9 @@
 # Phreakbyte CLI Command Reference
 
+> **Use only on cards/systems you own or are authorized to test.** See
+> [Legal / responsible use](../README.md#legal--responsible-use) in the
+> top-level README.
+
 Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 44 command groups, 215 commands.
 
 Notation: `<...>` are values you supply. Each option lists its flags, help, allowed `choices`, whether it is `required`, and its `default`. Run any command with `-h` in the client for the same information live.
@@ -678,18 +682,25 @@ Mifare Classic write one block
 
 ### `hf mfplus`
 
-MIFARE Plus SL3 (AES) commands
-
-#### `hf mfplus econfig`
-
-Set the shared AES key MIFARE Plus SL3 emulation uses
-
-- `-s`, `--slot` — Slot Index: [1, 2, 3, 4, 5, 6, 7, 8] Default: active slot (choices: 1, 2, 3, 4, 5, 6, 7, 8)
-- `-k`, `--key` — 16-byte AES key (32 hex chars), used as Key A and Key B for every sector (required)
+MIFARE Plus SL0/SL3 (AES) commands
 
 #### `hf mfplus info`
 
-Show MIFARE Plus SL3 emulator configuration
+Show MIFARE Plus emulator state (security level, block count)
+
+- `-s`, `--slot` — Slot Index: [1, 2, 3, 4, 5, 6, 7, 8] Default: active slot (choices: 1, 2, 3, 4, 5, 6, 7, 8)
+
+#### `hf mfplus wrp`
+
+WritePerso: write one AES key into the MIFARE Plus key table. Only valid while the card is in SL0.
+
+- `-s`, `--slot` — Slot Index: [1, 2, 3, 4, 5, 6, 7, 8] Default: active slot (choices: 1, 2, 3, 4, 5, 6, 7, 8)
+- `-a`, `--addr` — Key slot: `master`, `config`, `l3switch` (the three mandatory admin keys), `<sector>:A` / `<sector>:B` for a per-sector key, or a raw 4-hex-digit key number (e.g. 4002) (required)
+- `-k`, `--key` — 16-byte AES key (32 hex chars) (required)
+
+#### `hf mfplus commitp`
+
+CommitPerso: switch SL0 -> SL3. Requires the three mandatory admin keys (master/config/l3switch) to have been written first.
 
 - `-s`, `--slot` — Slot Index: [1, 2, 3, 4, 5, 6, 7, 8] Default: active slot (choices: 1, 2, 3, 4, 5, 6, 7, 8)
 
