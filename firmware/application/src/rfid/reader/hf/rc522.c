@@ -304,21 +304,11 @@ uint8_t pcd_14a_reader_bytes_transfer(uint8_t Command, uint8_t *pIn, uint8_t InL
 
     bsp_set_timer(g_timeout_auto_timer, 0);         // Before starting the operation, return to zero over time counting
 
-    NRF_LOG_INFO("bytes_transfer: wait begin, waitFor=0x%02x timeout_ms=%d timer=%p busy=%d",
-                 waitFor, g_com_timeout_ms, g_timeout_auto_timer, g_timeout_auto_timer->busy);
-    uint32_t loop_iters = 0;
     do {
         n = read_register_single(ComIrqReg);                // Read the communication interrupt register to determine whether the current IO task is completed!
         not_timeout = NO_TIMEOUT_1MS(g_timeout_auto_timer, g_com_timeout_ms);
-        loop_iters++;
-        if ((loop_iters & 0x1FFFF) == 0) {
-            // Heartbeat: proves the loop is actually iterating, and whether
-            // the timer's .time is advancing at all.
-            NRF_LOG_INFO("bytes_transfer: wait iter=%u n=0x%02x time=%u not_timeout=%d",
-                         loop_iters, n, g_timeout_auto_timer->time, not_timeout);
-        }
     } while (not_timeout && (!(n & waitFor)));  // Exit conditions: timeout interruption, interrupt with empty command commands
-    NRF_LOG_INFO("bytes_transfer: wait end iters=%u n=0x%02x not_timeout=%d", loop_iters, n, not_timeout);
+    // NRF_LOG_INFO("N = %02x\n", n);
 
     if (Command == PCD_TRANSCEIVE) {
         clear_register_mask(BitFramingReg, 0x80);       // Clean up allows the startsend bit and the bit length position
