@@ -12,52 +12,86 @@ from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import FileHistory
 from chameleon_utils import CR, CG, CY, color_string
 
-ULTRA = r"""
-                                                                ╦ ╦╦ ╔╦╗╦═╗╔═╗
-                                                   ███████      ║ ║║  ║ ╠╦╝╠═╣
-                                                                ╚═╝╩═╝╩ ╩╚═╩ ╩
-"""
-LITE = r"""
-                                                                ╦  ╦╔╦╗╔═╗
-                                                   ███████      ║  ║ ║ ║╣
-                                                                ╩═╝╩ ╩ ╚═╝
-"""
-CHAMELEON = """
-  ╻
-╺━┫  P
-  ┣╸ H
-  ┣╸ R
-  ┣╸ E
-  ┣╸ A   ██████╗██╗  ██╗ █████╗ ███╗   ███╗███████╗██╗     ███████╗ ██████╗ ███╗   ██╗
-  ┣╸ K  ██╔════╝██║  ██║██╔══██╗████╗ ████║██╔════╝██║     ██╔════╝██╔═══██╗████╗  ██║
-  ┣╸ B  ██║     ███████║███████║██╔████╔██║█████╗  ██║     █████╗  ██║   ██║██╔██╗ ██║
-  ┣╸ Y  ██║     ██╔══██║██╔══██║██║╚██╔╝██║██╔══╝  ██║     ██╔══╝  ██║   ██║██║╚██╗██║
-  ┣╸ T  ╚██████╗██║  ██║██║  ██║██║ ╚═╝ ██║███████╗███████╗███████╗╚██████╔╝██║ ╚████║
-  ┣╸ E   ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝╚══════╝╚══════╝ ╚═════╝ ╚═╝  ╚═══╝
-  ┃
-  ┣╸ E
-  ┣╸ D
-  ┣╸ I
-  ┣╸ T
-  ┣╸ I
-  ┣╸ O
-  ┣╸ N
-  ╹
-"""
+# Chameleon perched on a small reader board (coil + components: a nod to
+# the pm3 mini), converted from a hand-drawn silhouette.
+CHAMELEON_ART = [
+    "                   ▄                      ▄",
+    "                  ▄██▄                    ██",
+    "                 █████▄                  ███▄ ▄████▄▄",
+    "          ▄▄▄▄  ███████▄                 █████████████",
+    "      ▄▄████████████████████▄▄▄          ▄███▀   █████",
+    "    ▄████████████████████████████▄▄   ▄▄████▀ ▄█▄ ████",
+    "  ▄█████▀▀▄▄▄███████████████████████▄███████  ▀██ ███▀",
+    "  ████▀▄█████████████████████████████████████▄   ▄███",
+    " ████ ██████████████████████████████████████████████",
+    "▄███ ███████████████████████████████████████████████",
+    "███▀ ███▀██████████████████████████████████████████",
+    "███ ████ ███████████████████████████████",
+    "███ ▀███ ██████████████████████████████▀",
+    "████ ███▄ ████████████████████████████▀",
+    " ███▄▀████▄▀█████████████████████████▀",
+    " ████▄▀████████████████████████████▀",
+    "  ▀████▄▀██████████████████████████",
+    "   ▀█████▄▄▀▀▀▀▀▄▄█████▀▀▀▀▀  ████",
+    "     ▀█████████████████      ████▀",
+    "       ▀▀█████████████████▀█████████████",
+    "         ███ █████████████████████ █████",
+    "         ▀▀███████████████▄█▀███████████",
+]
+_ART_W = max(len(l) for l in CHAMELEON_ART) + 3
+
+BLOCK_TEXT = [
+    "██████╗██╗  ██╗ █████╗ ███╗   ███╗███████╗██╗     ███████╗ ██████╗ ███╗   ██╗",
+    "██╔════╝██║  ██║██╔══██╗████╗ ████║██╔════╝██║     ██╔════╝██╔═══██╗████╗  ██║",
+    "██║     ███████║███████║██╔████╔██║█████╗  ██║     █████╗  ██║   ██║██╔██╗ ██║",
+    "██║     ██╔══██║██╔══██║██║╚██╔╝██║██╔══╝  ██║     ██╔══╝  ██║   ██║██║╚██╗██║",
+    "╚██████╗██║  ██║██║  ██║██║ ╚═╝ ██║███████╗███████╗███████╗╚██████╔╝██║ ╚████║",
+    " ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝╚══════╝╚══════╝ ╚═════╝ ╚═╝  ╚═══╝",
+]
+
+# Column offsets below are relative to BLOCK_TEXT's own left edge.
+ULTRA_BADGE = [
+    "                                                       ╦ ╦╦ ╔╦╗╦═╗╔═╗",
+    "                                          ███████      ║ ║║  ║ ╠╦╝╠═╣",
+    "                                                       ╚═╝╩═╝╩ ╩╚═╩ ╩",
+]
+LITE_BADGE = [
+    "                                                       ╦  ╦╔╦╗╔═╗",
+    "                                          ███████      ║  ║ ║ ║╣",
+    "                                                       ╩═╝╩ ╩ ╚═╝",
+]
+TAGLINE = "P H R E A K B Y T E   E D I T I O N"
 
 
-def _compose_banner(badge, anchor=13):
-    rows = [list(l) for l in CHAMELEON.split("\n")]
-    lines = [l for l in badge.split("\n") if l.strip()]
-    for k, line in enumerate(lines):
-        r = anchor + k
-        for c, ch in enumerate(line):
-            if ch == " ":
-                continue
-            while len(rows[r]) <= c:
-                rows[r].append(" ")
-            rows[r][c] = ch
-    return "\n".join("".join(r).rstrip() for r in rows)
+def _compose_banner(badge):
+    canvas = [list(l.ljust(_ART_W)) for l in CHAMELEON_ART]
+
+    def paste(start_row, lines, col_offset=_ART_W):
+        for k, line in enumerate(lines):
+            r = start_row + k
+            while len(canvas) <= r:
+                canvas.append(list(" " * _ART_W))
+            row = canvas[r]
+            for c, ch in enumerate(line):
+                if ch == " ":
+                    continue
+                col = col_offset + c
+                while len(row) <= col:
+                    row.append(" ")
+                row[col] = ch
+
+    paste(4, BLOCK_TEXT)
+    paste(11, badge)
+    paste(len(canvas) + 1, [TAGLINE])
+    return [("".join(r).rstrip()) for r in canvas]
+
+
+def _color_banner(rows):
+    lines = []
+    for r in rows:
+        left, right = r[:_ART_W], r[_ART_W:]
+        lines.append(color_string((CG, left), (CY, right)))
+    return "\n".join(lines)
 
 
 ICEMAN = r"""
@@ -129,8 +163,8 @@ class ChameleonCLI:
                 model = self.cmd.get_device_model()  # 0 = Ultra, 1 = Lite
         except Exception:
             pass
-        badge = LITE if model == 1 else ULTRA
-        print(color_string((CY, _compose_banner(badge))))
+        badge = LITE_BADGE if model == 1 else ULTRA_BADGE
+        print(_color_banner(_compose_banner(badge)))
 
     def exec_cmd(self, cmd_str):
         if cmd_str == "":
