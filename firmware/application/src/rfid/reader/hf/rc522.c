@@ -612,7 +612,11 @@ uint8_t pcd_14a_reader_bytes_transfer_flags(uint8_t Command, uint8_t *pIn, uint8
         }
     } else {
         status = STATUS_HF_TAG_NO;
-        // NRF_LOG_INFO("Tag lost(timeout).\n");
+        // Diagnostic: FIFOLevelReg shows whether any bytes arrived before the
+        // timeout fired (partial/stalled frame) or the FIFO stayed empty
+        // (nothing reached the antenna at all).
+        uint8_t fifo_n = read_register_single(FIFOLevelReg);
+        NRF_LOG_INFO("Tag lost(timeout). ComIrqReg=0x%02x FIFOLevelReg=%d", n, fifo_n);
     }
 
     if ((flags & PCD_TRANSMIT_FLAG_NO_RESET_MF_CRYPTO1_ON) == 0 && status != STATUS_HF_TAG_OK) {
