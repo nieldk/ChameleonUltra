@@ -515,7 +515,14 @@ static void do_write(uint8_t *apdu, uint16_t len) {
     respond(total, STATUS_OK);
 }
 
-static void nfc_tag_mfplus_state_handler(uint8_t *data, uint16_t szBytes) {
+static void nfc_tag_mfplus_state_handler(uint8_t *data, uint16_t szBits) {
+    // nfc_14a delivers the frame length in BITS; the 14a_4 engine (and this
+    // handler's own length checks) work in bytes. ISO-DEP frames are
+    // byte-aligned, so divide -- see mode_u2f.c's u2f_cb_state, which does
+    // the same conversion for the same reason; this handler was missing it
+    // entirely (not just off by a constant), which is why every exact
+    // length check here was failing on real hardware.
+    uint16_t szBytes = szBits / 8;
     if (!nfc_tag_14a_4_base_handler(&m_tcl_session_state, data, szBytes)) return;
 
     uint8_t *apdu = m_tcl_session_state.m_apdu_buf;
