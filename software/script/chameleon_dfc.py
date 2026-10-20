@@ -70,6 +70,7 @@ FILE_TYPE_BACKUP = 0x01
 FILE_TYPE_VALUE = 0x02
 FILE_TYPE_LINEAR = 0x03
 FILE_TYPE_CYCLIC = 0x04
+FILE_TYPE_TMAC = 0x05
 
 FILE_TYPES = {
     "Standard Data": FILE_TYPE_STANDARD,
@@ -77,15 +78,37 @@ FILE_TYPES = {
     "Value": FILE_TYPE_VALUE,
     "Linear Record": FILE_TYPE_LINEAR,
     "Cyclic Record": FILE_TYPE_CYCLIC,
+    "Transaction MAC": FILE_TYPE_TMAC,
 }
 
 GENERATIONS = {"EV1": 1, "EV2": 2, "EV3": 3}
 
-# Generations the firmware emulator actually implements. dfc-core provides the
-# EV2 auth / secure-messaging / transaction-MAC path when the firmware is built
-# with DFC_PROFILE_FULL_EV2. EV3-only features (e.g. SDM) remain unemulated.
-EMULATED_GENERATIONS = {GENERATIONS["EV1"], GENERATIONS["EV2"]}
+# Generations the firmware emulator actually implements. The firmware's
+# DFC_BUILD_PROFILE now defaults to FULL_EV3 (dfc-core provides the EV2/EV3
+# auth, secure-messaging, SDM, transaction-MAC, key-set, proximity,
+# virtual-card, and DAM-key paths), so all three are emulated.
+EMULATED_GENERATIONS = {GENERATIONS["EV1"], GENERATIONS["EV2"], GENERATIONS["EV3"]}
 PROVENANCES = {"Real": 0, "Random": 1, "Unknown": 2}
+
+# Key-set type tokens. Oddly, the reference text grammar reuses the native
+# authentication-mode names ("D40"/"ISO"/"AES") as the three key-set type
+# tokens, even though they mean 2K3DES/3K3DES/AES here, not an auth mode.
+KEY_SET_TYPE_NAMES = ("D40", "ISO", "AES")
+KEY_SET_TYPE_2K3DES = 0
+KEY_SET_TYPE_3K3DES = 1
+KEY_SET_TYPE_AES = 2
+KEY_SET_MINIMUM_COUNT = 2
+KEY_SET_MAX_SETS = 16
+
+# Fixed octet lengths from dfc_common.h.
+AES_KEY_LEN = 16
+WIRE_MAC_LEN = 8
+TRANSACTION_READER_ID_LEN = 16
+VIRTUAL_CARD_CAPABILITY_LEN = 2
+VIRTUAL_CARD_MAX_INSTALL_ID_LEN = 16
+STATIC_SIGNATURE_LEN = 56
+EV2_CAPABILITY_LEN = 6
+APPLICATION_CAPABILITY_DATA_LEN = 10
 
 # ISO file IDs that name the master file or are otherwise reserved, so they
 # cannot identify an application or a file.
@@ -204,6 +227,14 @@ class DfcKey:
 
 
 @dataclass
+class DfcKeySet:
+    version: int = 0
+    type: int = KEY_SET_TYPE_AES
+    initialized: bool = False
+    keys: list[DfcKey] = field(default_factory=list)
+
+
+@dataclass
 class DfcApplication:
     aid: bytes = b"\x00\x00\x00"
     iso_aid: bytes = b""
@@ -217,6 +248,19 @@ class DfcApplication:
     sm_disable: int = -1  # v6: app SM-disable octet, -1 = absent
     key_len: int = 16
     keys: list[DfcKey] = field(default_factory=list)
+    # Key sets are an alternative to `keys`: present (>= 2 sets) means the
+    # application stores APP_KEY_SETS on the wire instead of plain APP_KEYS.
+    key_set_key_count: int = 0
+    key_set_max_size: int = 16
+    key_set_settings: int = 0
+    key_sets: list[DfcKeySet] = field(default_factory=list)
+    has_capability_data: bool = False
+    capability_data: bytes = b""
+    delegated: bool = False
+    delegated_slot_number: int = 0
+    delegated_slot_version: int = 0
+    delegated_quota_limit: int = 0
+    delegated_free_blocks: int = 0
 
 
 @dataclass
@@ -242,6 +286,33 @@ class DfcFile:
     record_count: int = 0
     # Leading known records, in card order. Fewer than record_count is legal.
     records: list[bytes] = field(default_factory=list)
+    # Transaction MAC file contents (type == FILE_TYPE_TMAC only).
+    transaction_counter: int = 0
+    transaction_mac: bytes = b""
+    transaction_mac_key_type: int = 0
+    transaction_mac_key_version: int = 0
+    transaction_mac_key: bytes = b""
+    previous_reader_id: bytes = b""
+    # Secure dynamic messaging, standard-data files only.
+    sdm_enabled: bool = False
+    sdm_options: int = 0
+    sdm_access_rights: int = 0
+    sdm_has_uid_offset: bool = False
+    sdm_uid_offset: int = 0
+    sdm_has_counter_offset: bool = False
+    sdm_counter_offset: int = 0
+    sdm_has_picc_data_offset: bool = False
+    sdm_picc_data_offset: int = 0
+    sdm_has_mac_input_offset: bool = False
+    sdm_mac_input_offset: int = 0
+    sdm_has_mac_offset: bool = False
+    sdm_mac_offset: int = 0
+    sdm_has_encrypted_file_offset: bool = False
+    sdm_encrypted_file_offset: int = 0
+    sdm_encrypted_file_length: int = 0
+    sdm_has_counter_limit: bool = False
+    sdm_counter_limit: int = 0
+    sdm_read_counter: int = 0
 
 
 @dataclass
@@ -267,6 +338,29 @@ class DfcCredential:
     picc_sm_disable: int | None = None
     apps: list[DfcApplication] = field(default_factory=list)
     files: list[DfcFile] = field(default_factory=list)
+    picc_has_static_signature: bool = False
+    picc_static_signature: bytes = b""
+    picc_has_ev2_capabilities: bool = False
+    picc_ev2_capabilities: bytes = b""
+    picc_has_proximity_key: bool = False
+    picc_proximity_key: bytes = b""
+    picc_proximity_option: int = 0
+    picc_proximity_published_response_time: int = 0
+    picc_has_proximity_bitrate: bool = False
+    picc_proximity_bitrate: int = 0
+    virtual_card_configured: bool = False
+    virtual_card_installation_id: bytes = b""
+    virtual_card_information: int = 0
+    virtual_card_capabilities: bytes = b""
+    virtual_card_uid: bytes = b""
+    virtual_card_select_mac_key: bytes = b""
+    virtual_card_select_encryption_key: bytes = b""
+    virtual_card_authentication_mandatory: bool = False
+    virtual_card_proximity_mandatory: bool = False
+    picc_has_dam_keys: bool = False
+    picc_dam_auth_key: bytes = b""
+    picc_dam_mac_key: bytes = b""
+    picc_dam_encryption_key: bytes = b""
 
     @property
     def picc_key_len(self) -> int:
@@ -331,20 +425,38 @@ class DfcCredential:
             extras.append(f"ATQA {self.picc_atqa.hex().upper()}")
         if self.picc_sm_disable is not None:
             extras.append(f"SM disable {self.picc_sm_disable:02X}")
+        if self.picc_has_static_signature:
+            extras.append("static signature")
+        if self.picc_has_ev2_capabilities:
+            extras.append(f"EV2 caps {self.picc_ev2_capabilities.hex().upper()}")
+        if self.picc_has_proximity_key:
+            extras.append("proximity check")
+        if self.virtual_card_configured:
+            extras.append("virtual card")
+        if self.picc_has_dam_keys:
+            extras.append("DAM keys")
         if extras:
             picc += " [" + ", ".join(extras) + "]"
         lines.append(picc)
 
         lines.append(f"Applications: {len(self.apps)}")
         for i, app in enumerate(self.apps):
-            desc = (
-                f"  [{i}] AID {app.aid.hex().upper()} "
-                f"keys {len(app.keys)}x{app.key_len}B auth 0x{app.auth_command:02X}"
-            )
+            if len(app.key_sets) >= KEY_SET_MINIMUM_COUNT:
+                key_desc = (
+                    f"{len(app.key_sets)} key set(s) of "
+                    f"{app.key_set_key_count}x{app.key_set_max_size}B"
+                )
+            else:
+                key_desc = f"keys {len(app.keys)}x{app.key_len}B"
+            desc = f"  [{i}] AID {app.aid.hex().upper()} {key_desc} auth 0x{app.auth_command:02X}"
             if app.has_iso_file_id:
                 desc += f" ISO FID {app.iso_file_id:04X}"
             if app.iso_aid:
                 desc += f" DF name {app.iso_aid.hex().upper()}"
+            if app.has_capability_data:
+                desc += " [capability data]"
+            if app.delegated:
+                desc += f" [delegated slot {app.delegated_slot_number}]"
             lines.append(desc)
 
         lines.append(f"Files: {len(self.files)}")
@@ -365,10 +477,14 @@ class DfcCredential:
                     f" records {f.record_count}/{f.max_records} of {f.record_size}B"
                     f", {len(f.records)} known"
                 )
+            elif f.type == FILE_TYPE_TMAC:
+                desc += f" counter {f.transaction_counter}"
             else:
                 desc += f" size {f.declared_size}B, {len(f.data)}B known"
                 if f.contents_complete:
                     desc += " (complete)"
+                if f.sdm_enabled:
+                    desc += " [SDM]"
             lines.append(desc)
         return "\n".join(lines)
 
@@ -429,6 +545,52 @@ def _encode_keys(tag: int, keys: list[DfcKey], key_len: int) -> bytes:
     return _tlv(tag, body)
 
 
+def _encode_key_set(index: int, ks: "DfcKeySet", key_len: int) -> bytes:
+    body = (
+        _int(0x80, index)
+        + _tlv(0x81, bytes([ks.version]))
+        + _int(0x82, ks.type)
+        + _bool(0x83, ks.initialized)
+        + _tlv(0xA4, b"".join(_encode_key(i, k, key_len) for i, k in enumerate(ks.keys)))
+    )
+    return _tlv(0x30, body)
+
+
+def _encode_key_sets(app: DfcApplication) -> bytes:
+    sets = b"".join(
+        _encode_key_set(i, ks, app.key_set_max_size) for i, ks in enumerate(app.key_sets)
+    )
+    body = (
+        _int(0x80, app.key_set_key_count)
+        + _int(0x81, app.key_set_max_size)
+        + _tlv(0x82, bytes([app.key_set_settings]))
+        + _tlv(0xA3, sets)
+    )
+    return _tlv(0xA8, body)
+
+
+def _encode_sdm(f: DfcFile) -> bytes:
+    body = _tlv(0x80, bytes([f.sdm_options])) + _tlv(0x81, _u16(f.sdm_access_rights))
+    if f.sdm_has_uid_offset:
+        body += _int(0x82, f.sdm_uid_offset)
+    if f.sdm_has_counter_offset:
+        body += _int(0x83, f.sdm_counter_offset)
+    if f.sdm_has_picc_data_offset:
+        body += _int(0x84, f.sdm_picc_data_offset)
+    if f.sdm_has_mac_input_offset:
+        body += _int(0x85, f.sdm_mac_input_offset)
+    if f.sdm_has_mac_offset:
+        body += _int(0x86, f.sdm_mac_offset)
+    if f.sdm_has_encrypted_file_offset:
+        body += _int(0x87, f.sdm_encrypted_file_offset) + _int(
+            0x88, f.sdm_encrypted_file_length
+        )
+    if f.sdm_has_counter_limit:
+        body += _int(0x89, f.sdm_counter_limit)
+    body += _int(0x8A, f.sdm_read_counter)
+    return _tlv(0xA9, body)
+
+
 def _encode_file(f: DfcFile) -> bytes:
     body = (
         _int(0x80, f.number)
@@ -453,6 +615,16 @@ def _encode_file(f: DfcFile) -> bytes:
             + _tlv(0x83, bytes([f.limited_credit]))
         )
         body += _tlv(0xA6, contents)
+    elif f.type == FILE_TYPE_TMAC:
+        contents = (
+            _int(0x80, f.transaction_counter)
+            + _tlv(0x81, f.transaction_mac)
+            + _tlv(0x82, bytes([f.transaction_mac_key_type]))
+            + _tlv(0x83, bytes([f.transaction_mac_key_version]))
+            + _tlv(0x84, f.transaction_mac_key)
+            + _tlv(0x85, f.previous_reader_id)
+        )
+        body += _tlv(0xA8, contents)
     else:
         records = b"".join(_tlv(0x04, r) for r in f.records)
         contents = (
@@ -463,6 +635,11 @@ def _encode_file(f: DfcFile) -> bytes:
             + _tlv(0xA4, records)
         )
         body += _tlv(0xA7, contents)
+
+    # FILE_SDM follows whichever contents alternative was written above, only
+    # on a standard data file (section 2.2.4 rule 5).
+    if f.sdm_enabled:
+        body += _encode_sdm(f)
     return _tlv(0x30, body)
 
 
@@ -477,32 +654,41 @@ def _encode_app(cred: DfcCredential, index: int, app: DfcApplication) -> bytes:
         body += _tlv(0x81, _u16(app.iso_file_id))
     if app.iso_aid:
         body += _tlv(0x82, app.iso_aid)
-    body += (
-        _tlv(0x83, bytes([app.key_settings_1]))
-        + _tlv(0x84, bytes([app.key_settings_2]))
-        + _int(
-            0x85,
-            (
-                (app.auth_mask or native_cmd_to_mask(app.auth_command))
-                if _target_v6(cred)
-                else AUTH_MODE_CODES.get(app.auth_command, 0)
-            ),
-        )
-        + _encode_keys(0xA6, app.keys, app.key_len)
-        + _encode_files(0xA7, cred, index)
-        # v6 APP_SM_DISABLE=P(11)=0x8B, APP_PREFERRED_AUTH=P(12)=0x8C,
-        # both declared AFTER keys(6)/files(7)/key_sets(8)/delegated(10).
-        + (
-            _tlv(0x8B, bytes([app.sm_disable]))
-            if (_target_v6(cred) and app.sm_disable >= 0)
-            else b""
-        )
-        + (
-            _int(0x8C, AUTH_CMD_BITS[app.preferred_cmd])
-            if (_target_v6(cred) and app.preferred_cmd)
-            else b""
-        )
+    body += _tlv(0x83, bytes([app.key_settings_1])) + _tlv(
+        0x84, bytes([app.key_settings_2])
+    ) + _int(
+        0x85,
+        (
+            (app.auth_mask or native_cmd_to_mask(app.auth_command))
+            if _target_v6(cred)
+            else AUTH_MODE_CODES.get(app.auth_command, 0)
+        ),
     )
+    # Key storage is an exclusive alternative: fewer than 2 sets means plain
+    # APP_KEYS declared here, before files; 2 or more means APP_KEY_SETS
+    # instead, declared after files (APP_KEYS, APP_FILES, APP_KEY_SETS).
+    use_key_sets = len(app.key_sets) >= KEY_SET_MINIMUM_COUNT
+    if not use_key_sets:
+        body += _encode_keys(0xA6, app.keys, app.key_len)
+    body += _encode_files(0xA7, cred, index)
+    if use_key_sets:
+        body += _encode_key_sets(app)
+    if app.has_capability_data:
+        body += _tlv(0x89, app.capability_data)
+    if app.delegated:
+        delegated = (
+            _int(0x80, app.delegated_slot_number)
+            + _tlv(0x81, bytes([app.delegated_slot_version]))
+            + _int(0x82, app.delegated_quota_limit)
+            + _int(0x83, app.delegated_free_blocks)
+        )
+        body += _tlv(0xAA, delegated)
+    # v6 APP_SM_DISABLE=P(11)=0x8B, APP_PREFERRED_AUTH=P(12)=0x8C, both
+    # declared AFTER keys(6)/files(7)/key_sets(8)/capability(9)/delegated(10).
+    if _target_v6(cred) and app.sm_disable >= 0:
+        body += _tlv(0x8B, bytes([app.sm_disable]))
+    if _target_v6(cred) and app.preferred_cmd:
+        body += _int(0x8C, AUTH_CMD_BITS[app.preferred_cmd])
     return _tlv(0x30, body)
 
 
@@ -525,6 +711,8 @@ def der_encode(cred: DfcCredential) -> bytes:
         + _tlv(0x82, cred.uid)
         + _int(0x83, cred.uid_provenance)
     )
+    if cred.picc_has_static_signature:
+        card += _tlv(0x84, cred.picc_static_signature)
     if cred.hardware_version:
         card += _tlv(0x85, cred.hardware_version)
     if cred.software_version:
@@ -554,9 +742,39 @@ def der_encode(cred: DfcCredential) -> bytes:
         picc += _tlv(0x87, cred.picc_atqa)
     if cred.picc_sm_disable is not None:
         picc += _tlv(0x88, bytes([cred.picc_sm_disable]))
+    # Declared order from here on (not numeric by tag): keys, files, EV2
+    # capabilities, proximity, virtual card, DAM keys, preferred auth.
     picc += _encode_keys(0xA9, cred.picc_keys, cred.picc_key_len)
     picc += _encode_files(0xAA, cred, OWNER_PICC)
-    # v6 PICC_PREFERRED_AUTH is P(15) = 0x8F, declared AFTER keys(9)/files(10).
+    if cred.picc_has_ev2_capabilities:
+        picc += _tlv(0x8B, cred.picc_ev2_capabilities)
+    if cred.picc_has_proximity_key:
+        proximity = _tlv(0x80, cred.picc_proximity_key) + _tlv(
+            0x81, bytes([cred.picc_proximity_option])
+        ) + _int(0x82, cred.picc_proximity_published_response_time)
+        if cred.picc_has_proximity_bitrate:
+            proximity += _tlv(0x83, bytes([cred.picc_proximity_bitrate]))
+        picc += _tlv(0xAC, proximity)
+    if cred.virtual_card_configured:
+        vcard = (
+            _tlv(0x80, cred.virtual_card_installation_id)
+            + _tlv(0x81, bytes([cred.virtual_card_information]))
+            + _tlv(0x82, cred.virtual_card_capabilities)
+            + _tlv(0x83, cred.virtual_card_uid)
+            + _tlv(0x84, cred.virtual_card_select_mac_key)
+            + _tlv(0x85, cred.virtual_card_select_encryption_key)
+            + _bool(0x86, cred.virtual_card_authentication_mandatory)
+            + _bool(0x87, cred.virtual_card_proximity_mandatory)
+        )
+        picc += _tlv(0xAD, vcard)
+    if cred.picc_has_dam_keys:
+        dam = (
+            _tlv(0x80, cred.picc_dam_auth_key)
+            + _tlv(0x81, cred.picc_dam_mac_key)
+            + _tlv(0x82, cred.picc_dam_encryption_key)
+        )
+        picc += _tlv(0xAE, dam)
+    # v6 PICC_PREFERRED_AUTH is P(15) = 0x8F, declared last.
     if _target_v6(cred) and cred.picc_preferred_cmd:
         picc += _int(0x8F, AUTH_CMD_BITS[cred.picc_preferred_cmd])
 
@@ -570,7 +788,7 @@ def der_encode(cred: DfcCredential) -> bytes:
     )
     if _v6:
         ver = DFC_VERSION_V6
-    elif cred.hardware_version or cred.software_version:
+    elif cred.hardware_version or cred.software_version or cred.picc_has_static_signature:
         ver = 5
     else:
         ver = DFC_VERSION
@@ -597,18 +815,58 @@ def _validate(cred: DfcCredential) -> None:
     if cred.generation not in EMULATED_GENERATIONS:
         raise DfcError(
             f"{_name_of(GENERATIONS, cred.generation, 'this card generation')} "
-            "uses DFC v4 features (EV3) not emulated by this firmware",
+            "is not emulated by this firmware",
             DfcErrorClass.UNSUPPORTED,
         )
     if cred.uid_provenance not in PROVENANCES.values():
         raise DfcError(f"unknown UID provenance {cred.uid_provenance}")
     if not 0 <= cred.storage <= U32_MAX:
         raise DfcError(f"card storage {cred.storage} out of range")
+    if cred.picc_has_static_signature and len(cred.picc_static_signature) != STATIC_SIGNATURE_LEN:
+        raise DfcError(
+            f"Card Static Signature must be {STATIC_SIGNATURE_LEN} bytes, "
+            f"got {len(cred.picc_static_signature)}"
+        )
     # A slot with no key entry carries the factory default (specification section
     # 1.4), so a credential may record no key material at all. The default is
     # supplied where the key is used, on the device, and is never written here.
     if len(cred.picc_keys) > MAX_KEYS:
         raise DfcError(f"{len(cred.picc_keys)} PICC keys, the limit is {MAX_KEYS}")
+    if cred.picc_has_ev2_capabilities and len(cred.picc_ev2_capabilities) != EV2_CAPABILITY_LEN:
+        raise DfcError(
+            f"PICC EV2 Card Capabilities must be {EV2_CAPABILITY_LEN} bytes"
+        )
+    if cred.picc_has_proximity_key:
+        if len(cred.picc_proximity_key) != AES_KEY_LEN:
+            raise DfcError(f"PICC Proximity Key must be {AES_KEY_LEN} bytes")
+        if not 0 <= cred.picc_proximity_published_response_time <= 0xFFFF:
+            raise DfcError("PICC Proximity Published Response Time out of range")
+    if cred.virtual_card_configured:
+        if not 1 <= len(cred.virtual_card_installation_id) <= VIRTUAL_CARD_MAX_INSTALL_ID_LEN:
+            raise DfcError(
+                "PICC Virtual Card Installation ID must be 1 to "
+                f"{VIRTUAL_CARD_MAX_INSTALL_ID_LEN} bytes"
+            )
+        if len(cred.virtual_card_capabilities) != VIRTUAL_CARD_CAPABILITY_LEN:
+            raise DfcError(
+                f"PICC Virtual Card Capabilities must be {VIRTUAL_CARD_CAPABILITY_LEN} bytes"
+            )
+        if len(cred.virtual_card_uid) not in (4, 7, 10):
+            raise DfcError("PICC Virtual Card UID must be 4, 7, or 10 bytes")
+        if len(cred.virtual_card_select_mac_key) != AES_KEY_LEN:
+            raise DfcError(f"PICC Virtual Card Select MAC Key must be {AES_KEY_LEN} bytes")
+        if len(cred.virtual_card_select_encryption_key) != AES_KEY_LEN:
+            raise DfcError(
+                f"PICC Virtual Card Select Encryption Key must be {AES_KEY_LEN} bytes"
+            )
+    if cred.picc_has_dam_keys:
+        for _n, _v in (
+            ("Authentication", cred.picc_dam_auth_key),
+            ("MAC", cred.picc_dam_mac_key),
+            ("Encryption", cred.picc_dam_encryption_key),
+        ):
+            if len(_v) != AES_KEY_LEN:
+                raise DfcError(f"PICC DAM {_n} Key must be {AES_KEY_LEN} bytes")
 
     seen_aids = set()
     for app in cred.apps:
@@ -617,10 +875,49 @@ def _validate(cred: DfcCredential) -> None:
         if app.aid in seen_aids:
             raise DfcError(f"duplicate AID {app.aid.hex().upper()}")
         seen_aids.add(app.aid)
-        if len(app.keys) > MAX_KEYS:
+        if app.key_sets:
+            if len(app.key_sets) < KEY_SET_MINIMUM_COUNT:
+                raise DfcError(
+                    f"application {app.aid.hex().upper()} has "
+                    f"{len(app.key_sets)} key sets, the minimum is "
+                    f"{KEY_SET_MINIMUM_COUNT}"
+                )
+            if len(app.key_sets) > KEY_SET_MAX_SETS:
+                raise DfcError(
+                    f"application {app.aid.hex().upper()} has "
+                    f"{len(app.key_sets)} key sets, the limit is {KEY_SET_MAX_SETS}"
+                )
+            if not app.key_sets[0].initialized:
+                raise DfcError(
+                    f"application {app.aid.hex().upper()} key set 00 shall be initialized"
+                )
+            for si, ks in enumerate(app.key_sets):
+                required = AES_KEY_LEN if ks.type != KEY_SET_TYPE_3K3DES else 24
+                if required > app.key_set_max_size:
+                    raise DfcError(
+                        f"application {app.aid.hex().upper()} key set {si:02X} "
+                        "type exceeds the maximum key size"
+                    )
+                for k in ks.keys:
+                    if len(k.value) != required:
+                        raise DfcError(
+                            f"application {app.aid.hex().upper()} key set {si:02X} "
+                            f"key is {len(k.value)} bytes, expected {required}"
+                        )
+        elif len(app.keys) > MAX_KEYS:
             raise DfcError(
                 f"application {app.aid.hex().upper()} has {len(app.keys)} keys, "
                 f"the limit is {MAX_KEYS}"
+            )
+        if app.has_capability_data and len(app.capability_data) != APPLICATION_CAPABILITY_DATA_LEN:
+            raise DfcError(
+                f"{app.aid.hex().upper()} Capability Data must be "
+                f"{APPLICATION_CAPABILITY_DATA_LEN} bytes"
+            )
+        if app.delegated and app.delegated_free_blocks > app.delegated_quota_limit:
+            raise DfcError(
+                f"application {app.aid.hex().upper()} delegated free blocks "
+                "exceed the quota"
             )
         if len(app.iso_aid) > 16:
             raise DfcError("DF name longer than 16 bytes")
@@ -694,10 +991,27 @@ def _validate(cred: DfcCredential) -> None:
                     f"file {f.number:02X} is marked complete but carries "
                     f"{len(f.records)} of {f.record_count} records"
                 )
+        elif f.type == FILE_TYPE_TMAC:
+            if len(f.transaction_mac) != WIRE_MAC_LEN:
+                raise DfcError(f"file {f.number:02X} Transaction MAC must be {WIRE_MAC_LEN} bytes")
+            if len(f.transaction_mac_key) != AES_KEY_LEN:
+                raise DfcError(
+                    f"file {f.number:02X} Transaction Key must be {AES_KEY_LEN} bytes"
+                )
+            if len(f.previous_reader_id) != TRANSACTION_READER_ID_LEN:
+                raise DfcError(
+                    f"file {f.number:02X} Previous Reader ID must be "
+                    f"{TRANSACTION_READER_ID_LEN} bytes"
+                )
         else:
             raise DfcError(
                 f"file type {f.type:02X} has no representation in version {DFC_VERSION}",
                 DfcErrorClass.UNSUPPORTED,
+            )
+
+        if f.sdm_enabled and f.type != FILE_TYPE_STANDARD:
+            raise DfcError(
+                f"file {f.number:02X} SDM belongs to a standard data file only"
             )
 
 
@@ -821,18 +1135,59 @@ def _read_keys(body: bytes, key_len: int) -> list[DfcKey]:
     return keys
 
 
+def _key_set_type_length(type_: int) -> int:
+    return 24 if type_ == KEY_SET_TYPE_3K3DES else AES_KEY_LEN
+
+
+def _read_key_sets(app: DfcApplication, body: bytes) -> None:
+    got = _fields(body, (0x80, 0x81, 0x82, 0xA3))
+    key_count = _read_uint(_req(got, 0x80), MAX_KEYS)
+    if key_count == 0:
+        raise DfcError("Key Set Key Count must be at least one")
+    max_size = _read_uint(_req(got, 0x81), 24)
+    if max_size not in (16, 24):
+        raise DfcError("Key Set Maximum Key Size must be 16 or 24")
+    app.key_set_key_count = key_count
+    app.key_set_max_size = max_size
+    app.key_set_settings = _read_octets(_req(got, 0x82), 1)[0]
+
+    sets_body = _req(got, 0xA3)
+    entries = _split(sets_body)
+    if len(entries) < KEY_SET_MINIMUM_COUNT:
+        raise DfcError(f"at least {KEY_SET_MINIMUM_COUNT} key sets are required")
+    if len(entries) > KEY_SET_MAX_SETS:
+        raise DfcError(f"{len(entries)} key sets exceed the limit of {KEY_SET_MAX_SETS}")
+
+    for index, (tag, value) in enumerate(entries):
+        if tag != 0x30:
+            raise DfcError(f"tag 0x{tag:02X} where a key set was expected")
+        sf = _fields(value, (0x80, 0x81, 0x82, 0x83, 0xA4))
+        number = _read_uint(_req(sf, 0x80), KEY_SET_MAX_SETS - 1)
+        if number != index:
+            raise DfcError(f"key set {number} out of ascending contiguous order")
+        ks = DfcKeySet()
+        ks.version = _read_octets(_req(sf, 0x81), 1)[0]
+        ks.type = _read_uint(_req(sf, 0x82), 0xFF)
+        if ks.type > KEY_SET_TYPE_AES:
+            raise DfcError(f"key set {index:02X} has an unknown type {ks.type}")
+        required = _key_set_type_length(ks.type)
+        if required > max_size:
+            raise DfcError(f"key set {index:02X} type exceeds the maximum key size")
+        ks.initialized = _read_bool(_req(sf, 0x83))
+        ks.keys = _read_keys(_req(sf, 0xA4), required)
+        if len(ks.keys) > key_count:
+            raise DfcError(f"key set {index:02X} carries more keys than Key Set Key Count")
+        app.key_sets.append(ks)
+    if not app.key_sets[0].initialized:
+        raise DfcError("key set 00 shall be initialized")
+
+
 def _read_file(body: bytes, owner: int) -> DfcFile:
     got = _fields(body, (0x80, 0x81, 0x82, 0x83, 0x84, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9))
     f = DfcFile(app_index=owner)
     f.number = _read_uint(_req(got, 0x80), 0x1F)
     f.type = _read_uint(_req(got, 0x81), 0xFF)
-    if f.type == 0x05 or 0xA8 in got or 0xA9 in got:
-        raise DfcError(
-            "transaction-MAC and SDM files are represented by DFC v4 but are "
-            "not emulated by this firmware",
-            DfcErrorClass.UNSUPPORTED,
-        )
-    if f.type > FILE_TYPE_CYCLIC:
+    if f.type > FILE_TYPE_TMAC:
         raise DfcError(
             f"file type {f.type:02X} has no representation in version {DFC_VERSION}",
             DfcErrorClass.UNSUPPORTED,
@@ -843,7 +1198,7 @@ def _read_file(body: bytes, owner: int) -> DfcFile:
         f.has_iso_file_id = True
         f.iso_file_id = _read_iso_file_id(got[0x84])
 
-    present = [t for t in (0xA5, 0xA6, 0xA7) if t in got]
+    present = [t for t in (0xA5, 0xA6, 0xA7, 0xA8) if t in got]
     if len(present) != 1:
         raise DfcError("a file carries exactly one contents alternative")
     expected = {
@@ -852,6 +1207,7 @@ def _read_file(body: bytes, owner: int) -> DfcFile:
         FILE_TYPE_VALUE: 0xA6,
         FILE_TYPE_LINEAR: 0xA7,
         FILE_TYPE_CYCLIC: 0xA7,
+        FILE_TYPE_TMAC: 0xA8,
     }[f.type]
     if present[0] != expected:
         raise DfcError(
@@ -884,6 +1240,14 @@ def _read_file(body: bytes, owner: int) -> DfcFile:
         if not f.value_lower_limit <= f.value <= f.value_upper_limit:
             raise DfcError("value outside its own limits")
         f.limited_credit = _read_octets(_req(c, 0x83), 1)[0]
+    elif expected == 0xA8:
+        c = _fields(got[0xA8], (0x80, 0x81, 0x82, 0x83, 0x84, 0x85))
+        f.transaction_counter = _read_uint(_req(c, 0x80), U32_MAX)
+        f.transaction_mac = _read_octets(_req(c, 0x81), WIRE_MAC_LEN)
+        f.transaction_mac_key_type = _read_octets(_req(c, 0x82), 1)[0]
+        f.transaction_mac_key_version = _read_octets(_req(c, 0x83), 1)[0]
+        f.transaction_mac_key = _read_octets(_req(c, 0x84), AES_KEY_LEN)
+        f.previous_reader_id = _read_octets(_req(c, 0x85), TRANSACTION_READER_ID_LEN)
     else:
         c = _fields(got[0xA7], (0x80, 0x81, 0x82, 0x83, 0xA4))
         f.record_size = _read_uint(_req(c, 0x80), U24_MAX)
@@ -906,7 +1270,39 @@ def _read_file(body: bytes, owner: int) -> DfcFile:
             raise DfcError("more records carried than the file holds")
         if f.contents_complete and len(f.records) != f.record_count:
             raise DfcError("records marked complete but fewer carried than held")
+
+    if 0xA9 in got:
+        # Secure dynamic messaging belongs to a standard data file only.
+        if f.type != FILE_TYPE_STANDARD:
+            raise DfcError("SDM belongs to a standard data file only")
+        _read_sdm(f, got[0xA9])
     return f
+
+
+def _read_sdm_offset(sf: dict[int, bytes], tag: int) -> tuple[bool, int]:
+    if tag not in sf:
+        return False, 0
+    return True, _read_uint(sf[tag], U24_MAX)
+
+
+def _read_sdm(f: DfcFile, body: bytes) -> None:
+    sf = _fields(body, (0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A))
+    f.sdm_options = _read_octets(_req(sf, 0x80), 1)[0]
+    f.sdm_access_rights = int.from_bytes(_read_octets(_req(sf, 0x81), 2), "big")
+    f.sdm_has_uid_offset, f.sdm_uid_offset = _read_sdm_offset(sf, 0x82)
+    f.sdm_has_counter_offset, f.sdm_counter_offset = _read_sdm_offset(sf, 0x83)
+    f.sdm_has_picc_data_offset, f.sdm_picc_data_offset = _read_sdm_offset(sf, 0x84)
+    f.sdm_has_mac_input_offset, f.sdm_mac_input_offset = _read_sdm_offset(sf, 0x85)
+    f.sdm_has_mac_offset, f.sdm_mac_offset = _read_sdm_offset(sf, 0x86)
+    f.sdm_has_encrypted_file_offset, f.sdm_encrypted_file_offset = _read_sdm_offset(sf, 0x87)
+    # The encrypted offset and its length occur together.
+    if (0x88 in sf) != f.sdm_has_encrypted_file_offset:
+        raise DfcError("SDM encrypted offset and length occur together")
+    if 0x88 in sf:
+        f.sdm_encrypted_file_length = _read_uint(sf[0x88], U24_MAX)
+    f.sdm_has_counter_limit, f.sdm_counter_limit = _read_sdm_offset(sf, 0x89)
+    f.sdm_read_counter = _read_uint(_req(sf, 0x8A), U24_MAX)
+    f.sdm_enabled = True
 
 
 def der_decode(blob: bytes, cls=DfcCredential) -> "DfcCredential":
@@ -930,19 +1326,19 @@ def der_decode(blob: bytes, cls=DfcCredential) -> "DfcCredential":
 
     cred = cls()
 
-    card = _fields(_req(got, 0xA1), (0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86))
-    if 0x84 in card:
-        raise DfcError(
-            "card static signatures are represented by DFC v4 but are not emulated",
-            DfcErrorClass.UNSUPPORTED,
-        )
+    if version == DFC_VERSION:
+        # Format version 4 carries no card record past provenance: no static
+        # signature, no hardware/software GetVersion override.
+        card = _fields(_req(got, 0xA1), (0x80, 0x81, 0x82, 0x83))
+    else:
+        card = _fields(_req(got, 0xA1), (0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86))
     cred.generation = _read_uint(_req(card, 0x80), 0xFF)
     if cred.generation not in GENERATIONS.values():
         raise DfcError(f"unknown card generation {cred.generation}")
     if cred.generation not in EMULATED_GENERATIONS:
         raise DfcError(
             f"{_name_of(GENERATIONS, cred.generation, 'this card generation')} "
-            "uses DFC v4 features (EV3) not emulated by this firmware",
+            "is not emulated by this firmware",
             DfcErrorClass.UNSUPPORTED,
         )
     cred.storage = _read_uint(_req(card, 0x81), U32_MAX)
@@ -950,6 +1346,9 @@ def der_decode(blob: bytes, cls=DfcCredential) -> "DfcCredential":
     if len(cred.uid) not in UID_LENGTHS:
         raise DfcError(f"UID must be 4 or 7 bytes, got {len(cred.uid)}")
     cred.uid_provenance = _read_uint(_req(card, 0x83), 0xFF)
+    if 0x84 in card:
+        cred.picc_has_static_signature = True
+        cred.picc_static_signature = _read_octets(card[0x84], STATIC_SIGNATURE_LEN)
     if 0x85 in card:
         cred.hardware_version = card[0x85]
     if 0x86 in card:
@@ -957,6 +1356,9 @@ def der_decode(blob: bytes, cls=DfcCredential) -> "DfcCredential":
     if cred.uid_provenance not in PROVENANCES.values():
         raise DfcError(f"unknown UID provenance {cred.uid_provenance}")
 
+    # Declared order (not numeric by tag): see dfc_der.c's `porder`. Keys and
+    # files come before EV2 capabilities/proximity/virtual card/DAM, and the
+    # v6 preferred-auth tag is declared last of all.
     picc = _fields(
         _req(got, 0xA2),
         (
@@ -969,21 +1371,15 @@ def der_decode(blob: bytes, cls=DfcCredential) -> "DfcCredential":
             0x86,
             0x87,
             0x88,
-            0x8B,
             0xA9,
             0xAA,
-            0x8F,
+            0x8B,
             0xAC,
             0xAD,
             0xAE,
+            0x8F,
         ),
     )
-    if any(tag in picc for tag in (0x8B, 0xAC, 0xAD, 0xAE)):
-        raise DfcError(
-            "this credential uses EV2/EV3 PICC capabilities that are represented "
-            "by DFC v4 but are not emulated by this firmware",
-            DfcErrorClass.UNSUPPORTED,
-        )
     cred.picc_key_settings_1 = _read_octets(_req(picc, 0x80), 1)[0]
     cred.picc_key_settings_2 = _read_octets(_req(picc, 0x81), 1)[0]
     if version == DFC_VERSION_V6:
@@ -1019,9 +1415,49 @@ def der_decode(blob: bytes, cls=DfcCredential) -> "DfcCredential":
         cred.picc_sm_disable = _read_octets(picc[0x88], 1)[0]
     cred.picc_keys = _read_keys(_req(picc, 0xA9), cred.picc_key_len)
 
+    if 0x8B in picc:
+        cred.picc_has_ev2_capabilities = True
+        cred.picc_ev2_capabilities = _read_octets(picc[0x8B], EV2_CAPABILITY_LEN)
+    if 0xAC in picc:
+        pr = _fields(picc[0xAC], (0x80, 0x81, 0x82, 0x83))
+        cred.picc_proximity_key = _read_octets(_req(pr, 0x80), AES_KEY_LEN)
+        cred.picc_proximity_option = _read_octets(_req(pr, 0x81), 1)[0]
+        cred.picc_proximity_published_response_time = _read_uint(_req(pr, 0x82), 0xFFFF)
+        if 0x83 in pr:
+            cred.picc_proximity_bitrate = _read_octets(pr[0x83], 1)[0]
+            cred.picc_has_proximity_bitrate = True
+        cred.picc_has_proximity_key = True
+    if 0xAD in picc:
+        vc = _fields(picc[0xAD], (0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87))
+        install = _req(vc, 0x80)
+        if not install or len(install) > VIRTUAL_CARD_MAX_INSTALL_ID_LEN:
+            raise DfcError("PICC Virtual Card Installation ID out of range")
+        cred.virtual_card_installation_id = install
+        cred.virtual_card_information = _read_octets(_req(vc, 0x81), 1)[0]
+        cred.virtual_card_capabilities = _read_octets(
+            _req(vc, 0x82), VIRTUAL_CARD_CAPABILITY_LEN
+        )
+        uid = _req(vc, 0x83)
+        if len(uid) not in (4, 7, 10):
+            raise DfcError("PICC Virtual Card UID must be 4, 7, or 10 bytes")
+        cred.virtual_card_uid = uid
+        cred.virtual_card_select_mac_key = _read_octets(_req(vc, 0x84), AES_KEY_LEN)
+        cred.virtual_card_select_encryption_key = _read_octets(_req(vc, 0x85), AES_KEY_LEN)
+        cred.virtual_card_authentication_mandatory = _read_bool(_req(vc, 0x86))
+        cred.virtual_card_proximity_mandatory = _read_bool(_req(vc, 0x87))
+        cred.virtual_card_configured = True
+    if 0xAE in picc:
+        dam = _fields(picc[0xAE], (0x80, 0x81, 0x82))
+        cred.picc_dam_auth_key = _read_octets(_req(dam, 0x80), AES_KEY_LEN)
+        cred.picc_dam_mac_key = _read_octets(_req(dam, 0x81), AES_KEY_LEN)
+        cred.picc_dam_encryption_key = _read_octets(_req(dam, 0x82), AES_KEY_LEN)
+        cred.picc_has_dam_keys = True
+
     for tag, value in _split(_req(got, 0xA3)):
         if tag != 0x30:
             raise DfcError(f"tag 0x{tag:02X} where an application was expected")
+        # Declared order is not numeric: APP_CAPABILITY follows APP_KEY_SETS,
+        # and APP_SM_DISABLE/APP_PREFERRED_AUTH are declared last of all.
         app_fields = _fields(
             value,
             (
@@ -1031,21 +1467,15 @@ def der_decode(blob: bytes, cls=DfcCredential) -> "DfcCredential":
                 0x83,
                 0x84,
                 0x85,
-                0x89,
                 0xA6,
                 0xA7,
+                0xA8,
+                0x89,
+                0xAA,
                 0x8B,
                 0x8C,
-                0xA8,
-                0xAA,
             ),
         )
-        if any(tag in app_fields for tag in (0xA8, 0x89, 0xAA)):
-            raise DfcError(
-                "this application uses key sets, capability data, or delegation, "
-                "which are represented by DFC v4 but not emulated by this firmware",
-                DfcErrorClass.UNSUPPORTED,
-            )
         app = DfcApplication()
         app.aid = _read_octets(_req(app_fields, 0x80), 3)
         if any(app.aid == other.aid for other in cred.apps):
@@ -1079,7 +1509,32 @@ def der_decode(blob: bytes, cls=DfcCredential) -> "DfcCredential":
                 _read_uint(_req(app_fields, 0x85), 2)
             ]
         app.key_len = key_length_for_ks2(app.key_settings_2)
-        app.keys = _read_keys(_req(app_fields, 0xA6), app.key_len)
+        akeys = app_fields.get(0xA6)
+        aksets = app_fields.get(0xA8)
+        # Exactly one key-storage alternative is required.
+        if (akeys is None) == (aksets is None):
+            raise DfcError(f"application {app.aid.hex().upper()} key storage is ambiguous")
+        if akeys is not None:
+            app.keys = _read_keys(akeys, app.key_len)
+        else:
+            _read_key_sets(app, aksets)
+        if 0x89 in app_fields:
+            app.has_capability_data = True
+            app.capability_data = _read_octets(
+                app_fields[0x89], APPLICATION_CAPABILITY_DATA_LEN
+            )
+        if 0xAA in app_fields:
+            dl = _fields(app_fields[0xAA], (0x80, 0x81, 0x82, 0x83))
+            app.delegated_slot_number = _read_uint(_req(dl, 0x80), 0xFFFF)
+            app.delegated_slot_version = _read_octets(_req(dl, 0x81), 1)[0]
+            app.delegated_quota_limit = _read_uint(_req(dl, 0x82), 0xFFFF)
+            app.delegated_free_blocks = _read_uint(_req(dl, 0x83), 0xFFFF)
+            if app.delegated_free_blocks > app.delegated_quota_limit:
+                raise DfcError(
+                    f"application {app.aid.hex().upper()} delegated free blocks "
+                    "exceed the quota"
+                )
+            app.delegated = True
 
         owner = len(cred.apps)
         cred.apps.append(app)
@@ -1149,9 +1604,6 @@ _STATIC_TEXT_KEYS = {
     "PICC SM Disable",
     "PICC File Count",
     "Application Count",
-}
-
-_UNSUPPORTED_STATIC_TEXT_KEYS = {
     "Card Static Signature",
     "PICC EV2 Card Capabilities",
     "PICC Proximity Key",
@@ -1171,13 +1623,16 @@ _UNSUPPORTED_STATIC_TEXT_KEYS = {
     "PICC DAM Encryption Key",
 }
 
-_UNSUPPORTED_APPLICATION_TEXT_PATTERN = re.compile(
+_KEY_SET_TEXT_PATTERN = re.compile(
     r"Application [0-9A-F]{2} (?:Key Set (?:Key Count|Maximum Key Size|Settings|Count)|"
-    r"Key Set [0-9A-F]{2} (?:Version|Type|Initialized|Key Count|Key [0-9A-F]{2}(?: Version)?)|"
+    r"Key Set [0-9A-F]{2} (?:Version|Type|Initialized|Key Count|Key [0-9A-F]{2}(?: Version)?))"
+)
+_CAPABILITY_DELEGATED_TEXT_PATTERN = re.compile(
+    r"Application [0-9A-F]{2} (?:"
     r"Capability Data|Delegated (?:Slot Number|Slot Version|Quota Limit|Free Blocks))"
 )
 
-_UNSUPPORTED_FILE_TEXT_PATTERN = re.compile(
+_SDM_TMAC_TEXT_PATTERN = re.compile(
     r"(?:PICC |Application [0-9A-F]{2} )File [0-9A-F]{2} (?:"
     r"SDM (?:Options|Access Rights|UID Offset|Counter Offset|PICC Data Offset|"
     r"MAC Input Offset|MAC Offset|Encrypted File Offset|Encrypted File Length|"
@@ -1203,15 +1658,6 @@ _FILE_TEXT_PATTERN = re.compile(
 
 def _validate_text_keys(fields: dict[str, str]) -> None:
     for key in fields:
-        if (
-            key in _UNSUPPORTED_STATIC_TEXT_KEYS
-            or _UNSUPPORTED_APPLICATION_TEXT_PATTERN.fullmatch(key)
-            or _UNSUPPORTED_FILE_TEXT_PATTERN.fullmatch(key)
-        ):
-            raise DfcError(
-                f"{key!r} is represented by DFC v4 but is not emulated by this firmware",
-                DfcErrorClass.UNSUPPORTED,
-            )
         if key in _STATIC_TEXT_KEYS:
             continue
         if _KEY_TEXT_PATTERN.fullmatch(key):
@@ -1220,19 +1666,13 @@ def _validate_text_keys(fields: dict[str, str]) -> None:
             continue
         if _FILE_TEXT_PATTERN.fullmatch(key):
             continue
+        if _KEY_SET_TEXT_PATTERN.fullmatch(key):
+            continue
+        if _CAPABILITY_DELEGATED_TEXT_PATTERN.fullmatch(key):
+            continue
+        if _SDM_TMAC_TEXT_PATTERN.fullmatch(key):
+            continue
         raise DfcError(f"unrecognised text key {key!r}")
-
-    for key, value in fields.items():
-        if (
-            re.fullmatch(
-                r"(?:PICC |Application [0-9A-F]{2} )File [0-9A-F]{2} Type", key
-            )
-            and value == "Transaction MAC"
-        ):
-            raise DfcError(
-                "transaction-MAC files are represented by DFC v4 but are not emulated",
-                DfcErrorClass.UNSUPPORTED,
-            )
 
 
 def _name_of(table: dict[str, int], value: int, fallback: str) -> str:
@@ -1366,6 +1806,292 @@ def _parse_key_list(
 # ---- version 4 ----
 
 
+def _parse_static_signature(fields: dict[str, str], cred: "DfcCredential") -> None:
+    if "Card Static Signature" not in fields:
+        return
+    sig = _parse_hex(fields["Card Static Signature"])
+    if len(sig) != STATIC_SIGNATURE_LEN:
+        raise DfcError(f"Card Static Signature must be {STATIC_SIGNATURE_LEN} bytes")
+    cred.picc_static_signature = sig
+    cred.picc_has_static_signature = True
+
+
+def _parse_ev2_capabilities(fields: dict[str, str], cred: "DfcCredential") -> None:
+    if "PICC EV2 Card Capabilities" not in fields:
+        return
+    caps = _parse_hex(fields["PICC EV2 Card Capabilities"])
+    if len(caps) != EV2_CAPABILITY_LEN:
+        raise DfcError(f"PICC EV2 Card Capabilities must be {EV2_CAPABILITY_LEN} bytes")
+    cred.picc_ev2_capabilities = caps
+    cred.picc_has_ev2_capabilities = True
+
+
+def _parse_proximity(fields: dict[str, str], cred: "DfcCredential") -> None:
+    if "PICC Proximity Key" not in fields:
+        return
+    key = _parse_hex(fields["PICC Proximity Key"])
+    if len(key) != AES_KEY_LEN:
+        raise DfcError(f"PICC Proximity Key must be {AES_KEY_LEN} bytes")
+    cred.picc_proximity_key = key
+    cred.picc_proximity_option = _parse_octet(
+        _need(fields, "PICC Proximity Option"), "PICC Proximity Option"
+    )
+    cred.picc_proximity_published_response_time = _parse_decimal(
+        _need(fields, "PICC Proximity Published Response Time"),
+        "PICC Proximity Published Response Time",
+    )
+    if not 0 <= cred.picc_proximity_published_response_time <= 0xFFFF:
+        raise DfcError("PICC Proximity Published Response Time out of range")
+    if "PICC Proximity Bitrate" in fields:
+        cred.picc_proximity_bitrate = _parse_octet(
+            fields["PICC Proximity Bitrate"], "PICC Proximity Bitrate"
+        )
+        cred.picc_has_proximity_bitrate = True
+    cred.picc_has_proximity_key = True
+
+
+def _parse_virtual_card(fields: dict[str, str], cred: "DfcCredential") -> None:
+    if "PICC Virtual Card Installation ID" not in fields:
+        return
+    install = _parse_hex(fields["PICC Virtual Card Installation ID"])
+    if not 1 <= len(install) <= VIRTUAL_CARD_MAX_INSTALL_ID_LEN:
+        raise DfcError(
+            "PICC Virtual Card Installation ID must be 1 to "
+            f"{VIRTUAL_CARD_MAX_INSTALL_ID_LEN} bytes"
+        )
+    cred.virtual_card_installation_id = install
+    cred.virtual_card_information = _parse_octet(
+        _need(fields, "PICC Virtual Card Information"), "PICC Virtual Card Information"
+    )
+    caps = _parse_hex(_need(fields, "PICC Virtual Card Capabilities"))
+    if len(caps) != VIRTUAL_CARD_CAPABILITY_LEN:
+        raise DfcError(
+            f"PICC Virtual Card Capabilities must be {VIRTUAL_CARD_CAPABILITY_LEN} bytes"
+        )
+    cred.virtual_card_capabilities = caps
+    uid = _parse_hex(_need(fields, "PICC Virtual Card UID"))
+    if len(uid) not in (4, 7, 10):
+        raise DfcError("PICC Virtual Card UID must be 4, 7, or 10 bytes")
+    cred.virtual_card_uid = uid
+    mac_key = _parse_hex(_need(fields, "PICC Virtual Card Select MAC Key"))
+    if len(mac_key) != AES_KEY_LEN:
+        raise DfcError(f"PICC Virtual Card Select MAC Key must be {AES_KEY_LEN} bytes")
+    cred.virtual_card_select_mac_key = mac_key
+    enc_key = _parse_hex(_need(fields, "PICC Virtual Card Select Encryption Key"))
+    if len(enc_key) != AES_KEY_LEN:
+        raise DfcError(
+            f"PICC Virtual Card Select Encryption Key must be {AES_KEY_LEN} bytes"
+        )
+    cred.virtual_card_select_encryption_key = enc_key
+    cred.virtual_card_authentication_mandatory = _parse_bool(
+        _need(fields, "PICC Virtual Card Authentication Mandatory"),
+        "PICC Virtual Card Authentication Mandatory",
+    )
+    cred.virtual_card_proximity_mandatory = _parse_bool(
+        _need(fields, "PICC Virtual Card Proximity Mandatory"),
+        "PICC Virtual Card Proximity Mandatory",
+    )
+    cred.virtual_card_configured = True
+
+
+def _parse_dam_keys(fields: dict[str, str], cred: "DfcCredential") -> None:
+    if "PICC DAM Authentication Key" not in fields:
+        return
+    for name, attr in (
+        ("PICC DAM Authentication Key", "picc_dam_auth_key"),
+        ("PICC DAM MAC Key", "picc_dam_mac_key"),
+        ("PICC DAM Encryption Key", "picc_dam_encryption_key"),
+    ):
+        value = _parse_hex(_need(fields, name))
+        if len(value) != AES_KEY_LEN:
+            raise DfcError(f"{name} must be {AES_KEY_LEN} bytes")
+        setattr(cred, attr, value)
+    cred.picc_has_dam_keys = True
+
+
+def _parse_key_sets(fields: dict[str, str], prefix: str, app: DfcApplication) -> None:
+    key_count = _parse_decimal(
+        _need(fields, f"{prefix}Key Set Key Count"), f"{prefix}Key Set Key Count"
+    )
+    if not 1 <= key_count <= MAX_KEYS:
+        raise DfcError(f"{prefix}Key Set Key Count out of range")
+    max_size = _parse_decimal(
+        _need(fields, f"{prefix}Key Set Maximum Key Size"),
+        f"{prefix}Key Set Maximum Key Size",
+    )
+    if max_size not in (16, 24):
+        raise DfcError(f"{prefix}Key Set Maximum Key Size must be 16 or 24")
+    app.key_set_key_count = key_count
+    app.key_set_max_size = max_size
+    app.key_set_settings = _parse_octet(
+        _need(fields, f"{prefix}Key Set Settings"), f"{prefix}Key Set Settings"
+    )
+    count = _parse_decimal(
+        _need(fields, f"{prefix}Key Set Count"), f"{prefix}Key Set Count"
+    )
+    if not KEY_SET_MINIMUM_COUNT <= count <= KEY_SET_MAX_SETS:
+        raise DfcError(f"{prefix}Key Set Count out of range")
+
+    for set_index in range(count):
+        name = f"{prefix}Key Set {set_index:02X} "
+        ks = DfcKeySet()
+        ks.version = _parse_octet(_need(fields, f"{name}Version"), f"{name}Version")
+        type_name = _need(fields, f"{name}Type")
+        if type_name not in KEY_SET_TYPE_NAMES:
+            raise DfcError(f"{name}Type {type_name!r} is not a known key-set type")
+        ks.type = KEY_SET_TYPE_NAMES.index(type_name)
+        required = 24 if ks.type == KEY_SET_TYPE_3K3DES else AES_KEY_LEN
+        if required > max_size:
+            raise DfcError(f"{name}Type: key type exceeds the maximum key size")
+        ks.initialized = _parse_bool(
+            _need(fields, f"{name}Initialized"), f"{name}Initialized"
+        )
+        set_keys = _parse_decimal(
+            _need(fields, f"{name}Key Count"), f"{name}Key Count"
+        )
+        if set_keys > key_count:
+            raise DfcError(f"{name}Key Count exceeds the key set's key count")
+        for slot in range(set_keys):
+            raw = _parse_hex(_need(fields, f"{name}Key {slot:02X}"))
+            if len(raw) != required:
+                raise DfcError(f"{name}Key {slot:02X} is {len(raw)} bytes, expected {required}")
+            version = _parse_octet(
+                _need(fields, f"{name}Key {slot:02X} Version"),
+                f"{name}Key {slot:02X} Version",
+            )
+            ks.keys.append(DfcKey(raw, version))
+        app.key_sets.append(ks)
+    if not app.key_sets[0].initialized:
+        raise DfcError(f"{prefix}Key Set 00: set zero shall be initialized")
+
+
+def _parse_capability_data(fields: dict[str, str], prefix: str, app: DfcApplication) -> None:
+    if f"{prefix}Capability Data" not in fields:
+        return
+    data = _parse_hex(fields[f"{prefix}Capability Data"])
+    if len(data) != APPLICATION_CAPABILITY_DATA_LEN:
+        raise DfcError(
+            f"{prefix}Capability Data must be {APPLICATION_CAPABILITY_DATA_LEN} bytes"
+        )
+    app.capability_data = data
+    app.has_capability_data = True
+
+
+def _parse_delegated(fields: dict[str, str], prefix: str, app: DfcApplication) -> None:
+    if f"{prefix}Delegated Slot Number" not in fields:
+        return
+    app.delegated_slot_number = _parse_decimal(
+        fields[f"{prefix}Delegated Slot Number"], f"{prefix}Delegated Slot Number"
+    )
+    app.delegated_slot_version = _parse_octet(
+        _need(fields, f"{prefix}Delegated Slot Version"),
+        f"{prefix}Delegated Slot Version",
+    )
+    app.delegated_quota_limit = _parse_decimal(
+        _need(fields, f"{prefix}Delegated Quota Limit"),
+        f"{prefix}Delegated Quota Limit",
+    )
+    app.delegated_free_blocks = _parse_decimal(
+        _need(fields, f"{prefix}Delegated Free Blocks"),
+        f"{prefix}Delegated Free Blocks",
+    )
+    if not 0 <= app.delegated_slot_number <= 0xFFFF:
+        raise DfcError(f"{prefix}Delegated Slot Number out of range")
+    if not 0 <= app.delegated_quota_limit <= 0xFFFF:
+        raise DfcError(f"{prefix}Delegated Quota Limit out of range")
+    if not 0 <= app.delegated_free_blocks <= 0xFFFF:
+        raise DfcError(f"{prefix}Delegated Free Blocks out of range")
+    if app.delegated_free_blocks > app.delegated_quota_limit:
+        raise DfcError(f"{prefix}Delegated Free Blocks: exceeds the quota")
+    app.delegated = True
+
+
+def _parse_sdm(fields: dict[str, str], prefix: str, f: DfcFile) -> None:
+    if f"{prefix}SDM Options" not in fields:
+        return
+    f.sdm_options = _parse_octet(fields[f"{prefix}SDM Options"], f"{prefix}SDM Options")
+    rights = _parse_hex(_need(fields, f"{prefix}SDM Access Rights"))
+    if len(rights) != 2:
+        raise DfcError(f"{prefix}SDM Access Rights must be 2 bytes")
+    f.sdm_access_rights = int.from_bytes(rights, "big")
+
+    offsets = (
+        ("UID Offset", "sdm_has_uid_offset", "sdm_uid_offset"),
+        ("Counter Offset", "sdm_has_counter_offset", "sdm_counter_offset"),
+        ("PICC Data Offset", "sdm_has_picc_data_offset", "sdm_picc_data_offset"),
+        ("MAC Input Offset", "sdm_has_mac_input_offset", "sdm_mac_input_offset"),
+        ("MAC Offset", "sdm_has_mac_offset", "sdm_mac_offset"),
+        (
+            "Encrypted File Offset",
+            "sdm_has_encrypted_file_offset",
+            "sdm_encrypted_file_offset",
+        ),
+    )
+    for name, has_attr, value_attr in offsets:
+        key = f"{prefix}SDM {name}"
+        if key in fields:
+            value = _parse_decimal(fields[key], key)
+            if not 0 <= value <= U24_MAX:
+                raise DfcError(f"{key} out of range")
+            setattr(f, has_attr, True)
+            setattr(f, value_attr, value)
+
+    length_key = f"{prefix}SDM Encrypted File Length"
+    has_length = length_key in fields
+    if has_length != f.sdm_has_encrypted_file_offset:
+        raise DfcError(f"{prefix}: SDM encrypted offset and length occur together")
+    if has_length:
+        length = _parse_decimal(fields[length_key], length_key)
+        if not 0 <= length <= U24_MAX:
+            raise DfcError(f"{length_key} out of range")
+        f.sdm_encrypted_file_length = length
+
+    limit_key = f"{prefix}SDM Counter Limit"
+    if limit_key in fields:
+        limit = _parse_decimal(fields[limit_key], limit_key)
+        if not 0 <= limit <= U24_MAX:
+            raise DfcError(f"{limit_key} out of range")
+        f.sdm_has_counter_limit = True
+        f.sdm_counter_limit = limit
+
+    f.sdm_read_counter = _parse_decimal(
+        _need(fields, f"{prefix}SDM Read Counter"), f"{prefix}SDM Read Counter"
+    )
+    if not 0 <= f.sdm_read_counter <= U24_MAX:
+        raise DfcError(f"{prefix}SDM Read Counter out of range")
+    f.sdm_enabled = True
+
+
+def _parse_transaction_mac_contents(fields: dict[str, str], prefix: str, f: DfcFile) -> None:
+    f.transaction_counter = _parse_decimal(
+        _need(fields, f"{prefix}Transaction Counter"), f"{prefix}Transaction Counter"
+    )
+    if not 0 <= f.transaction_counter <= U32_MAX:
+        raise DfcError(f"{prefix}Transaction Counter out of range")
+    mac = _parse_hex(_need(fields, f"{prefix}Transaction MAC"))
+    if len(mac) != WIRE_MAC_LEN:
+        raise DfcError(f"{prefix}Transaction MAC must be {WIRE_MAC_LEN} bytes")
+    f.transaction_mac = mac
+    key_type = _parse_decimal(
+        _need(fields, f"{prefix}Transaction Key Type"), f"{prefix}Transaction Key Type"
+    )
+    if not 0 <= key_type <= 0xFF:
+        raise DfcError(f"{prefix}Transaction Key Type out of range")
+    f.transaction_mac_key_type = key_type
+    f.transaction_mac_key_version = _parse_octet(
+        _need(fields, f"{prefix}Transaction Key Version"),
+        f"{prefix}Transaction Key Version",
+    )
+    key = _parse_hex(_need(fields, f"{prefix}Transaction Key"))
+    if len(key) != AES_KEY_LEN:
+        raise DfcError(f"{prefix}Transaction Key must be {AES_KEY_LEN} bytes")
+    f.transaction_mac_key = key
+    reader_id = _parse_hex(_need(fields, f"{prefix}Previous Reader ID"))
+    if len(reader_id) != TRANSACTION_READER_ID_LEN:
+        raise DfcError(f"{prefix}Previous Reader ID must be {TRANSACTION_READER_ID_LEN} bytes")
+    f.previous_reader_id = reader_id
+
+
 def _parse_v4(cls, fields: dict[str, str]) -> "DfcCredential":
     cred = cls()
     generation = fields.get("Card Generation", "")
@@ -1382,6 +2108,7 @@ def _parse_v4(cls, fields: dict[str, str]) -> "DfcCredential":
     if provenance not in PROVENANCES:
         raise DfcError(f"unknown UID Provenance {provenance!r}")
     cred.uid_provenance = PROVENANCES[provenance]
+    _parse_static_signature(fields, cred)
 
     cred.picc_key_settings_1 = _parse_octet(
         _need(fields, "PICC Key Settings 1"), "PICC Key Settings 1"
@@ -1431,6 +2158,10 @@ def _parse_v4(cls, fields: dict[str, str]) -> "DfcCredential":
         cred.picc_sm_disable = _parse_octet(
             fields["PICC SM Disable"], "PICC SM Disable"
         )
+    _parse_ev2_capabilities(fields, cred)
+    _parse_proximity(fields, cred)
+    _parse_virtual_card(fields, cred)
+    _parse_dam_keys(fields, cred)
 
     picc_file_count = _parse_decimal(
         fields.get("PICC File Count", "0"), "PICC File Count"
@@ -1482,12 +2213,16 @@ def _parse_v4(cls, fields: dict[str, str]) -> "DfcCredential":
                 fields.get(f"{prefix}Authentication Mode"), app.key_settings_2
             )
         app.key_len = key_length_for_ks2(app.key_settings_2)
-        key_count = _parse_decimal(
-            _need(fields, f"{prefix}Key Count"), f"{prefix}Key Count"
-        )
-        if key_count > MAX_KEYS:
-            raise DfcError(f"{prefix}Key Count exceeds {MAX_KEYS}")
-        app.keys = _parse_key_list(fields, prefix, key_count, app.key_len)
+        # The key-set block replaces the ordinary key list.
+        if f"{prefix}Key Set Count" in fields:
+            _parse_key_sets(fields, prefix, app)
+        else:
+            key_count = _parse_decimal(
+                _need(fields, f"{prefix}Key Count"), f"{prefix}Key Count"
+            )
+            if key_count > MAX_KEYS:
+                raise DfcError(f"{prefix}Key Count exceeds {MAX_KEYS}")
+            app.keys = _parse_key_list(fields, prefix, key_count, app.key_len)
         cred.apps.append(app)
 
         file_count = _parse_decimal(
@@ -1495,6 +2230,8 @@ def _parse_v4(cls, fields: dict[str, str]) -> "DfcCredential":
         )
         for j in range(file_count):
             app_files.append(_parse_file_v3(fields, f"{prefix}File {j:02X} ", i))
+        _parse_capability_data(fields, prefix, app)
+        _parse_delegated(fields, prefix, app)
 
     # Applications own their files; the PICC container is encoded after them, so
     # keep the model in that order too.
@@ -1538,6 +2275,9 @@ def _parse_file_v3(fields: dict[str, str], prefix: str, owner: int) -> DfcFile:
         f.contents_complete = _parse_bool(
             _need(fields, f"{prefix}Data Complete"), f"{prefix}Data Complete"
         )
+        _parse_sdm(fields, prefix, f)
+    elif f.type == FILE_TYPE_TMAC:
+        _parse_transaction_mac_contents(fields, prefix, f)
     elif f.type == FILE_TYPE_VALUE:
         f.value_lower_limit = _parse_decimal(
             _need(fields, f"{prefix}Value Lower Limit"),
