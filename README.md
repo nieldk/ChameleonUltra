@@ -3,7 +3,7 @@
 **Phreakbyte edition** is an independent firmware and tooling distribution for the
 ChameleonUltra hardware, focused on fast, frictionless flashing and iteration.
 
-<img width="1008" height="416" alt="image" src="https://github.com/user-attachments/assets/b87aaade-7e93-4627-942b-a179780e413e" />
+<img width="694" height="295" alt="image" src="https://github.com/user-attachments/assets/c4db8cef-7880-4977-af05-9684e142649f" />
 
 It is a standalone project with its own roadmap. It is derived from
 [RfidResearchGroup/ChameleonUltra](https://github.com/RfidResearchGroup/ChameleonUltra)
