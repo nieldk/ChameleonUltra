@@ -2,9 +2,10 @@
  * Copyright (c) 2026 CinderSocket
  *
  * Minimal mbedTLS AES API implemented over the nRF5 SDK's nrf_crypto (CC310
- * hardware AES), not tiny-AES-c. Only what the DESFire engine uses: AES-128 CBC
- * in both directions. The backend lives in mbedtls_compat.c; this header stays
- * free of nrf_crypto types so the DESFire engine keeps a clean mbedTLS include.
+ * hardware AES), not tiny-AES-c. Only what the DESFire engine uses: AES-128
+ * CBC in both directions, plus single-block ECB (used by AES-CMAC). The
+ * backend lives in mbedtls_compat.c; this header stays free of nrf_crypto
+ * types so the DESFire engine keeps a clean mbedTLS include.
  */
 #pragma once
 
@@ -41,3 +42,11 @@ int mbedtls_aes_crypt_cbc(
     uint8_t iv[16],
     const uint8_t *input,
     uint8_t *output);
+
+/* Single-block ECB, implemented as one-block CBC with a zero IV (identical
+ * result: AES-encrypt(input) for encrypt, AES-decrypt(input) for decrypt). */
+int mbedtls_aes_crypt_ecb(
+    mbedtls_aes_context* ctx,
+    int mode,
+    const uint8_t input[16],
+    uint8_t output[16]);

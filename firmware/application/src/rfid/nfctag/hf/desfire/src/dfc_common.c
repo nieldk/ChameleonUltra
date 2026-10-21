@@ -17,6 +17,23 @@ size_t dfc_key_set_type_length(uint8_t type) {
     return 0;
 }
 
+uint8_t dfc_key_type_for_set_type(uint8_t type) {
+    if(type == DFC_KEY_SET_TYPE_3K3DES) return DFC_KEY_TYPE_3K3DES;
+    if(type == DFC_KEY_SET_TYPE_AES) return DFC_KEY_TYPE_AES;
+    return DFC_KEY_TYPE_DES_2K3DES;
+}
+
+bool dfc_ct_equal(const uint8_t* left, const uint8_t* right, size_t length) {
+    uint8_t difference = 0;
+    for(size_t i = 0; i < length; i++) difference |= left[i] ^ right[i];
+    return difference == 0;
+}
+
+void dfc_secure_wipe(void* buffer, size_t length) {
+    volatile uint8_t* bytes = buffer;
+    while(length--) *bytes++ = 0;
+}
+
 #include <stdio.h>
 
 const uint8_t DFC_ISO_AID[7] = {0xD2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x00};

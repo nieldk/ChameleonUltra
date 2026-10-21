@@ -239,3 +239,9 @@ int mbedtls_aes_crypt_cbc(
     memcpy(iv, iv_run, AES_SHIM_BLOCK);  /* mbedTLS: iv -> trailing ciphertext block */
     return 0;
 }
+
+int mbedtls_aes_crypt_ecb(
+    mbedtls_aes_context* ctx, int mode, const uint8_t input[16], uint8_t output[16]) {
+    uint8_t iv[AES_SHIM_BLOCK] = {0};
+    return mbedtls_aes_crypt_cbc(ctx, mode, AES_SHIM_BLOCK, iv, input, output);
+}

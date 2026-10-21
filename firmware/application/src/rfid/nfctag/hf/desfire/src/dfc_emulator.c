@@ -2,17 +2,17 @@
 
 #if DFC_ENABLE_EMULATOR
 
-DfcEmulator *dfc_emulator_alloc(DfcCredential* credential) {
-    if (!credential) return NULL;
+DfcEmulator* dfc_emulator_alloc(DfcCredential* credential) {
+    if(!credential) return NULL;
 
     DfcEmulator* emulator =
         dfc_platform_alloc(sizeof(DfcEmulator), DfcAllocEmulator);
-    if (!emulator) return NULL;
+    if(!emulator) return NULL;
     memset(emulator, 0, sizeof(DfcEmulator));
 
     emulator->credential = credential;
     emulator->tx_buffer = dfc_bytebuf_alloc(DFC_WORKER_MAX_BUFFER_SIZE);
-    if (!emulator->tx_buffer) {
+    if(!emulator->tx_buffer) {
         dfc_platform_free(emulator);
         return NULL;
     }
@@ -28,56 +28,61 @@ void dfc_emulator_free(DfcEmulator* emulator) {
 #if DFC_ENABLE_TRANSACTIONAL_DATA_FILES
     dfc_platform_free(emulator->transaction_snapshot_pool);
 #endif
-    if (emulator->secure_messaging) {
+    if(emulator->secure_messaging) {
         dfc_secure_messaging_free(emulator->secure_messaging);
     }
 
-    if (emulator->tx_buffer) {
+    if(emulator->tx_buffer) {
         dfc_bytebuf_free(emulator->tx_buffer);
     }
     dfc_platform_free(emulator);
 }
 
-DfcApplication *dfc_emulator_current_app(DfcEmulator* emulator) {
-    if (emulator->selected_application != DfcEmulatorSelectedApplicationApp) return NULL;
+DfcApplication* dfc_emulator_current_app(DfcEmulator* emulator) {
+    if(emulator->selected_application != DfcEmulatorSelectedApplicationApp) return NULL;
     return dfc_credential_get_application(emulator->credential, emulator->selected_app_index);
 }
 
 bool dfc_emulator_accepts_auth_cipher(DfcEmulator* emulator, uint8_t cipher) {
     DfcApplication* app = dfc_emulator_current_app(emulator);
     uint8_t commands = app ? dfc_credential_app_auth_commands(emulator->credential, app) :
-                       dfc_credential_picc_auth_commands(emulator->credential);
+                             dfc_credential_picc_auth_commands(emulator->credential);
     uint8_t disabled = emulator->credential->picc_has_sm_disable ?
-                       emulator->credential->picc_sm_disable : 0;
-    if (app && app->has_sm_disable) disabled |= app->sm_disable;
+                           emulator->credential->picc_sm_disable : 0;
+    if(app && app->has_sm_disable) disabled |= app->sm_disable;
     uint8_t bit;
-    switch (cipher) {
-        case DFC_CMD_AUTHENTICATE_LEGACY:
-            bit = DFC_AUTH_COMMAND_D40;
-            if (disabled & DFC_SM_DISABLE_D40) return false;
-            break;
-        case DFC_CMD_AUTHENTICATE_ISO:
-            bit = DFC_AUTH_COMMAND_ISO_NATIVE;
-            if (disabled & DFC_SM_DISABLE_EV1) return false;
-            break;
-        case DFC_CMD_AUTHENTICATE_AES:
-            bit = DFC_AUTH_COMMAND_AES;
-            if (disabled & DFC_SM_DISABLE_EV1) return false;
-            break;
-        case DFC_CMD_AUTHENTICATE_EV2_FIRST:
-            bit = DFC_AUTH_COMMAND_EV2_FIRST;
-            break;
-        case DFC_CMD_AUTHENTICATE_EV2_NON_FIRST:
-            bit = DFC_AUTH_COMMAND_EV2_NON_FIRST;
-            break;
-        default:
-            return false;
+    switch(cipher) {
+    case DFC_CMD_AUTHENTICATE_LEGACY:
+        bit = DFC_AUTH_COMMAND_D40;
+        if(disabled & DFC_SM_DISABLE_D40) return false;
+        break;
+    case DFC_CMD_AUTHENTICATE_ISO:
+        bit = DFC_AUTH_COMMAND_ISO_NATIVE;
+        if(disabled & DFC_SM_DISABLE_EV1) return false;
+        break;
+    case DFC_CMD_AUTHENTICATE_AES:
+        bit = DFC_AUTH_COMMAND_AES;
+        if(disabled & DFC_SM_DISABLE_EV1) return false;
+        break;
+    case DFC_CMD_AUTHENTICATE_EV2_FIRST:
+        bit = DFC_AUTH_COMMAND_EV2_FIRST;
+        break;
+    case DFC_CMD_AUTHENTICATE_EV2_NON_FIRST:
+        bit = DFC_AUTH_COMMAND_EV2_NON_FIRST;
+        break;
+    default:
+        return false;
     }
     return (commands & bit) != 0;
 }
 
 size_t dfc_emulator_key_len(DfcEmulator* emulator) {
     DfcApplication* app = dfc_emulator_current_app(emulator);
+#if DFC_ENABLE_KEY_SETS
+    if(app && app->num_key_sets >= DFC_KEY_SET_MINIMUM_COUNT) {
+        return dfc_key_set_type_length(app->key_set_types[0]);
+    }
+#endif
     return app ? app->key_len : emulator->credential->picc_key_len;
 }
 
@@ -85,25 +90,25 @@ size_t dfc_emulator_num_keys(DfcEmulator* emulator) {
     DfcApplication* app = dfc_emulator_current_app(emulator);
     // Every object has a master key whether or not the credential records one:
     // an absent entry is the factory default, not an absent slot.
-    if (!app) return 1;
+    if(!app) return 1;
     return app->num_keys ? app->num_keys : 1;
 }
 
-uint8_t *dfc_emulator_key(DfcEmulator* emulator, uint8_t key_no) {
+uint8_t* dfc_emulator_key(DfcEmulator* emulator, uint8_t key_no) {
     DfcApplication* app = dfc_emulator_current_app(emulator);
     // dfc_emulator_num_keys reports 1 at PICC level, so only slot 0 is reachable.
     return dfc_credential_key(emulator->credential, app, app ? key_no : 0);
 }
 
-uint8_t *dfc_emulator_key_version(DfcEmulator* emulator, uint8_t key_no) {
+uint8_t* dfc_emulator_key_version(DfcEmulator* emulator, uint8_t key_no) {
     DfcApplication* app = dfc_emulator_current_app(emulator);
     return app ? &app->key_versions[key_no] : &emulator->credential->picc_key_versions[0];
 }
 
 static void dfc_emulator_clear_pending_value_transactions(DfcEmulator* emulator) {
-    for (size_t i = 0; i < emulator->credential->num_files; i++) {
+    for(size_t i = 0; i < emulator->credential->num_files; i++) {
         DfcFile* file = &emulator->credential->files[i];
-        if (file->type != DFC_FILE_TYPE_VALUE) continue;
+        if(file->type != DFC_FILE_TYPE_VALUE) continue;
         file->value_pending = false;
         file->value_pending_delta = 0;
     }
@@ -186,7 +191,7 @@ void dfc_emulator_reset_session(DfcEmulator* emulator) {
     memset(emulator->rnd_a, 0, sizeof(emulator->rnd_a));
     memset(emulator->rnd_b, 0, sizeof(emulator->rnd_b));
     memset(emulator->enc_rnd_b, 0, sizeof(emulator->enc_rnd_b));
-    if (emulator->secure_messaging) {
+    if(emulator->secure_messaging) {
         dfc_secure_messaging_free(emulator->secure_messaging);
         emulator->secure_messaging = NULL;
     }
@@ -197,7 +202,7 @@ void dfc_emulator_reset_activation(DfcEmulator* emulator) {
 
     DfcCredential* credential = emulator->credential;
     DfcByteBuf* tx_buffer = emulator->tx_buffer;
-    if (emulator->secure_messaging) {
+    if(emulator->secure_messaging) {
         dfc_secure_messaging_free(emulator->secure_messaging);
     }
     dfc_platform_free(emulator->command_chain);
@@ -209,20 +214,20 @@ void dfc_emulator_reset_activation(DfcEmulator* emulator) {
     emulator->credential = credential;
     emulator->tx_buffer = tx_buffer;
     emulator->selected_application = DfcEmulatorSelectedApplicationPicc;
-    if (tx_buffer) {
+    if(tx_buffer) {
         dfc_bytebuf_reset(tx_buffer);
     }
 }
 
 void dfc_emulator_advance_time(DfcEmulator* emulator, uint32_t elapsed_milliseconds) {
 #if DFC_ENABLE_TRANSACTION_TIMER
-    if (!emulator || !emulator->transaction_timer_enabled) return;
-    if (UINT32_MAX - emulator->transaction_timer_elapsed_milliseconds < elapsed_milliseconds)
+    if(!emulator || !emulator->transaction_timer_enabled) return;
+    if(UINT32_MAX - emulator->transaction_timer_elapsed_milliseconds < elapsed_milliseconds)
         emulator->transaction_timer_elapsed_milliseconds = UINT32_MAX;
     else
         emulator->transaction_timer_elapsed_milliseconds += elapsed_milliseconds;
-    if (emulator->transaction_timer_elapsed_milliseconds >=
-            DFC_TRANSACTION_TIMER_EXPIRY_MILLISECONDS) {
+    if(emulator->transaction_timer_elapsed_milliseconds >=
+       DFC_TRANSACTION_TIMER_EXPIRY_MILLISECONDS) {
         dfc_emulator_reset_session(emulator);
         emulator->selected_application = DfcEmulatorSelectedApplicationPicc;
         emulator->selected_app_index = 0;

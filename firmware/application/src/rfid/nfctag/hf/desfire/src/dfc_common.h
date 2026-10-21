@@ -244,6 +244,9 @@ bool dfc_uid_length_is_valid(size_t length);
 bool dfc_iso_file_id_is_reserved(uint16_t value);
 // Returns 16 or 24 for a valid key-set type, and zero for an invalid type.
 size_t dfc_key_set_type_length(uint8_t type);
+uint8_t dfc_key_type_for_set_type(uint8_t type);
+bool dfc_ct_equal(const uint8_t* left, const uint8_t* right, size_t length);
+void dfc_secure_wipe(void* buffer, size_t length);
 
 // File communication settings
 #define DFC_COMM_PLAIN      0x00
