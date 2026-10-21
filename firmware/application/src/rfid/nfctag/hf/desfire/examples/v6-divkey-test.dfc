@@ -1,0 +1,14 @@
+Filetype: DFC Credential
+Version: 6
+Card Generation: EV3
+Card Storage: 4096
+UID: 04 82 6A 32 91 10 80
+UID Provenance: Real
+PICC Key Settings 1: 0F
+PICC Key Settings 2: 81
+PICC Authentication Commands: AES, ISO7816
+PICC Key Count: 1
+PICC Key 00: C0 5F 16 4D 43 B4 76 A2 8D 43 74 36 C1 8C 0A D9
+PICC Key 00 Version: 00
+PICC File Count: 0
+Application Count: 0

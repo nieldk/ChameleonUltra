@@ -1,6 +1,10 @@
 # Phreakbyte CLI Command Reference
 
-Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 44 command groups, 216 commands.
+> **Use only on cards/systems you own or are authorized to test.** See
+> [Legal / responsible use](../README.md#legal--responsible-use) in the
+> top-level README.
+
+Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 44 command groups, 217 commands.
 
 Notation: `<...>` are values you supply. Each option lists its flags, help, allowed `choices`, whether it is `required`, and its `default`. Run any command with `-h` in the client for the same information live.
 
@@ -240,6 +244,25 @@ examples:
   hf des chk --aid 123456 -k 00112233445566778899AABBCCDDEEFF
   hf des chk -f mykeys.txt
   hf des chk --pattern1b
+```
+
+#### `hf des divkey`
+
+NXP AN10922 symmetric key diversification: derive a per-card key from a master key so each card gets a unique key instead of sharing one global secret. Diversification input is UID || key-number || AID [|| extra data]. AES-128 only for now. Requires the 'cryptography' package.
+
+- `-k`, `--master-key` — master key, 16 hex bytes (AES-128) (required)
+- `--key-type` — diversified key algorithm (default: aes-128) (choices: aes-128; default: aes-128)
+- `--key-number` — key number the diversified key will occupy (required)
+- `--aid` — application ID, 3 hex bytes (e.g. 010203) (required)
+- `--uid` — card UID, hex (4/7/10 bytes). If omitted, read live from a card presented to the reader
+- `--data` — extra bytes appended to the diversification input (e.g. a system identifier), optional (default: )
+
+```
+examples:
+  hf des divkey -k 00112233445566778899AABBCCDDEEFF --key-number 0 --aid 010203
+    (reads UID from a presented card)
+  hf des divkey -k 00112233445566778899AABBCCDDEEFF --key-number 0 --aid 010203 --uid 04AABBCCDDEEFF
+    (fully offline, no device needed)
 ```
 
 #### `hf des eblank`

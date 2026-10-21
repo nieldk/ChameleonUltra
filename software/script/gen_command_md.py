@@ -111,6 +111,11 @@ def main():
 
     print("# Phreakbyte CLI Command Reference\n")
     print(
+        "> **Use only on cards/systems you own or are authorized to test.** See\n"
+        "> [Legal / responsible use](../README.md#legal--responsible-use) in the\n"
+        "> top-level README.\n"
+    )
+    print(
         "Complete reference for the Phreakbyte edition ChameleonUltra client "
         "(`chameleon_cli_main.py`), auto-generated from the live CLI parser: "
         f"{ngroups} command groups, {ncmds} commands.\n"
