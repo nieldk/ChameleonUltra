@@ -12,36 +12,29 @@ from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import FileHistory
 from chameleon_utils import CR, CG, CY, color_string
 
-# Chameleon perched on a small reader board (coil + components: a nod to
-# the pm3 mini), converted from a hand-drawn silhouette.
+# Chameleon silhouette traced from a hand-drawn reference (coiled tail,
+# crested head, small reader board: a nod to the pm3 mini). The CHAMELEON
+# wordmark overlaps the body, same as the reference.
 CHAMELEON_ART = [
-    "                     ▄                       ▄▄",
-    "                   ▄███                      ██     ▄",
-    "                  ▄█████▄                   ████ ▄█████▄▄",
-    "          ▄▄▄▄▄▄▄████████▄                  ▀▀████████████",
-    "      ▄█████████████████████████▄▄▄        ▄▄███▀    █████",
-    "    ▄████████████████████████████████▄  ▄▄██████  ██▄ ████",
-    "  ▄█████▀▄▄▄████████████████████████████████████  ▀█▀▄███",
-    " ▄████▀▄█████████████████████████████████████████▄▄▄▄███▀",
-    " ████ ██████████████████████████████████████████████████",
-    "████ ██████████████████████████████████████████████████",
-    "████ ███▀██████████████████████████████████▀▀▀▀▀▀▀▀▀▀▀▀",
-    "████ ███ ▀█████████████████████████████████",
-    "████ ████ ▀███████████████████████████████",
-    "▀███▄ ████▄▀████████████████████████████▀",
-    " ████▄ ███████████████████████████████▀",
-    "  ▀████▄▀████████████████████████████▀",
-    "   ▀█████▄▄▀▀▀▀▀▀█▄▄█████▀▀▀▀▀▀ ▄████",
-    "     ▀███████████████████       ████",
-    "       ▀▀▀██████████████        ███▀",
-    "             ▀▀▀     ▀▀",
-    "        ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ ▄▄▄▄▄▄▄▄▄▄▄▄",
-    "      ▄▄█████▀█████████████▀▄▄  ▄▄▀██████████",
-    "      █████████████████████ █▄▀▀ █▀▄█████████",
-    "       ▀████████████████████▄▄  ▄▄▄█████████▀",
+    "          ▄█            █",
+    "         ▄███          ██▄▄██▄▄",
+    "   ▄▄█████████▄▄▄▄     ▄██▀▀███",
+    "  ▄██▀██████████████▄▄███  █ ██",
+    " █████████████████████████  ██",
+    "█████████▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+    "█████████",
+    "████ ████",
+    "██ ██ ███",
+    "▀██ █████▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+    " ▀███▀█████████████████████",
+    "  ▀███████████████  ██████",
+    "    ▀▀▀█▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀",
+    "    ▄▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄",
+    "   ▄███████████▄▄▄██████",
+    "   ▀███████████  ▄██████",
 ]
-_ART_W = max(len(l) for l in CHAMELEON_ART) + 3
 
+# Big block wordmark (figlet "ANSI Shadow"), pasted overlapping the art.
 BLOCK_TEXT = [
     "██████╗██╗  ██╗ █████╗ ███╗   ███╗███████╗██╗     ███████╗ ██████╗ ███╗   ██╗",
     "██╔════╝██║  ██║██╔══██╗████╗ ████║██╔════╝██║     ██╔════╝██╔═══██╗████╗  ██║",
@@ -51,7 +44,8 @@ BLOCK_TEXT = [
     " ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝╚══════╝╚══════╝ ╚═════╝ ╚═╝  ╚═══╝",
 ]
 
-# Column offsets below are relative to BLOCK_TEXT's own left edge.
+# Small badge naming the device variant, pasted right under the wordmark.
+# Column offsets below are relative to the badge's own left edge.
 ULTRA_BADGE = [
     "                                                       ╦ ╦╦ ╔╦╗╦═╗╔═╗",
     "                                          ███████      ║ ║║  ║ ╠╦╝╠═╣",
@@ -64,35 +58,59 @@ LITE_BADGE = [
 ]
 TAGLINE = "P H R E A K B Y T E   E D I T I O N"
 
+# Where the wordmark starts overlapping the art (row/col, in characters).
+_TEXT_COL = 9
+_TEXT_ROW = 6
+
 
 def _compose_banner(badge):
-    canvas = [list(l.ljust(_ART_W)) for l in CHAMELEON_ART]
+    art_w = max(len(l) for l in CHAMELEON_ART)
+    txt_w = max(len(l) for l in BLOCK_TEXT)
+    badge_row = _TEXT_ROW + len(BLOCK_TEXT)
+    tag_row = badge_row + len(badge) + 1
+    h = max(tag_row + 1, len(CHAMELEON_ART))
+    w = max(art_w, _TEXT_COL + txt_w) + 1
+    chars = [[" "] * w for _ in range(h)]
+    colors = [["G"] * w for _ in range(h)]
 
-    def paste(start_row, lines, col_offset=_ART_W):
+    def paste(lines, row0, col0, color):
         for k, line in enumerate(lines):
-            r = start_row + k
-            while len(canvas) <= r:
-                canvas.append(list(" " * _ART_W))
-            row = canvas[r]
+            r = row0 + k
+            if not (0 <= r < h):
+                continue
             for c, ch in enumerate(line):
                 if ch == " ":
                     continue
-                col = col_offset + c
-                while len(row) <= col:
-                    row.append(" ")
-                row[col] = ch
+                col = col0 + c
+                if not (0 <= col < w):
+                    continue
+                chars[r][col] = ch
+                colors[r][col] = color
 
-    paste(4, BLOCK_TEXT)
-    paste(11, badge)
-    paste(len(canvas) + 1, [TAGLINE])
-    return [("".join(r).rstrip()) for r in canvas]
+    paste(CHAMELEON_ART, 0, 0, "G")
+    paste(BLOCK_TEXT, _TEXT_ROW, _TEXT_COL, "Y")
+    paste(badge, badge_row, _TEXT_COL, "Y")
+    tagline_col = max(0, (w - len(TAGLINE)) // 2)
+    paste([TAGLINE], tag_row, tagline_col, "Y")
+
+    return [("".join(row[: len(row)]).rstrip(), col_row) for row, col_row in zip(chars, colors)]
 
 
 def _color_banner(rows):
     lines = []
-    for r in rows:
-        left, right = r[:_ART_W], r[_ART_W:]
-        lines.append(color_string((CG, left), (CY, right)))
+    for text, colors in rows:
+        segments = []
+        start = 0
+        cur = colors[0] if text else "G"
+        for i in range(1, len(text)):
+            if colors[i] != cur:
+                segments.append((cur, text[start:i]))
+                start = i
+                cur = colors[i]
+        if text:
+            segments.append((cur, text[start:]))
+        color_map = {"G": CG, "Y": CY}
+        lines.append(color_string(*[(color_map[c], s) for c, s in segments]) if segments else "")
     return "\n".join(lines)
 
 
