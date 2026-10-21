@@ -21,8 +21,8 @@ static const nrf_block_dev_geometry_t m_geometry = {
 };
 
 static const nrf_block_dev_info_strings_t m_info_strings = {
-    .p_vendor   = "RRG",
-    .p_product  = "ChameleonUltra",
+    .p_vendor   = "Sec1",
+    .p_product  = "ChameleonUltra Phreakbyte Edition",
     .p_revision = "1.0 ",
 };
 
