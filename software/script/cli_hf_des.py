@@ -2143,6 +2143,119 @@ class HfDesBruteAid(ReaderRequiredUnit):
             print(f" {CR}No AIDs accepted in range{C0}")
 
 
+def _an10922_divkey_aes128(master_key: bytes, m: bytes) -> bytes:
+    """AN10922 AES-128 key diversification: DivKey = AES128-CMAC(MasterKey, 0x01 || M).
+    M (UID || key-number || AID [|| extra]) must be 1-31 bytes; AES-CMAC already
+    does the standard two-block pad/subkey handling for inputs of this size, so
+    no manual padding is needed here."""
+    if len(master_key) != 16:
+        raise ValueError("AES-128 master key must be 16 bytes")
+    if not (1 <= len(m) <= 31):
+        raise ValueError(f"diversification input must be 1-31 bytes for AES-128, got {len(m)}")
+    from cryptography.hazmat.primitives import cmac
+    from cryptography.hazmat.primitives.ciphers import algorithms
+    mac = cmac.CMAC(algorithms.AES(master_key))
+    mac.update(bytes([0x01]) + m)
+    return mac.finalize()
+
+
+@hf_des.command("divkey")
+class HfDesDivKey(BaseCLIUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "NXP AN10922 symmetric key diversification: derive a per-card key from a master "
+            "key so each card gets a unique key instead of sharing one global secret. "
+            "Diversification input is UID || key-number || AID [|| extra data]. "
+            "AES-128 only for now. Requires the 'cryptography' package."
+        )
+        parser.add_argument("-k", "--master-key", type=str, required=True, metavar="<hex>",
+                            help="master key, 16 hex bytes (AES-128)")
+        parser.add_argument("--key-type", type=str, default="aes-128",
+                            choices=["aes-128"],
+                            help="diversified key algorithm (default: aes-128)")
+        parser.add_argument("--key-number", type=lambda x: int(x, 0), required=True,
+                            metavar="<0-13>",
+                            help="key number the diversified key will occupy")
+        parser.add_argument("--aid", type=str, required=True, metavar="<hex>",
+                            help="application ID, 3 hex bytes (e.g. 010203)")
+        parser.add_argument("--uid", type=str, default=None, metavar="<hex>",
+                            help="card UID, hex (4/7/10 bytes). If omitted, read live "
+                                 "from a card presented to the reader")
+        parser.add_argument("--data", type=str, default="", metavar="<hex>",
+                            help="extra bytes appended to the diversification input "
+                                 "(e.g. a system identifier), optional")
+        parser.epilog = (
+            "examples:\n"
+            "  hf des divkey -k 00112233445566778899AABBCCDDEEFF --key-number 0 --aid 010203\n"
+            "    (reads UID from a presented card)\n"
+            "  hf des divkey -k 00112233445566778899AABBCCDDEEFF --key-number 0 --aid 010203 "
+            "--uid 04AABBCCDDEEFF\n"
+            "    (fully offline, no device needed)\n"
+        )
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        try:
+            master_key = bytes.fromhex(args.master_key.replace(" ", ""))
+        except ValueError:
+            print(f" {CR}[!] --master-key is not valid hex{C0}")
+            return
+        try:
+            aid = bytes.fromhex(args.aid.replace(" ", ""))
+        except ValueError:
+            print(f" {CR}[!] --aid is not valid hex{C0}")
+            return
+        if len(aid) != 3:
+            print(f" {CR}[!] --aid must be 3 bytes, got {len(aid)}{C0}")
+            return
+        try:
+            extra = bytes.fromhex(args.data.replace(" ", "")) if args.data else b""
+        except ValueError:
+            print(f" {CR}[!] --data is not valid hex{C0}")
+            return
+        if not (0 <= args.key_number <= 13):
+            print(f" {CR}[!] --key-number must be 0-13{C0}")
+            return
+
+        if args.uid is not None:
+            try:
+                uid = bytes.fromhex(args.uid.replace(" ", ""))
+            except ValueError:
+                print(f" {CR}[!] --uid is not valid hex{C0}")
+                return
+        else:
+            if not self.device_com.isOpen():
+                print(f" {CR}[!] No --uid given and no device connected. "
+                      f"Either pass --uid or 'hw connect' first.{C0}")
+                return
+            if not self.cmd.is_device_reader_mode():
+                self.cmd.set_device_reader_mode(True)
+            try:
+                uid, _sak, _ats = _des_select(self.cmd)
+            except RuntimeError as e:
+                print(f" {CR}[!] Could not read a card: {e}{C0}")
+                return
+
+        m = uid + bytes([args.key_number]) + aid + extra
+        try:
+            divkey = _an10922_divkey_aes128(master_key, m)
+        except ValueError as e:
+            print(f" {CR}[!] {e}{C0}")
+            return
+        except ImportError:
+            print(f" {CY}[!] 'cryptography' package not installed; cannot derive.{C0}")
+            return
+
+        print(f" - UID        : {uid.hex().upper()}")
+        print(f" - Key number : {args.key_number}")
+        print(f" - AID        : {aid.hex().upper()}")
+        if extra:
+            print(f" - Extra data : {extra.hex().upper()}")
+        print(f" - Input (M)  : {m.hex().upper()} ({len(m)} bytes)")
+        print(f" {CG}[+] Diversified key: {divkey.hex().upper()}{C0}")
+
+
 # =============================================================================
 # Standalone (host-less) modes subsystem
 # =============================================================================
