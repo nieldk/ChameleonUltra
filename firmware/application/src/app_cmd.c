@@ -1,3 +1,4 @@
+#include <string.h>
 #include "fds_util.h"
 #include "bsp_time.h"
 #include "bsp_delay.h"
@@ -250,7 +251,21 @@ static data_frame_tx_t *cmd_processor_bl_info(uint16_t cmd, uint16_t status, uin
         v[7 + i * 3 + 1] = NRF_ACL->ACL[i].SIZE;
         v[7 + i * 3 + 2] = NRF_ACL->ACL[i].PERM;
     }
-    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(v), (uint8_t *)v);
+    /* Tail: 64-byte bootloader info block at 0xFDFC0 (little-endian, see
+     * bootloader/src/bl_info.h) + CRC32 of the whole bootloader region. */
+    static uint8_t out[sizeof(v) + 64 + 4];
+    memcpy(out, v, sizeof(v));
+    memcpy(out + sizeof(v), (const void *)0x000FDFC0UL, 64);
+    uint32_t crc = 0xFFFFFFFFUL;
+    for (const uint8_t *p = (const uint8_t *)0x000F3000UL; p < (const uint8_t *)0x000FE000UL; p++) {
+        crc ^= *p;
+        for (int b = 0; b < 8; b++) {
+            crc = (crc >> 1) ^ (0xEDB88320UL & (0u - (crc & 1u)));
+        }
+    }
+    crc = ~crc;
+    memcpy(out + sizeof(v) + 64, &crc, 4);
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(out), out);
 }
 
 static data_frame_tx_t *cmd_processor_fds_list(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {

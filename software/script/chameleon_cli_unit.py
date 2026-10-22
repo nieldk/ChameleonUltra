@@ -444,15 +444,45 @@ class HF14AConfig(DeviceRequiredUnit):
 class HWBootloaderVersion(DeviceRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
-        parser.description = "Get bootloader version"
+        parser.description = ("Show the bootloader version, git revision, toolchain, features and image CRC32, "
+                              "read from the bootloader's own info block, plus the DFU settings counter")
         return parser
+
+    BL_FEATURES = ((1, "UF2"), (2, "CDC DFU"), (4, "raw app write"))
 
     def on_exec(self, args: argparse.Namespace):
         try:
-            version = self.cmd.get_bootloader_version()
-            print(f" - Bootloader Version: {version}")
+            counter = self.cmd.get_bootloader_version()
         except chameleon_com.CMDInvalidException:
             print(" - Bootloader version not supported by current firmware, please update")
+            return
+        info = self.read_bl_info()
+        if info is None:
+            print(f" - Bootloader Version: {counter} (settings counter; no info block in this bootloader)")
+            return
+        feats = ", ".join(n for bit, n in self.BL_FEATURES if info["features"] & bit) or "none"
+        print(f" - Bootloader Version: {info['version']}" + (f" ({info['rev']})" if info["rev"] else ""))
+        print(f" - Built with        : GCC {info['gcc']}")
+        print(f" - Features          : {feats}")
+        print(f" - Image             : 0xF3000-0xFE000 ({0xB000:,} bytes), CRC32 0x{info['crc']:08X}")
+        print(f" - Settings counter  : {counter}")
+
+    def read_bl_info(self):
+        """Parse the info block appended to the bl info reply; None if absent."""
+        try:
+            resp = self.cmd.bl_info()
+        except chameleon_com.CMDInvalidException:
+            return None
+        data = resp.data if resp.status == Status.SUCCESS else b""
+        off = 7 * 4 + 8 * 3 * 4
+        if len(data) < off + 64 + 4:
+            return None
+        magic, layout, size, version, features, gmaj, gmin, gpat, _ = struct.unpack("<IHHIIBBBB", data[off:off + 20])
+        if magic != 0x4E494C42 or layout != 1 or size != 64:
+            return None
+        rev = data[off + 20:off + 44].split(b"\0")[0].decode("ascii", "replace")
+        crc, = struct.unpack("<I", data[off + 64:off + 68])
+        return {"version": version, "features": features, "gcc": f"{gmaj}.{gmin}.{gpat}", "rev": rev, "crc": crc}
 
 
 @hw.command("freemem")

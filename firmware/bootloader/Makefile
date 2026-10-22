@@ -108,6 +108,7 @@ SRC_FILES += \
   $(PROJ_DIR)/uf2_status.c \
   $(PROJ_DIR)/uf2_blockdev.c \
   $(PROJ_DIR)/raw_app_write.c \
+  $(PROJ_DIR)/bl_info.c \
   $(SDK_ROOT)/components/libraries/bootloader/serial_dfu/nrf_dfu_serial.c \
   $(SDK_ROOT)/components/libraries/bootloader/serial_dfu/nrf_dfu_serial_usb.c \
 
@@ -210,6 +211,9 @@ CFLAGS += -DBLE_STACK_SUPPORT_REQD
 CFLAGS += -DFLOAT_ABI_HARD
 CFLAGS += -DNRF52840_XXAA
 CFLAGS += -DNRF_DFU_SETTINGS_VERSION=2
+BL_VERSION ?= 0
+CFLAGS += -DBL_VERSION=$(BL_VERSION)
+CFLAGS += -DBL_GIT_REV=\"$(if $(GIT_REV),g$(GIT_REV)$(GIT_DIRTY))\"
 CFLAGS += -DNRF_DFU_SVCI_ENABLED
 CFLAGS += -DNRF_SD_BLE_API_VERSION=7
 CFLAGS += -DS140

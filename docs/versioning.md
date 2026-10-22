@@ -40,49 +40,40 @@ This uses the commit hash, never a tag. Example outputs: `v2.2.0-g1a2b3c4`,
 
 ## 3. Bootloader version — `hw blver`
 
-Reported flat (a single integer), sourced from `build.sh` and compiled into
-the **application**, so it ships in the normal application UF2 and updates on
-every app flash — no settings-page write, no SWD (see
-[flashing-and-bootloader.md](flashing-and-bootloader.md) for why that matters).
+The bootloader carries its own identity: a 64-byte info block at a fixed
+address, `0xFDFC0` (the last 64 bytes of the 44 KB region). It is built from
+`firmware/bootloader/src/bl_info.[ch]` and placed by `bootloader-stage1.ld`
+(`FLASH` ends at `0xFDFC0`, so code overflowing into it fails the link).
 
-`firmware/build.sh`:
+| Offset | Field |
+|---|---|
+| 0 | magic `"BLIN"` (`0x4E494C42`) |
+| 4 | layout (u16, 1), size (u16, 64) |
+| 8 | version (u32) - `bootloader_version` from `build.sh` |
+| 12 | features (u32): bit0 UF2, bit1 CDC DFU, bit2 raw app write |
+| 16 | GCC major, minor, patch |
+| 20 | git revision, NUL padded (`g1a2b3c`, `-dirty` if modified; empty without git) |
 
-```bash
-bootloader_version=40
+`build.sh` passes `BL_VERSION=$bootloader_version` to the bootloader make.
+No build date is stored, so builds stay reproducible.
+
+`hw blver` reads the block through `hw bl info`'s reply (the app appends the
+block and a CRC32 of `0xF3000-0xFE000` to the existing response) and prints:
+
+```
+ - Bootloader Version: 2 (g1a2b3c)
+ - Built with        : GCC 15.2.1
+ - Features          : UF2, CDC DFU, raw app write
+ - Image             : 0xF3000-0xFE000 (45,056 bytes), CRC32 0x........
+ - Settings counter  : 2
 ```
 
-The value is passed into the application build:
+The image CRC32 covers the full 45,056-byte region and matches the CRC32
+that `hw bl push` prints for the same hex. A bootloader built before the info
+block, or an older app, falls back to the settings counter alone.
 
-```bash
-(
-  cd application
-  make -j BL_VERSION=$bootloader_version
-)
-```
-
-`firmware/application/Makefile` turns it into a macro (default keeps a bare
-`make` working):
-
-```makefile
-BL_VERSION ?= 0
-CFLAGS += -DBL_VERSION=$(BL_VERSION)
-```
-
-and `cmd_processor_get_bootloader_version()` in `app_cmd.c` returns it directly
-as a big-endian `uint32` (the client prints it flat):
-
-```c
-uint32_t payload = U32HTONL((uint32_t)BL_VERSION);
-return data_frame_make(cmd, STATUS_SUCCESS, sizeof(payload), (uint8_t *)&payload);
-```
-
-`bootloader_version` is still also handed to `nrfutil pkg/settings generate` as
-the nRF DFU version field, but this fork does **not** enforce a monotonic
-bootloader version (see the downgrade note in
-[flashing-and-bootloader.md](flashing-and-bootloader.md)), so you can set it to
-whatever you want `hw blver` to show.
-
-> Note: earlier revisions read `hw blver` from the DFU settings page
-> (`0xFF000 + 12`) and split the value into `major.minor`. That could not be
-> updated over UF2 and is no longer used — the value is now compile-time in the
-> application.
+The settings counter is the `bootloader_version` field of the DFU settings
+page (`0xFF000 + 12`). It is not part of the bootloader image and is not
+changed by `hw bl push`; `hw version -b` sets it. This fork does **not**
+enforce a monotonic bootloader version (see the downgrade note in
+[flashing-and-bootloader.md](flashing-and-bootloader.md)).

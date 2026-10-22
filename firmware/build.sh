@@ -37,7 +37,7 @@ rm -rf "objects"
   # -----------------------------------------------------------------------
   (
     cd bootloader
-    make -j
+    make -j BL_VERSION=$bootloader_version
     # Ensure hex is generated (parallel build can miss it)
     make ../objects/bootloader.hex 2>/dev/null || \
     arm-none-eabi-objcopy -O ihex ../objects/bootloader.out ../objects/bootloader.hex

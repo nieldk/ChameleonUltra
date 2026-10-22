@@ -5,7 +5,8 @@ GROUP(-lgcc -lc -lnosys)
 
 MEMORY
 {
-  FLASH (rx) : ORIGIN = 0xF3000, LENGTH = 0xB000
+  FLASH (rx) : ORIGIN = 0xF3000, LENGTH = 0xAFC0
+  bl_info (r) : ORIGIN = 0xFDFC0, LENGTH = 0x40
   RAM (rwx) :  ORIGIN = 0x20005978, LENGTH = 0x32688
   uicr_bootloader_start_address (r) : ORIGIN = 0x10001014, LENGTH = 0x4
   bootloader_settings_page (r) : ORIGIN = 0x000FF000, LENGTH = 0x1000
@@ -15,6 +16,11 @@ MEMORY
 
 SECTIONS
 {
+  . = ALIGN(4);
+  .bl_info :
+  {
+    KEEP(*(.bl_info*))
+  } > bl_info
   . = ALIGN(4);
   .uicr_bootloader_start_address :
   {

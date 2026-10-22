@@ -989,7 +989,7 @@ Write a bootloader image to 0xF3000, bypassing Secure DFU and the MBR: NVMC-writ
 
 ### `hw blver`
 
-Get bootloader version
+Show the bootloader version, git revision, toolchain, features and image CRC32, read from the bootloader's own info block, plus the DFU settings counter
 
 
 ### `hw chipid`
