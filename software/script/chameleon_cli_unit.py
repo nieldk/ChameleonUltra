@@ -1658,11 +1658,13 @@ class HWFlash(BaseCLIUnit):
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
         parser.description = (
-            "Flash a DFU firmware package (.zip) to the device over Secure DFU. "
+            "Flash a DFU firmware package (.zip) over Secure DFU, or an application "
+            ".hex/.bin directly (unsigned raw write, CRC32 only, serial DFU port). "
             "Enters bootloader mode automatically, then uploads with no external "
             "tools required (no nrfutil)."
         )
-        parser.add_argument("file", type=str, help="Path to the DFU package .zip")
+        parser.add_argument("file", type=str,
+                            help="DFU package .zip, or application .hex/.bin")
         parser.add_argument("--no-enter", action="store_true",
                             help="Skip enter-bootloader; device is already in DFU mode")
         parser.add_argument("-p", "--port", type=str, default=None,
@@ -1674,14 +1676,19 @@ class HWFlash(BaseCLIUnit):
         return parser
 
     def on_exec(self, args: argparse.Namespace):
-        # Unpack first so a bad package fails before we touch the device.
+        # Load first so a bad file fails before we touch the device.
+        raw = args.file.lower().endswith((".hex", ".bin"))
+        images = raw_data = None
         try:
-            images = chameleon_dfu.unpack_dfu_zip(args.file)
+            if raw:
+                raw_data = chameleon_dfu.load_app_image(args.file)
+            else:
+                images = chameleon_dfu.unpack_dfu_zip(args.file)
         except FileNotFoundError:
             print(color_string((CR, f"File not found: {args.file}")))
             return
         except chameleon_dfu.DFUError as e:
-            print(color_string((CR, f"Invalid DFU package: {e}")))
+            print(color_string((CR, f"Invalid {'image' if raw else 'DFU package'}: {e}")))
             return
 
         # Pick the upload transport. An explicit --port overrides; otherwise
@@ -1700,6 +1707,13 @@ class HWFlash(BaseCLIUnit):
         else:
             ttype = getattr(self.device_com, "transport_type", None)
             use_ble = getattr(ttype, "name", "") == "BLE"
+        if raw:
+            if use_ble:
+                if override is not None:
+                    print(color_string((CR, "Raw .hex/.bin flashing needs the USB serial DFU port, not BLE.")))
+                    return
+                print("Raw flash uses the USB DFU port; the device re-enumerates over USB.")
+            use_ble = False
 
         # Enter bootloader unless the device is already in DFU or told to skip.
         if not args.no_enter:
@@ -1740,14 +1754,17 @@ class HWFlash(BaseCLIUnit):
             print(color_string((CR, f"Could not open DFU transport: {e}")))
             return
 
-        kinds = ", ".join(i["type"] for i in images)
+        kinds = "raw application" if raw else ", ".join(i["type"] for i in images)
         print(f"Flashing {os.path.basename(args.file)} ({kinds}) via {where}")
 
         def progress(pct):
             print(f"\r - Uploading: {pct:3d}%", end="", flush=True)
 
         try:
-            chameleon_dfu.flash_package(images, transport, progress=progress)
+            if raw:
+                chameleon_dfu.raw_flash_app(transport, raw_data, progress=progress)
+            else:
+                chameleon_dfu.flash_package(images, transport, progress=progress)
         except chameleon_dfu.DFUError as e:
             print()
             print(color_string((CR, f"Flash failed: {e}")))
