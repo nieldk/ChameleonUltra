@@ -103,14 +103,8 @@ bool uf2_flash_write(uint32_t addr, const void *data, uint32_t len) {
 
 /* ---- DFU completion ---- */
 
-void uf2_dfu_complete(void) {
-    NRF_LOG_INFO("UF2 transfer complete (%u blocks)",
-                 uf2_ghostfat_blocks_written());
-
-    s_dfu_settings.bank_0.bank_code  = NRF_DFU_BANK_VALID_APP;
-    s_dfu_settings.bank_0.image_size = uf2_ghostfat_blocks_written() * 256u;
-    s_dfu_settings.bank_0.image_crc  = 0;
-
+/* Write bank_0 + settings and backup pages (bank_0 fields set by caller). */
+void uf2_settings_store(void) {
     /* UF2 images are unsigned and carry no app CRC, so mark the app as needing
      * no boot-time validation. Otherwise a stale VALIDATE_CRC left in the
      * settings by an earlier serial-DFU flash makes app_is_valid() recompute
@@ -138,6 +132,17 @@ void uf2_dfu_complete(void) {
     nrf_nvmc_write_bytes(BOOTLOADER_SETTINGS_BACKUP_ADDRESS,
                          (const uint8_t *)&s_dfu_settings,
                          sizeof(nrf_dfu_settings_t));
+}
+
+void uf2_dfu_complete(void) {
+    NRF_LOG_INFO("UF2 transfer complete (%u blocks)",
+                 uf2_ghostfat_blocks_written());
+
+    s_dfu_settings.bank_0.bank_code  = NRF_DFU_BANK_VALID_APP;
+    s_dfu_settings.bank_0.image_size = uf2_ghostfat_blocks_written() * 256u;
+    s_dfu_settings.bank_0.image_crc  = 0;
+
+    uf2_settings_store();
 
     if (m_observer) m_observer(NRF_DFU_EVT_DFU_COMPLETED);
 
