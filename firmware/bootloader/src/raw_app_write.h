@@ -19,8 +19,9 @@ typedef enum
     RAW_APP_ERR_MAGIC,
 } raw_app_err_t;
 
-raw_app_err_t raw_app_begin(uint32_t len, uint32_t crc32);
-raw_app_err_t raw_app_write(uint32_t offset, uint8_t const * p_data, uint32_t len);
-raw_app_err_t raw_app_commit(uint32_t magic);  /* resets on success */
+
+/* Opcode entry: checks payload length, decodes, runs BEGIN/WRITE/COMMIT.
+ * COMMIT resets the device on success. */
+raw_app_err_t raw_app_handle(uint8_t op, uint8_t const * p, uint16_t n);
 
 #endif
