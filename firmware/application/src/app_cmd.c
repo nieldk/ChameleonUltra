@@ -268,13 +268,33 @@ static data_frame_tx_t *cmd_processor_bl_info(uint16_t cmd, uint16_t status, uin
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(out), out);
 }
 
+/* fds_list/fds_read are a generic flash-record dump meant for diagnosing a
+ * device without SWD (see cmd_processor_bl_info above). They must not be able
+ * to exfiltrate key material that's supposed to be non-extractable -- the
+ * U2F master key and attestation private key (mode_u2f.c: U2F_FDS_FILE
+ * 0x1020, keys U2F_FDS_KEY_MK 0x0001 / U2F_FDS_KEY_ATT_PRIV 0x0003). Keep
+ * these literals in sync with mode_u2f.c if those ever change. The counter
+ * (key 2) and cert (key 4) aren't secret and stay readable. */
+#define FDS_PROTECTED_U2F_FILE      0x1020
+#define FDS_PROTECTED_U2F_KEY_MK    0x0001
+#define FDS_PROTECTED_U2F_KEY_ATT   0x0003
+static bool fds_record_is_protected(uint16_t file_id, uint16_t key) {
+    return file_id == FDS_PROTECTED_U2F_FILE &&
+           (key == FDS_PROTECTED_U2F_KEY_MK || key == FDS_PROTECTED_U2F_KEY_ATT);
+}
+
 static data_frame_tx_t *cmd_processor_fds_list(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    /* Enumerate every valid FDS record: 6 bytes each (file_id, key, len), BE. */
+    /* Enumerate every valid FDS record: 6 bytes each (file_id, key, len), BE.
+     * Protected records are left out entirely, not just redacted, so their
+     * presence/size isn't disclosed either. */
     static fds_rec_meta_t recs[48];
     static uint8_t out[sizeof(recs) / sizeof(recs[0]) * 6];
     int n = fds_enumerate(recs, sizeof(recs) / sizeof(recs[0]));
     uint16_t j = 0;
     for (int i = 0; i < n; i++) {
+        if (fds_record_is_protected(recs[i].file_id, recs[i].key)) {
+            continue;
+        }
         out[j++] = (uint8_t)(recs[i].file_id >> 8);   out[j++] = (uint8_t)recs[i].file_id;
         out[j++] = (uint8_t)(recs[i].key >> 8);       out[j++] = (uint8_t)recs[i].key;
         out[j++] = (uint8_t)(recs[i].len_bytes >> 8); out[j++] = (uint8_t)recs[i].len_bytes;
@@ -294,6 +314,11 @@ static data_frame_tx_t *cmd_processor_fds_read(uint16_t cmd, uint16_t status, ui
     uint16_t key     = (uint16_t)((data[2] << 8) | data[3]);
     uint16_t offset  = (uint16_t)((data[4] << 8) | data[5]);
     uint16_t req     = (uint16_t)((data[6] << 8) | data[7]);
+    if (fds_record_is_protected(file_id, key)) {
+        /* Same failure the caller sees for a non-existent record -- don't
+         * distinguish "protected" from "absent". */
+        return data_frame_make(cmd, STATUS_FLASH_READ_FAIL, 0, NULL);
+    }
     fds_record_desc_t desc;
     uint16_t rec_len = 0;
     const uint8_t *p = fds_peek(file_id, key, &rec_len, &desc);
