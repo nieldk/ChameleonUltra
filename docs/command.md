@@ -982,11 +982,10 @@ Read-only bootloader-forwarding snapshot: where the MBR boots from (UICR NRFFW /
 
 #### `hw bl push`
 
-Write a bootloader image to 0xF3000 via the MBR, bypassing Secure DFU. The device resets into the new bootloader.
+Write a bootloader image to 0xF3000, bypassing Secure DFU and the MBR: NVMC-write 0xF3000 directly and convert UICR (NRFFW/REGOUT0). No journaling - a power loss mid-write bricks the device (SWD-only recovery). The device resets into the new bootloader.
 
 - `file` — bootloader .hex (UICR records are ignored) or raw .bin linked for 0xF3000 (required)
 - `-y`, `--yes` — do not ask for confirmation
-- `--raw` — install WITHOUT the MBR: NVMC-write 0xF3000 directly and convert UICR (NRFFW/REGOUT0). For a device whose bootloader was never MBR-registered, where normal push fails with 'MBR param page not set' / 'address not 0xF3000'. No journaling - a power loss mid-write bricks the device (SWD-only recovery).
 
 ### `hw blver`
 
@@ -2053,4 +2052,3 @@ Read u2f result buffer
 - `--json` — emit parsed sessions as JSON
 - `--dump` — dump every frame in each session
 - `--pm3` — write each session as a Proxmark3 .trace (<prefix>-NN.trace)
-
