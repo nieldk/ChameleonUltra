@@ -5,13 +5,13 @@ on:
     branches: [main]
     paths:
       - 'firmware/**'
-      - '.github/workflows/build-dfu.yml'
+      - '.github/workflows/build-dfu.yaml'
     tags:
       - 'v*'
   pull_request:
     paths:
       - 'firmware/**'
-      - '.github/workflows/build-dfu.yml'
+      - '.github/workflows/build-dfu.yaml'
   workflow_dispatch:
 
 permissions:
@@ -123,7 +123,6 @@ jobs:
           ./build.sh
           echo "---- built artifacts ----"
           ls -la objects/${{ matrix.device }}-dfu-app.zip \
-                 objects/${{ matrix.device }}-dfu-full.zip \
                  objects/${{ matrix.device }}-application.uf2 || true
 
       - name: Collect artifacts
@@ -131,9 +130,7 @@ jobs:
         run: |
           mkdir -p ../dist
           cp objects/${{ matrix.device }}-dfu-app.zip     ../dist/ 2>/dev/null || true
-          cp objects/${{ matrix.device }}-dfu-full.zip    ../dist/ 2>/dev/null || true
           cp objects/${{ matrix.device }}-application.uf2 ../dist/ 2>/dev/null || true
-          cp objects/${{ matrix.device }}-fullimage.uf2   ../dist/ 2>/dev/null || true
           ls -la ../dist
 
       - name: Upload build artifacts
