@@ -5422,8 +5422,12 @@ class StandaloneDisarm(DeviceRequiredUnit):
                 if self.cmd.standalone_get_mode()[0] == StandaloneState.DISARMED:
                     print(color_string((CG, "disarmed (ack was slow — confirmed via state)")))
                     return
-            except Exception:
-                pass
+            except Exception as confirm_e:
+                # Don't hide a broken confirmation check behind the original
+                # error — an ImportError here means the fallback never ran at
+                # all, which is worth knowing even though the outcome (report
+                # the original failure) is the same either way.
+                print(color_string((CY, f"(disarm-state check also failed: {confirm_e})")))
             print(color_string((CR, f"disarm failed: {e}")))
             print(color_string((CY, "Use the both-button chord on the device to disarm manually.")))
 
