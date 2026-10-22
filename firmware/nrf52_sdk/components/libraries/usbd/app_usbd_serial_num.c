@@ -74,11 +74,17 @@ void app_usbd_serial_num_generate(void)
     const uint16_t serial_num_high_bytes = (uint16_t)NRF_FICR->DEVICEADDR[1] | 0xC000; // The masking makes the address match the Random Static BLE address.
     const uint32_t serial_num_low_bytes  = NRF_FICR->DEVICEADDR[0];
 
-    (void)snprintf(serial_number_string,
-                   SERIAL_NUMBER_STRING_SIZE + 1,
-                   "%04"PRIX16"%08"PRIX32,
-                   serial_num_high_bytes,
-                   serial_num_low_bytes);
+    /* "%04X%08X" without snprintf: keeps newlib printf out of the bootloader */
+    static const char hex[] = "0123456789ABCDEF";
+    for (uint32_t i = 0; i < 4; i++)
+    {
+        serial_number_string[i] = hex[(serial_num_high_bytes >> (12 - 4 * i)) & 0xF];
+    }
+    for (uint32_t i = 0; i < 8; i++)
+    {
+        serial_number_string[4 + i] = hex[(serial_num_low_bytes >> (28 - 4 * i)) & 0xF];
+    }
+    serial_number_string[SERIAL_NUMBER_STRING_SIZE] = '\0';
 
     string_create(serial_number_string);
 }
