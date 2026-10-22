@@ -12,6 +12,19 @@ const static chameleon_device_type_t m_device_type =
 #error No device defined
 #endif
 
+static char *put_str(char *p, const char *s) {
+    while (*s) *p++ = *s++;
+    return p;
+}
+
+static char *put_dec(char *p, uint32_t v) {
+    char t[10];
+    int n = 0;
+    do { t[n++] = '0' + v % 10; v /= 10; } while (v);
+    while (n) *p++ = t[--n];
+    return p;
+}
+
 char g_extern_product_str[sizeof(DEVICE_NAME_STR) + sizeof(": hw_v255, fw_v65535") + 1];
 
 
@@ -189,7 +202,12 @@ void hw_connect_init(void) {
     INIT_RGB_ARRAY(3, LED_B);
 
     // Generates a description string of detailed device information.
-    sprintf(g_extern_product_str, "%s: hw_v%d, fw_v%d", DEVICE_NAME_STR, m_hw_ver, FW_VER_NUM);
+    // Built by hand: sprintf pulls newlib printf (~2.5 KB) into the bootloader.
+    char *p = put_str(g_extern_product_str, DEVICE_NAME_STR ": hw_v");
+    p = put_dec(p, m_hw_ver);
+    p = put_str(p, ", fw_v");
+    p = put_dec(p, FW_VER_NUM);
+    *p = '\0';
 }
 
 uint32_t *hw_get_led_array(void) {
