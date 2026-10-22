@@ -547,3 +547,88 @@ def unpack_dfu_zip(path: str):
 def flash_package(images, transport: Transport, progress=None):
     """Run the full Secure DFU sequence for the given images over a transport."""
     SecureDFU(transport).flash(images, progress)
+
+
+# --- raw app write (unsigned, no Secure DFU) ---------------------------------
+# Bootloader opcodes outside Nordic's range; the app is written in place at
+# APP_BASE and checked by CRC32 only.
+RAW_OP_BEGIN = 0xD0
+RAW_OP_WRITE = 0xD1
+RAW_OP_COMMIT = 0xD2
+RAW_COMMIT_MAGIC = 0x52415721  # "RAW!"
+
+APP_BASE = 0x27000
+APP_END = 0xB0000
+RAW_CHUNK = 512  # divides the 4 KiB page, fits the serial RX buffer after SLIP
+
+
+def load_app_image(path: str) -> bytes:
+    """Return the application image for APP_BASE from a .hex or .bin file."""
+    if not path.lower().endswith(".hex"):
+        with open(path, "rb") as f:
+            data = f.read()
+    else:
+        mem = {}
+        upper = 0
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line.startswith(":"):
+                    continue
+                raw = bytes.fromhex(line[1:])
+                if sum(raw) & 0xFF:
+                    raise DFUError("bad Intel HEX checksum")
+                n, addr, typ = raw[0], (raw[1] << 8) | raw[2], raw[3]
+                if typ == 4:
+                    upper = ((raw[4] << 8) | raw[5]) << 16
+                elif typ == 2:
+                    upper = ((raw[4] << 8) | raw[5]) << 4
+                elif typ == 0:
+                    for i, b in enumerate(raw[4 : 4 + n]):
+                        a = upper + addr + i
+                        if a < 0x100000:  # skip UICR
+                            mem[a] = b
+        if not mem:
+            raise DFUError("no flash data in the hex file")
+        lo, hi = min(mem), max(mem) + 1
+        if lo != APP_BASE:
+            raise DFUError(
+                f"hex starts at 0x{lo:X}, expected 0x{APP_BASE:X} (not an application hex)"
+            )
+        data = bytes(mem.get(APP_BASE + i, 0xFF) for i in range(hi - APP_BASE))
+    if not data:
+        raise DFUError("empty image")
+    if APP_BASE + len(data) > APP_END:
+        raise DFUError(
+            f"image is {len(data):,} bytes, limit is {APP_END - APP_BASE:,} (0x{APP_END:X})"
+        )
+    return data + b"\xff" * (-len(data) % 4)
+
+
+def raw_flash_app(transport: Transport, data: bytes, progress=None):
+    """Write `data` to APP_BASE over the serial DFU port, verified by CRC32."""
+    crc = zlib.crc32(data) & 0xFFFFFFFF
+    chunk = RAW_CHUNK
+    transport.prepare()
+    limit = transport.data_chunk_size() - 5  # opcode + offset
+    while chunk > limit and chunk > 4:
+        chunk //= 2
+    try:
+        transport.command(RAW_OP_BEGIN, struct.pack("<II", len(data), crc))
+    except DFURemoteError as e:
+        raise DFUError(
+            f"{e}; this bootloader has no raw write, use a DFU .zip or the UF2 drive"
+        ) from e
+    for off in range(0, len(data), chunk):
+        part = data[off : off + chunk]
+        transport.command(RAW_OP_WRITE, struct.pack("<I", off) + part)
+        if progress:
+            progress(min(100, (off + len(part)) * 100 // len(data)))
+    try:
+        transport.command(RAW_OP_COMMIT, struct.pack("<I", RAW_COMMIT_MAGIC))
+    except DFURemoteError:
+        raise
+    except DFUError:
+        pass  # device resets without replying
+    if progress:
+        progress(100)
