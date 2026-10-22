@@ -48,9 +48,6 @@ static raw_app_err_t raw_app_write(uint32_t offset, uint8_t const * p_data, uint
 
 static raw_app_err_t raw_app_commit(uint32_t magic)
 {
-    uint32_t const * v = (uint32_t const *)UF2_FLASH_APP_START;
-    uint32_t sp = v[0], rst = v[1] & ~1u;
-
     if (magic != RAW_APP_COMMIT_MAGIC)
     {
         return RAW_APP_ERR_MAGIC;
@@ -62,12 +59,6 @@ static raw_app_err_t raw_app_commit(uint32_t magic)
     if (crc32_compute((uint8_t const *)UF2_FLASH_APP_START, m_len, NULL) != m_crc)
     {
         return RAW_APP_ERR_CRC;
-    }
-    /* Vector table sanity: SP in RAM, reset vector inside the image. */
-    if (sp <= 0x20000000UL || sp > 0x20040000UL || !(v[1] & 1u) ||
-        rst < UF2_FLASH_APP_START || rst >= UF2_FLASH_APP_START + m_len)
-    {
-        return RAW_APP_ERR_LEN;
     }
     m_began = false;
     s_dfu_settings.bank_0.bank_code  = NRF_DFU_BANK_VALID_APP;
