@@ -67,6 +67,7 @@
 #include "hw_connect.h"
 #include "uf2_ghostfat.h"
 #include "bl_recovery.h"
+#include "bl_egg.h"
 
 
 static void on_error(void) {
@@ -257,11 +258,14 @@ int main(void) {
      */
     bool uf2_mode = false;
     nrf_gpio_cfg_input(BUTTON_2, BUTTON_PULL);
-    nrf_delay_ms(5);  /* let the pin settle before sampling */
+    nrf_gpio_cfg_input(BUTTON_1, BUTTON_PULL);
+    nrf_delay_ms(5);  /* let the pins settle before sampling */
     /* A watchdog reset means the app hung (see bl_recovery_arm_wdt): treat it
      * like BUTTON_2 so the device shows up for reflashing without a button. */
     bool app_hung = bl_recovery_wdt_reset_consume();
-    if (nrf_gpio_pin_read(BUTTON_2) == 1 || app_hung) {
+    bool button2 = nrf_gpio_pin_read(BUTTON_2) == 1;
+    bool button1 = nrf_gpio_pin_read(BUTTON_1) == 1;
+    if (button2 || app_hung) {
         NRF_POWER->GPREGRET = BOOTLOADER_DFU_UF2_MAGIC;
         uf2_mode = true;
         /* Fall through; the GPREGRET enter-method in nrf_bootloader.c will
@@ -272,6 +276,9 @@ int main(void) {
      * resets the port mid-flash. Set before nrf_bootloader_init. */
     uf2_set_mode(uf2_mode);
     init_leds();
+    if (app_hung || button1) {
+        bl_egg_play();   /* the watchdog barks */
+    }
 
     nrf_bootloader_mbr_addrs_populate();
 

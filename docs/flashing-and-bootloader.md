@@ -124,3 +124,4 @@ The watchdog timeout is locked once started, so it is also the app's runtime
 timeout. A watchdog reset in normal use now shows up as a DFU window instead of
 a silent restart. A fast crash loop (app resets itself immediately, no hang)
 is not detected; hold BUTTON_2 for that.
+

@@ -110,6 +110,7 @@ SRC_FILES += \
   $(PROJ_DIR)/raw_app_write.c \
   $(PROJ_DIR)/bl_info.c \
   $(PROJ_DIR)/bl_recovery.c \
+  $(PROJ_DIR)/bl_egg.c \
   $(SDK_ROOT)/components/libraries/bootloader/serial_dfu/nrf_dfu_serial.c \
   $(SDK_ROOT)/components/libraries/bootloader/serial_dfu/nrf_dfu_serial_usb.c \
 
