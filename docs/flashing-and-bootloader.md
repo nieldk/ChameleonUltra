@@ -101,3 +101,26 @@ converts UICR (NRFFW/REGOUT0) and resets. The MBR is not involved, so this works
 on units whose bootloader was never MBR-registered. There is no journaling: a
 power loss during the write bricks the device (SWD-only recovery). The
 application is limited to 0x27000-0xB0000 (560 KB).
+
+## Forcing bootloader entry
+
+The bootloader can be reached whatever state the application is in:
+
+* **Hung or crashed app** - just before starting the app, the bootloader
+  starts the watchdog (10 s, runs in sleep; the app already feeds it from its
+  first instruction). If the app hangs, even before it starts its own watchdog,
+  the device resets, the bootloader sees the watchdog reset and enters UF2 +
+  CDC DFU mode as if BUTTON_2 were held. It stays for the 30 s DFU inactivity
+  timeout, then starts the app again, so a hanging app cycles between a short
+  flashable window and the hang. `hw flash application.hex --no-enter` works in
+  that window.
+* **Button** - hold BUTTON_2 at power-on or at any reset: UF2 + CDC DFU mode.
+  With the watchdog above, a hung app resets within 10 s, so the next reset
+  picks up the button.
+* **Invalid app** - an interrupted or failed raw/UF2 flash leaves the app
+  marked invalid, so the bootloader stays in DFU mode.
+
+The watchdog timeout is locked once started, so it is also the app's runtime
+timeout. A watchdog reset in normal use now shows up as a DFU window instead of
+a silent restart. A fast crash loop (app resets itself immediately, no hang)
+is not detected; hold BUTTON_2 for that.

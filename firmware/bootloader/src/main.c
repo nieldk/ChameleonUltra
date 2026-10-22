@@ -66,6 +66,7 @@
 #include "nrf_gpio.h"
 #include "hw_connect.h"
 #include "uf2_ghostfat.h"
+#include "bl_recovery.h"
 
 
 static void on_error(void) {
@@ -257,7 +258,10 @@ int main(void) {
     bool uf2_mode = false;
     nrf_gpio_cfg_input(BUTTON_2, BUTTON_PULL);
     nrf_delay_ms(5);  /* let the pin settle before sampling */
-    if (nrf_gpio_pin_read(BUTTON_2) == 1) {
+    /* A watchdog reset means the app hung (see bl_recovery_arm_wdt): treat it
+     * like BUTTON_2 so the device shows up for reflashing without a button. */
+    bool app_hung = bl_recovery_wdt_reset_consume();
+    if (nrf_gpio_pin_read(BUTTON_2) == 1 || app_hung) {
         NRF_POWER->GPREGRET = BOOTLOADER_DFU_UF2_MAGIC;
         uf2_mode = true;
         /* Fall through; the GPREGRET enter-method in nrf_bootloader.c will

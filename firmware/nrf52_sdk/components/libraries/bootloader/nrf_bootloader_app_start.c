@@ -48,6 +48,7 @@
 
 // Do the final stages of app_start. Protect flash and run app. See nrf_bootloader_app_start_final.c
 void nrf_bootloader_app_start_final(uint32_t start_addr);
+extern void bl_recovery_arm_wdt(void);   /* bootloader/src/bl_recovery.c */
 
 void nrf_bootloader_app_start(void)
 {
@@ -71,6 +72,8 @@ void nrf_bootloader_app_start(void)
     {
         NRF_LOG_ERROR("Failed running nrf_dfu_mbr_irq_forward_address_set()");
     }
+
+    bl_recovery_arm_wdt();
 
     NRF_LOG_FLUSH();
     nrf_bootloader_app_start_final(start_addr);
