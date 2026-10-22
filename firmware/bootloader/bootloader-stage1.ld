@@ -153,5 +153,16 @@ SECTIONS
 } INSERT AFTER .text
 
 
+/* No unwinding in the bootloader: drop the unwind tables (~190 B) */
+SECTIONS
+{
+  /DISCARD/ :
+  {
+    *(.eh_frame*)
+    *(.ARM.exidx*)
+    *(.ARM.extab*)
+  }
+}
+
 INCLUDE "nrf_common.ld"
 INCLUDE "noinit.ld"
