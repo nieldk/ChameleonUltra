@@ -34,11 +34,15 @@ void bl_egg_play(void)
             nrf_delay_ms(60);
         }
     }
+    /* Alternate halves, not all LEDs at once: lighting every slot LED together
+     * may draw too much current on a weak supply. */
     for (int bark = 0; bark < 3; bark++) {
-        leds_set(all);
+        leds_set(0x55555555u & all);
+        nrf_delay_ms(80);
+        leds_set(0xAAAAAAAAu & all);
         nrf_delay_ms(80);
         leds_set(0);
-        nrf_delay_ms(80);
+        nrf_delay_ms(60);
     }
     set_slot_light_color(RGB_GREEN);
     leds_set(g_bl_info.version & all);
