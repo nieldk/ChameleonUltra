@@ -404,7 +404,11 @@ static bool cbor_head(cbor_t *c, uint8_t *major, uint64_t *val){
 /* Read a byte or text string: point ptr/len at its body, advance past it. */
 static bool cbor_str(cbor_t *c, const uint8_t **ptr, uint64_t *len){
     uint8_t m; uint64_t v;
-    if (!cbor_head(c, &m, &v) || (m != 2 && m != 3) || c->p + v > c->end) return false;
+    /* Compare against the remaining length, not c->p + v: v comes straight off
+     * the wire (up to 2^64-1 via an 8-byte length argument) and c->p/c->end are
+     * 32-bit pointers, so c->p + v can wrap and pass a bogus huge v. end - p is
+     * always a small, valid difference and can't wrap. */
+    if (!cbor_head(c, &m, &v) || (m != 2 && m != 3) || v > (uint64_t)(c->end - c->p)) return false;
     *ptr = c->p; *len = v; c->p += v;
     return true;
 }
@@ -415,7 +419,7 @@ static bool cbor_skip(cbor_t *c){
     if (!cbor_head(c, &m, &v)) return false;
     switch (m) {
     case 0: case 1: case 7: return true;                 /* uint / negint / simple */
-    case 2: case 3: if (c->p + v > c->end) return false; c->p += v; return true;
+    case 2: case 3: if (v > (uint64_t)(c->end - c->p)) return false; c->p += v; return true;
     case 4: for (uint64_t i = 0; i < v; i++) if (!cbor_skip(c)) return false; return true;
     case 5: for (uint64_t i = 0; i < 2 * v; i++) if (!cbor_skip(c)) return false; return true;
     default: return false;
