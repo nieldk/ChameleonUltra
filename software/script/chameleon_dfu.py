@@ -602,7 +602,26 @@ def load_app_image(path: str) -> bytes:
         raise DFUError(
             f"image is {len(data):,} bytes, limit is {APP_END - APP_BASE:,} (0x{APP_END:X})"
         )
+    _check_vector_table(data)
     return data + b"\xff" * (-len(data) % 4)
+
+
+def _check_vector_table(data: bytes):
+    """Refuse images whose Cortex-M4 vector table cannot be an app for APP_BASE.
+
+    The raw path has no signature/hash, so this is the only guard against
+    flashing a bootloader, a wrongly linked .bin or an erased/empty image.
+    """
+    if len(data) < 8:
+        raise DFUError("image too small to hold a vector table")
+    sp, reset = struct.unpack("<II", data[:8])
+    if not 0x20000000 < sp <= 0x20040000:
+        raise DFUError(f"initial SP 0x{sp:08X} is not in RAM (not an application image)")
+    if not reset & 1 or not APP_BASE <= (reset & ~1) < APP_BASE + len(data):
+        raise DFUError(
+            f"reset vector 0x{reset:08X} is not inside the image at 0x{APP_BASE:X} "
+            "(wrong link address?)"
+        )
 
 
 def raw_flash_app(transport: Transport, data: bytes, progress=None):
