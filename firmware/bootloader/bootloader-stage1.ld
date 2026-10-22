@@ -153,12 +153,15 @@ SECTIONS
 } INSERT AFTER .text
 
 
-/* No unwinding in the bootloader: drop the unwind tables (~190 B) */
+/* No unwinding in the bootloader: drop the library unwind tables (~190 B).
+ * crtbegin.o/crtend.o keep their .eh_frame, crtbegin.o references it. */
 SECTIONS
 {
   /DISCARD/ :
   {
-    *(.eh_frame*)
+    *libc_nano.a:*(.eh_frame*)
+    *libc.a:*(.eh_frame*)
+    *libgcc.a:*(.eh_frame*)
     *(.ARM.exidx*)
     *(.ARM.extab*)
   }
