@@ -57,15 +57,12 @@ def _load(path):
 class HWBlPush(DeviceRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
-        parser.description = ("Write a bootloader image to 0xF3000 via the MBR, bypassing Secure DFU. "
+        parser.description = ("Write a bootloader image to 0xF3000, bypassing Secure DFU and the MBR: "
+                              "NVMC-write 0xF3000 directly and convert UICR (NRFFW/REGOUT0). "
+                              "No journaling - a power loss mid-write bricks the device (SWD-only recovery). "
                               "The device resets into the new bootloader.")
         parser.add_argument("file", help="bootloader .hex (UICR records are ignored) or raw .bin linked for 0xF3000")
         parser.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
-        parser.add_argument("--raw", action="store_true",
-                            help="install WITHOUT the MBR: NVMC-write 0xF3000 directly and convert UICR "
-                                 "(NRFFW/REGOUT0). For a device whose bootloader was never MBR-registered, "
-                                 "where normal push fails with 'MBR param page not set' / 'address not 0xF3000'. "
-                                 "No journaling - a power loss mid-write bricks the device (SWD-only recovery).")
         return parser
 
     def on_exec(self, args: argparse.Namespace):
@@ -73,11 +70,9 @@ class HWBlPush(DeviceRequiredUnit):
         crc = zlib.crc32(data) & 0xFFFFFFFF
         sp, rv = struct.unpack("<II", data[:8])
         print(f" - Image : {len(data):,} bytes, CRC32 0x{crc:08X}, SP 0x{sp:08X}, reset 0x{rv:08X}")
-        if args.raw:
-            print(" - RAW install: bypasses the MBR, rewrites UICR, and has no power-loss safety net.")
+        print(" - Bypasses the MBR, rewrites UICR, and has no power-loss safety net.")
         if not args.yes:
-            prompt = " - RAW-replace the bootloader now? [y/N] " if args.raw else " - Replace the bootloader now? [y/N] "
-            if input(prompt).strip().lower() != "y":
+            if input(" - Replace the bootloader now? [y/N] ").strip().lower() != "y":
                 print(" - Aborted")
                 return
         self.cmd.bl_stage_begin(len(data), crc)
@@ -85,12 +80,8 @@ class HWBlPush(DeviceRequiredUnit):
             self.cmd.bl_stage_data(off, data[off:off + CHUNK])
             print(f"\r - Staging {min(off + CHUNK, len(data)) * 100 // len(data)}%", end="", flush=True)
         print()
-        if args.raw:
-            self.cmd.bl_stage_commit_raw()
-            print(" - Verified. The device writes 0xF3000 via NVMC, converts UICR and resets; reconnect in a few seconds.")
-        else:
-            self.cmd.bl_stage_commit()
-            print(" - Verified. The device copies the image and resets; reconnect in a few seconds.")
+        self.cmd.bl_stage_commit_raw()
+        print(" - Verified. The device writes 0xF3000 via NVMC, converts UICR and resets; reconnect in a few seconds.")
         time.sleep(0.2)
 
 
