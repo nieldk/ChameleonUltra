@@ -43,6 +43,7 @@ extern void uf2_flash_read(uint32_t addr,       void *data, uint32_t len);
 /* Called by ghostfat exactly once when the last UF2 block has been written.
  * Implemented by nrf_dfu_uf2.c — finalise (mark app valid, reset). */
 extern void uf2_dfu_complete(void);
+extern void uf2_settings_store(void);
 
 /* Transport composition, set before DFU starts: true = CDC + MSC (UF2
  * drag-and-drop), false = CDC-only (legacy serial DFU). */
