@@ -95,9 +95,9 @@ itself, without DFU:
 1. Flash a current application through the UF2 drive (works on any unit).
 2. `hw bl push bootloader.hex` (or a raw `.bin` linked for 0xF3000; UICR records in a hex are ignored).
 
-The app erases and fills the staging area (0xB0000-0xBF000), checks the CRC32
-and the vector table, flushes the log, disables the SoftDevice and calls
-`sd_mbr_command(COPY_BL)`. The MBR does the erase and copy and resumes it after
-a power loss. The command is refused unless the MBR parameter page and the
-bootloader address are set in UICR (bootloader flashed once via SWD or from a
-hex file). The application is limited to 0x27000-0xB0000 (560 KB).
+The app erases and fills the staging area (0xB0000-0xBF000) and checks the
+CRC32 and the vector table. It then writes 0xF3000 directly with the NVMC,
+converts UICR (NRFFW/REGOUT0) and resets. The MBR is not involved, so this works
+on units whose bootloader was never MBR-registered. There is no journaling: a
+power loss during the write bricks the device (SWD-only recovery). The
+application is limited to 0x27000-0xB0000 (560 KB).
