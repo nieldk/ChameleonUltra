@@ -188,12 +188,12 @@ void dfu_req_handler_rsp_clbk(nrf_dfu_response_t * p_res, void * p_context)
 
 static void raw_app_respond(nrf_dfu_serial_t * p_transport, uint8_t opcode, raw_app_err_t err)
 {
-    nrf_dfu_response_t res =
-    {
-        .request = (nrf_dfu_op_t)opcode,
-        .result  = (err == RAW_APP_OK) ? NRF_DFU_RES_CODE_SUCCESS : NRF_DFU_RES_CODE_OPERATION_FAILED,
-    };
-    response_send(p_transport, &res);
+    uint8_t * p = p_transport->p_rsp_buf;
+
+    p[0] = NRF_DFU_OP_RESPONSE;
+    p[1] = opcode;
+    p[2] = (err == RAW_APP_OK) ? NRF_DFU_RES_CODE_SUCCESS : NRF_DFU_RES_CODE_OPERATION_FAILED;
+    (void)p_transport->rsp_func(p, 3);
 }
 
 
@@ -205,40 +205,12 @@ void nrf_dfu_serial_on_packet_received(nrf_dfu_serial_t       * p_transport,
     uint16_t const   payload_len = (length - NRF_SERIAL_OPCODE_SIZE);
 
     /* Raw app write (0xD0-0xD2): bypasses Secure DFU, see raw_app_write.h */
-    switch (p_data[0])
+    if (p_data[0] >= RAW_APP_OP_BEGIN && p_data[0] <= RAW_APP_OP_COMMIT)
     {
-        case RAW_APP_OP_BEGIN:
-        case RAW_APP_OP_WRITE:
-        case RAW_APP_OP_COMMIT:
-        {
-            uint8_t const op = p_data[0];
-            raw_app_err_t err;
-            bool ok = (op == RAW_APP_OP_BEGIN  && payload_len == 8) ||
-                      (op == RAW_APP_OP_WRITE  && payload_len >= 5) ||
-                      (op == RAW_APP_OP_COMMIT && payload_len == 4);
-
-            if (!ok)
-            {
-                err = RAW_APP_ERR_LEN;
-            }
-            else if (op == RAW_APP_OP_BEGIN)
-            {
-                err = raw_app_begin(uint32_decode(&p_payload[0]), uint32_decode(&p_payload[4]));
-            }
-            else if (op == RAW_APP_OP_WRITE)
-            {
-                err = raw_app_write(uint32_decode(&p_payload[0]), &p_payload[4], payload_len - 4);
-            }
-            else
-            {
-                err = raw_app_commit(uint32_decode(&p_payload[0]));
-            }
-            p_transport->payload_free_func((void *)(p_payload));
-            raw_app_respond(p_transport, op, err);
-            return; /* COMMIT resets the device on success */
-        }
-        default:
-            break;
+        raw_app_err_t err = raw_app_handle(p_data[0], p_payload, payload_len);
+        p_transport->payload_free_func((void *)(p_payload));
+        raw_app_respond(p_transport, p_data[0], err);
+        return; /* COMMIT resets the device on success */
     }
 
     nrf_dfu_request_t request =
