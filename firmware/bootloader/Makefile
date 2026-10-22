@@ -107,6 +107,7 @@ SRC_FILES += \
   $(PROJ_DIR)/uf2_ghostfat.c \
   $(PROJ_DIR)/uf2_status.c \
   $(PROJ_DIR)/uf2_blockdev.c \
+  $(PROJ_DIR)/raw_app_write.c \
   $(SDK_ROOT)/components/libraries/bootloader/serial_dfu/nrf_dfu_serial.c \
   $(SDK_ROOT)/components/libraries/bootloader/serial_dfu/nrf_dfu_serial_usb.c \
 
