@@ -405,7 +405,7 @@ const hf = ROOT.subgroup("hf", "High Frequency commands");
 const hf14a = hf.subgroup("14a", "ISO14443-a commands");
 const hfMf  = hf.subgroup("mf", "MIFARE Classic commands");
 hf.subgroup("mfu", "MIFARE Ultralight / NTAG commands").command("*", null, [], notPorted("hf mfu").run);
-hf.subgroup("des", "MIFARE DESFire commands");
+const hfDes = hf.subgroup("des", "MIFARE DESFire commands");
 hf.subgroup("seos", "SEOS commands");
 hf.subgroup("st25ta", "ST25TA (NFC Forum Type 4) commands");
 hf.subgroup("mfplus", "MIFARE Plus SL3 (AES) commands");
@@ -685,6 +685,467 @@ hfMf.command("value", "Mifare Classic value block commands (--get/--set/--inc/--
   return [" - "+label+" done.", ...(await getValue(dstBlk, dstType, dstKey))];
 });
 
+/* ================= hf des ================= */
+// Reuses fullcmd.js's already-tested DESFire/EMV plumbing directly (same
+// top-level script scope): dfcSend, DFC_INS, DFC_STATUS_NAMES/dfcStatusName,
+// DESFIRE_VENDOR/HW_MAJOR/STORAGE/PROTOCOL/HW_MAJOR_TO_SW_MAJOR, fmtVer, lut,
+// splitVersionFrames, DFC_ALGOS, bhex, u16be, parseHf14aScan. Two CU ids that
+// fullcmd.js's GUI never needed (it uses the generic single-APDU paths
+// instead) are added here.
+CU.HF14A_4_STATIC_RESP = 6003; // hf14a_4_add/clear_static_response (chameleon_cmd.py)
+CU.EMV_DEBUG = 6010;           // raw id, chameleon_cli_unit.py's EMVDebug calls it directly too
+
+// _DFC_READER_STATUS_NAMES / _DFC_NATIVE_STATUS_NAMES (cli_hf_des.py) -- the
+// full tables for `readerauth`'s result decode; fullcmd.js's own f_auth only
+// special-cases rc 0/6, so these are ported from the Python source instead.
+const DFC_READER_STATUS_NAMES = {0:"ok",2:"invalid_argument",3:"buffer_too_small",
+  4:"protocol_error",5:"integrity_error",6:"card_error",7:"unsupported"};
+const DFC_NATIVE_STATUS_NAMES = {0x00:"OK",0x0B:"PROXIMITY_KEY_DISABLED",0x0C:"NO_CHANGES",
+  0x0E:"OUT_OF_EEPROM",0x1C:"ILLEGAL_COMMAND_CODE",0x1E:"INTEGRITY_ERROR",0x40:"NO_SUCH_KEY",
+  0x7E:"LENGTH_ERROR",0x90:"SPECIAL_SUCCESS",0x9D:"PERMISSION_DENIED",0x9E:"PARAMETER_ERROR",
+  0xA0:"APPLICATION_NOT_FOUND",0xAE:"AUTHENTICATION_ERROR",0xBE:"BOUNDARY_ERROR",
+  0xCA:"COMMAND_ABORTED",0xCE:"COUNT_ERROR",0xDE:"DUPLICATE_ERROR",0xF0:"FILE_NOT_FOUND"};
+
+// SlotIndexArgsAndGoUnit (cli_core.py): -s/--slot is optional, defaults to the
+// active slot, and if a different slot is given the device is switched to it
+// for the call and switched back afterwards. Mirrored here for einfo/eblank.
+async function withSlot(slotArg, fn){
+  const cur = okOrThrow(await request(CU.GET_ACTIVE_SLOT)).data[0] + 1;
+  const slot = slotArg != null ? Number(slotArg) : cur;
+  if(slot<1 || slot>8) throw new ArgError("slot must be 1-8");
+  if(slot !== cur) okOrThrow(await request(CU.SET_ACTIVE_SLOT, [slot-1]));
+  try{ return await fn(slot); }
+  finally{ if(slot !== cur) okOrThrow(await request(CU.SET_ACTIVE_SLOT, [cur-1])); }
+}
+
+hfDes.command("info", "Get MIFARE DESFire card information (version, UID, AIDs)", [], async () => {
+  await needReader();
+  const out = [];
+  const s = await request(CU.HF14A_SCAN);
+  if(s.status !== 0x00) return [" [!] No tag: "+stname(s.status)];
+  const tags = parseHf14aScan(s.data);
+  if(!tags.length) return [" [!] No tag found."];
+  out.push(" UID           : "+tags[0].uid);
+  out.push(" SAK           : 0x"+tags[0].sak);
+  try{
+    const f = await request(CU.DESFIRE_READER_GET_VERSION);
+    if(f.status !== 0x00) throw new Error(stname(f.status));
+    const frames = splitVersionFrames(f.data);
+    const hw = frames[0]||[], sw = frames[1]||[], uidf = frames[2]||[];
+    const hwMaj = hw.length>=4?hw[3]:null, hwMin = hw.length>=5?hw[4]:null;
+    let swMaj = sw.length>=4?sw[3]:null, swMin = sw.length>=5?sw[4]:null;
+    let hwStor = hw.length>=6?hw[5]:null, swStor = sw.length>=6?sw[5]:hwStor;
+    let swProto = sw.length>=7?sw[6]:(hw.length>=7?hw[6]:null);
+    if(swMaj==null && hwMaj!=null){ swMaj = DESFIRE_HW_MAJOR_TO_SW_MAJOR[hwMaj] ?? hwMaj; swMin = 0; }
+    if(hw.length>=1) out.push(" Vendor        : "+lut(DESFIRE_VENDOR, hw[0], ""));
+    out.push(" HW version    : "+fmtVer(hwMaj,hwMin)+"  ("+lut(DESFIRE_HW_MAJOR,hwMaj,"hw_major ")+")  storage: "+lut(DESFIRE_STORAGE,hwStor,""));
+    out.push(" SW version    : "+fmtVer(swMaj,swMin)+"  storage: "+lut(DESFIRE_STORAGE,swStor,""));
+    out.push(" Protocol      : "+lut(DESFIRE_PROTOCOL,swProto,""));
+    if(uidf.length>=7) out.push(" Card UID      : "+bhex(uidf.slice(0,7)).toUpperCase());
+    if(uidf.length>=12) out.push(" Batch no      : "+bhex(uidf.slice(7,12)).toUpperCase());
+    if(uidf.length>=14) out.push(" Production    : week "+uidf[12].toString(16).padStart(2,"0").toUpperCase()+" / 20"+uidf[13].toString(16).padStart(2,"0").toUpperCase());
+  }catch(e){ out.push(" [!] GetVersion failed: "+e.message); }
+  try{
+    const apps = await dfcSend(DFC_INS.GET_APPLICATION_IDS);
+    if(!apps.ok) throw new Error(dfcStatusName(apps.status));
+    const aids=[]; for(let o=0;o+3<=apps.data.length;o+=3) aids.push(apps.data.slice(o,o+3));
+    out.push("");
+    out.push(" Applications  : "+(aids.length ? aids.length+" found" : "none"));
+    for(const aid of aids) out.push("   AID: "+bhex(aid).toUpperCase());
+  }catch(e){ out.push(" [!] GetApplicationIDs failed: "+e.message); }
+  return out;
+});
+
+hfDes.command("einfo", "Show the DESFire emulation slot summary", [
+  {names:["-s","--slot"], takesValue:true, dest:"slot"},
+], async (a) => {
+  need();
+  return withSlot(a.slot, async () => {
+    const f = await request(CU.DESFIRE_GET_INFO);
+    if(f.status === 0x60) throw new Error("PAR_ERR -- this slot's live DESFire buffer isn't populated (set the slot's tag type + default data first)");
+    okOrThrow(f);
+    if(f.data.length < 20) return [" [!] short reply ("+f.data.length+" bytes)"];
+    const d = f.data;
+    const uidLen=d[0], uid=d.slice(1,1+uidLen);
+    const numApps=d[8], numFiles=d[9];
+    const poolUsed=(d[10]<<8)|d[11], poolSize=(d[12]<<8)|d[13], credSize=(d[14]<<8)|d[15];
+    const maxApps=d[16], maxKeys=d[17], maxFiles=d[18], piccAuthCmd=d[19];
+    return [
+      " UID           : "+bhex(uid).toUpperCase(),
+      " Applications  : "+numApps+" / "+maxApps,
+      " Files         : "+numFiles+" / "+maxFiles,
+      " File data pool: "+poolUsed+" / "+poolSize+" bytes",
+      " Keys per app  : up to "+maxKeys,
+      " PICC auth     : 0x"+piccAuthCmd.toString(16).padStart(2,"0").toUpperCase(),
+      " Credential    : "+credSize+" bytes on device",
+    ];
+  });
+});
+
+hfDes.command("estats", "DESFire emulation diagnostics", [], async () => {
+  need();
+  const f = okOrThrow(await request(CU.DESFIRE_GET_STATS));
+  if(f.data.length < 10) return [" [!] short reply ("+f.data.length+" bytes)"];
+  const d = f.data, u16 = o => (d[o]<<8)|d[o+1];
+  const out = [
+    " Frames received : "+u16(0),
+    " Frames sent     : "+u16(2),
+    " Engine errors   : "+u16(4),
+    " Max handler time: "+u16(6)+" us",
+  ];
+  if(d.length >= 18){
+    out.push(" Activation reqs : "+u16(10));
+    out.push(" ATQA sent       : "+u16(12));
+    out.push(" FDT timeouts    : "+u16(14));
+    out.push(" Max reset time  : "+u16(16)+" us");
+  }
+  out.push(" Entropy misses  : "+u16(8));
+  return out;
+});
+
+hfDes.command("eblank", "Reset a DESFire emulation slot to a blank card", [
+  {names:["-s","--slot"], takesValue:true, dest:"slot"},
+  {names:["-u","--uid"], takesValue:true, dest:"uid"},
+], async (a) => {
+  need();
+  let uid = [];
+  if(a.uid){
+    uid = hexBytes(a.uid.replace(/\s/g,""));
+    if(uid.length !== 7 || uid[0] !== 0x04) throw new ArgError("UID must be 7 bytes starting with 04");
+  }
+  return withSlot(a.slot, async (slot) => {
+    okOrThrow(await request(CU.SET_SLOT_TAG_TYPE, [slot-1, ...u16be(TAG_TYPE_BY_NAME.DESFIRE_EV1_2K)]));
+    okOrThrow(await request(CU.SET_SLOT_DATA_DEFAULT, [slot-1, ...u16be(TAG_TYPE_BY_NAME.DESFIRE_EV1_2K)]));
+    const f = okOrThrow(await request(CU.DESFIRE_FACTORY_BLANK, uid.length ? [uid.length, ...uid] : []));
+    return [" - Blank DESFire card in slot "+slot+", UID "+bhex(f.data).toUpperCase()];
+  });
+});
+
+hfDes.command("edump", "Read a DESFire emulation slot's credential back (raw .dfcb hex only -- no PM3 JSON decode here)", [
+  {names:["-s","--slot"], takesValue:true, dest:"slot"},
+  {names:["-f","--file"], takesValue:true, dest:"file"},
+], async (a) => {
+  need();
+  return withSlot(a.slot, async () => {
+    let total=null, offset=0, out=[];
+    for(let i=0;i<200;i++){
+      const f = okOrThrow(await request(CU.DESFIRE_GET_CREDENTIAL, u16be(offset)));
+      if(f.data.length < 6) throw new Error("short reply");
+      const gotTotal=(f.data[0]<<8)|f.data[1], gotOffset=(f.data[2]<<8)|f.data[3], chunkLen=(f.data[4]<<8)|f.data[5];
+      if(gotOffset !== offset) throw new Error("device returned offset "+gotOffset+", expected "+offset);
+      if(total===null) total=gotTotal;
+      out.push(...f.data.slice(6, 6+chunkLen));
+      offset += chunkLen;
+      if(chunkLen===0 || offset>=total) break;
+    }
+    const lines = [" - Read "+out.length+" byte(s) from the device."];
+    lines.push(out[0]===0x60 ? " - Looks like a .dfcb credential." : " - Does NOT start with 0x60 -- slot may be blank or non-DESFire.");
+    lines.push(" - This terminal has no filesystem, so the real CLI's -f/--describe/.json output isn't ported; raw hex follows:");
+    lines.push(bhex(out));
+    if(a.file) lines.push(" (real CLI would have written this to "+a.file+")");
+    return lines;
+  });
+});
+
+hfDes.command("eload", "Load a credential into a DESFire emulation slot (inline hex, not a file path -- no filesystem here)", [
+  {names:["-s","--slot"], takesValue:true, dest:"slot"},
+  {names:["-f","--file"], takesValue:true, dest:"file", required:true},
+], async (a) => {
+  need();
+  const blob = hexBytes(a.file);
+  if(!blob.length) throw new ArgError("-f/--file: this terminal has no filesystem -- pass the .dfcb credential as inline hex instead of a path");
+  if(blob[0] !== 0x60) throw new ArgError("not a .dfcb credential: first byte is 0x"+blob[0].toString(16)+", not 0x60");
+  if(blob.length > 0xFFFF) throw new ArgError("credential too large for the protocol ("+blob.length+" bytes, max 65535)");
+  return withSlot(a.slot, async (slot) => {
+    let sent = 0;
+    while(sent < blob.length){
+      const chunk = blob.slice(sent, sent+DESFIRE_CHUNK);
+      const payload = [...u16be(blob.length), ...u16be(sent), ...u16be(chunk.length), ...chunk];
+      const f = await request(CU.DESFIRE_SET_CREDENTIAL, payload);
+      if(f.status !== 0x68) throw new Error("device rejected the credential at offset "+sent+": "+stname(f.status));
+      sent += chunk.length;
+    }
+    return [" - Loaded "+blob.length+" bytes into slot "+slot+".", " Run 'hw slot store' to keep it across a power cycle."];
+  });
+});
+
+hfDes.command("readerauth", "ISO 7816 mutual authentication against a physical DESFire card in one firmware call", [
+  {names:["--aid"], takesValue:true, dest:"aid"},
+  {names:["-n","--key-no"], takesValue:true, dest:"keyno", required:true},
+  {names:["-a","--algo"], takesValue:true, dest:"algo", required:true, choices:["2tdea","3tdea","aes"]},
+  {names:["-k","--key"], takesValue:true, dest:"key", required:true},
+], async (a) => {
+  await needReader();
+  let aid = null;
+  if(a.aid){
+    aid = hexBytes(a.aid);
+    if(aid.length !== 3) throw new ArgError("--aid must be exactly 3 bytes");
+  }
+  const [algByte, wantLen] = DFC_ALGOS[a.algo];
+  const key = hexBytes(a.key);
+  if(key.length !== wantLen) throw new ArgError("--key: "+a.algo+" needs exactly "+wantLen+" bytes");
+  const keyno = Number(a.keyno);
+  if(!(keyno>=0 && keyno<=31)) throw new ArgError("-n/--key-no must be 0-31");
+  // DFC_ISO7816_AUTH_APP_REFERENCE (0x80) | key_no, matching
+  // desfire_reader_auth_iso7816's own key_reference encoding (chameleon_cmd.py).
+  const keyRef = (aid ? 0x80 : 0) | keyno;
+  const payload = [aid?1:0, ...(aid||[0,0,0]), keyRef, algByte, wantLen, ...key];
+  const f = await request(CU.DESFIRE_READER_AUTH_ISO7816, payload);
+  if(f.status === 0x01) return [" [!] No card in the field"];
+  if(f.status !== 0x00) return [" [!] Device rejected the request: "+stname(f.status)];
+  if(!f.data.length) return [" [!] Empty response from device"];
+  const rc = f.data[0];
+  if(rc === 0) return [" [+] Authenticated"];
+  if(rc === 6 && f.data.length>=2){
+    const native = f.data[1];
+    return [" [!] Card refused authentication: "+(DFC_NATIVE_STATUS_NAMES[native]||("0x"+native.toString(16)))+" (native status 0x"+native.toString(16).padStart(2,"0")+")"];
+  }
+  return [" [!] Authentication failed: "+(DFC_READER_STATUS_NAMES[rc]||("0x"+rc.toString(16)))];
+});
+
+hfDes.command("bruteaid", "Brute-force the DESFire application-ID space via SelectApplication (slow: one field cycle per AID)", [
+  {names:["--start"], takesValue:true, dest:"start"},
+  {names:["--end"], takesValue:true, dest:"end"},
+], async (a) => {
+  await needReader();
+  const start = parseInt((a.start||"000000").replace(/\s/g,""), 16);
+  const end = parseInt((a.end||"0000FF").replace(/\s/g,""), 16);
+  if(Number.isNaN(start) || Number.isNaN(end)) throw new ArgError("--start/--end must be hex, e.g. 000000");
+  if(!(start>=0 && start<=0xFFFFFF && end>=0 && end<=0xFFFFFF && start<=end)) throw new ArgError("range must be within 000000..FFFFFF and start <= end");
+  const total = end-start+1;
+  const out = [" - Scanning "+total+" AID(s) "+start.toString(16).padStart(6,"0").toUpperCase()+".."+end.toString(16).padStart(6,"0").toUpperCase()];
+  const found = [];
+  for(let aid=start; aid<=end; aid++){
+    const aidBytes = [(aid>>16)&0xFF, (aid>>8)&0xFF, aid&0xFF];
+    try{
+      const r = await dfcSend(DFC_INS.SELECT_APPLICATION, aidBytes);
+      if(r.ok) { found.push(aid); out.push("   + AID "+aid.toString(16).padStart(6,"0").toUpperCase()+" accepted"); }
+    }catch(e){ /* non-card-error replies are expected misses */ }
+  }
+  out.push(found.length ? "Found "+found.length+" AID(s): "+found.map(a=>a.toString(16).padStart(6,"0").toUpperCase()).join(", ") : "No AIDs accepted in range");
+  return out;
+});
+
+hfDes.command("signature", "Read the NXP originality signature (Read_Sig) -- prints the raw signature only, no ECDSA verification (needs a crypto library not available here)", [], async () => {
+  await needReader();
+  const r = await dfcSend(0x3C, [0x00]); // Read_Sig, native INS 0x3C
+  if(!r.ok) return [" [!] Read_Sig failed: "+dfcStatusName(r.status)];
+  return [
+    " Signature (56 bytes): "+bhex(r.data).toUpperCase(),
+    " [!] Not verified against NXP's public keys -- the real CLI's ECDSA (secp224r1)",
+    "     check needs a crypto library this terminal doesn't have. Compare the bytes",
+    "     against a known-genuine card's signature by hand, or use the Python CLI.",
+  ];
+});
+
+for(const path of ["chk","auth-trace","divkey","parse"]){
+  hfDes.command(path, "("+path+" not ported to this terminal yet -- needs host-side crypto/auth state this JS terminal doesn't implement)", [], notPorted("hf des "+path).run);
+}
+
+/* ================= emv ================= */
+const emv = ROOT.subgroup("emv", "EMV contactless payment card commands");
+
+// BER-TLV walk, ported from EMVScan's tlv_find() (chameleon_cli_unit.py):
+// recurses into constructed tags (bit 0x20 of the first tag byte) and
+// tolerates truncated trailing TLV instead of aborting the whole parse.
+function emvTlvFind(data, wantTags){
+  const found = {}; for(const t of wantTags) found[t] = [];
+  let i = 0;
+  while(i < data.length){
+    if(i+1 >= data.length) break;
+    const b0 = data[i];
+    const tl = (b0 & 0x1F) === 0x1F ? 2 : 1;
+    if(i+tl > data.length) break;
+    let tag = 0; for(let k=0;k<tl;k++) tag = (tag<<8) | data[i+k];
+    i += tl;
+    if(i >= data.length) break;
+    const constructed = !!(b0 & 0x20);
+    let vlen;
+    if(data[i] & 0x80){
+      const nb = data[i] & 0x7F; i++;
+      if(i+nb > data.length) break;
+      vlen = 0; for(let k=0;k<nb;k++) vlen = (vlen<<8) | data[i+k];
+      i += nb;
+    } else { vlen = data[i]; i++; }
+    const truncated = i+vlen > data.length;
+    const val = truncated ? data.slice(i) : data.slice(i, i+vlen);
+    i = truncated ? data.length : i+vlen;
+    if(wantTags.includes(tag) && !truncated) found[tag].push(val);
+    if(constructed){ const sub = emvTlvFind(val, wantTags); for(const t of wantTags) found[t].push(...sub[t]); }
+  }
+  return found;
+}
+function emvTlvToDict(data){
+  if(!data || !data.length) return {value:""};
+  const tl = (data[0] & 0x1F) === 0x1F ? 2 : 1;
+  let i = tl;
+  if(i >= data.length) return {value:""};
+  let vlen;
+  if(data[i] & 0x80){ const nb = data[i]&0x7F; i++; vlen=0; for(let k=0;k<nb;k++) vlen=(vlen<<8)|data[i+k]; i+=nb; }
+  else { vlen = data[i]; i++; }
+  return {value: bhex(data.slice(i, i+vlen)).toUpperCase()};
+}
+function emvPanLuhn(panHex){
+  const digits = panHex.split("").filter(c=>/[0-9]/.test(c)).map(Number).reverse();
+  let total = 0;
+  digits.forEach((d,i) => { if(i%2===0) total+=d; else { const d2=d*2; total += d2>9 ? d2-9 : d2; } });
+  return total % 10 === 0;
+}
+
+emv.command("scan", "Full EMV contactless card scan (PPSE/SELECT AID/GPO/READ RECORD) in one firmware call -- like PM3 'emv scan -at'", [], async () => {
+  need();
+  const f = await request(CU.HF14A_4_EMV_SCAN);
+  if(f.status !== 0x00 || !f.data.length) return [" [!] No card found or scan failed (status="+stname(f.status)+")"];
+  const d = f.data; let off = 0;
+  const uidLen = d[off++]; const uid = d.slice(off, off+uidLen); off += uidLen;
+  const atqa = d.slice(off, off+2); off += 2;
+  const sak = d[off++];
+  const atsLen = d[off++]; const ats = d.slice(off, off+atsLen); off += atsLen;
+  const out = [
+    " UID : "+bhex(uid).toUpperCase(),
+    " ATQA: "+bhex(atqa).toUpperCase()+"  SAK: "+sak.toString(16).padStart(2,"0").toUpperCase(),
+    " ATS : "+bhex(ats).toUpperCase(),
+  ];
+  const numApdus = d[off++];
+  const pairs = [];
+  for(let n=0;n<numApdus;n++){
+    const cl = d[off++]; const c = d.slice(off, off+cl); off += cl;
+    const rl = d[off] | (d[off+1]<<8); off += 2;
+    const r = d.slice(off, off+rl); off += rl;
+    pairs.push([c, r]);
+  }
+  if(!pairs.length) { out.push(" [!] No APDU responses captured"); return out; }
+
+  let allRecordData = [], extraData = [];
+  if(pairs.length){
+    const [, ppseResp] = pairs[0];
+    const ppseBody = ppseResp.length>=2 ? ppseResp.slice(0,-2) : ppseResp;
+    out.push("", " PPSE OK ("+ppseResp.length+"b)");
+    extraData.push(...ppseBody);
+  }
+  if(pairs.length>=2){
+    const [, selResp] = pairs[1];
+    const selBody = selResp.length>=2 ? selResp.slice(0,-2) : selResp;
+    out.push(" SELECT AID OK ("+selResp.length+"b)");
+    extraData.push(...selBody);
+  }
+  if(pairs.length>=3){
+    const [, gpoResp] = pairs[2];
+    const gpoBody = gpoResp.length>=2 ? gpoResp.slice(0,-2) : gpoResp;
+    out.push(" GPO OK ("+gpoResp.length+"b)");
+    extraData.push(...gpoBody);
+    for(const [cb, rb] of pairs.slice(3)){
+      const sfiN = cb.length>=4 ? (cb[3]>>3)&0x1F : 0;
+      const recN = cb.length>=3 ? cb[2] : 0;
+      const rBody = rb.length>=2 ? rb.slice(0,-2) : rb;
+      out.push(" READ RECORD SFI="+sfiN+" rec="+recN+" OK ("+rb.length+"b)");
+      allRecordData.push(...rBody);
+    }
+  }
+
+  const searchData = [...allRecordData, ...extraData];
+  const tags = emvTlvFind(allRecordData, [0x5A, 0x57, 0x5F24, 0x5F20, 0x5F28]);
+  const appTags = emvTlvFind(searchData, [0x9F12, 0x50]);
+
+  out.push("", " -- Card Details --");
+  const seenLabels = new Set();
+  for(const v of [...tags[0x50], ...appTags[0x50]]){
+    const lbl = bytesToAscii(v).trim();
+    if(lbl && !seenLabels.has(lbl)){ seenLabels.add(lbl); out.push(" App Label     : "+lbl); }
+  }
+
+  let panHex = null;
+  for(const v of tags[0x57]){
+    const t2 = bhex(v).toUpperCase();
+    const sep = t2.indexOf("D");
+    if(sep > 0){ panHex = t2.slice(0, sep); break; }
+  }
+  if(!panHex && tags[0x5A].length){
+    const raw = bhex(tags[0x5A][0]).toUpperCase();
+    panHex = raw.endsWith("F") ? raw.replace(/F+$/,"") : raw;
+  }
+  if(panHex){
+    const panFmt = panHex.match(/.{1,4}/g).join(" ");
+    out.push(" PAN           : "+panFmt+"  Luhn: "+(emvPanLuhn(panHex)?"ok":"FAIL"));
+  } else out.push(" PAN           : not found");
+
+  let expiryFound = false;
+  for(const v of tags[0x5F24]){
+    if(v.length===3){ const exp=bhex(v).toUpperCase(); out.push(" Expiry        : 20"+exp.slice(0,2)+"/"+exp.slice(2,4)); expiryFound=true; }
+  }
+  if(!expiryFound && panHex){
+    for(const v of tags[0x57]){
+      const t2 = bhex(v).toUpperCase(); const sep = t2.indexOf("D");
+      if(sep>0 && t2.length>=sep+5){
+        const yymm = t2.slice(sep+1, sep+5);
+        if(/^\d+$/.test(yymm)){ out.push(" Expiry        : 20"+yymm.slice(0,2)+"/"+yymm.slice(2,4)+" (from Track2)"); expiryFound=true; break; }
+      }
+    }
+  }
+  if(!expiryFound) out.push(" Expiry        : not found");
+
+  for(const v of tags[0x5F20]){
+    if(v.length && v.every(b=>b>=0x20 && b<=0x7E)){
+      const name = bytesToAscii(v).trim();
+      if(name) out.push(" Cardholder    : "+name);
+    }
+  }
+  return out;
+});
+
+emv.command("debug", "Show T=CL emulation debug counters (I-blocks rx/tx, last PCB, last static match)", [], async () => {
+  need();
+  const f = await request(CU.EMV_DEBUG);
+  if(f.status !== 0x00 || !f.data || f.data.length < 4) return [" [!] Debug command failed"];
+  const d = f.data;
+  return [
+    " I-blocks received : "+d[0],
+    " I-blocks sent     : "+d[1],
+    " Last rx PCB       : "+d[2].toString(16).padStart(2,"0")+"  (blk_num="+(d[2]&0x01)+", chain="+((d[2]>>5)&1)+", cid="+((d[2]>>4)&1)+")",
+    " Last static match : "+(d[3] ? "yes" : "no"),
+  ];
+});
+
+emv.command("load", "Load EMV APDU responses into the HF14A_4 slot for autonomous emulation (--file JSON mode not ported -- no filesystem here)", [
+  {names:["--clear"], takesValue:false, dest:"clear"},
+  {names:["--cmd"], takesValue:true, dest:"cmd"},
+  {names:["--resp"], takesValue:true, dest:"resp"},
+  {names:["--defaults"], takesValue:false, dest:"defaults"},
+], async (a) => {
+  need();
+  if(a.clear){
+    okOrThrow(await request(CU.HF14A_4_STATIC_RESP, [0]));
+    return [" Static responses cleared."];
+  }
+  if(a.cmd && a.resp){
+    const c = hexBytes(a.cmd), r = hexBytes(a.resp);
+    okOrThrow(await request(CU.HF14A_4_STATIC_RESP, [c.length, ...c, ...u16be(r.length), ...r]));
+    return [" Added: "+bhex(c).toUpperCase()+" -> "+bhex(r).toUpperCase()];
+  }
+  if(a.defaults){
+    okOrThrow(await request(CU.HF14A_4_STATIC_RESP, [0]));
+    const pairs = [
+      [hexBytes("00a404000e325041592e5359532e4444463031"),
+       hexBytes("6f23840e325041592e5359532e4444463031a511bf0c0e610c4f07a00000000410108701019000"),
+       "SELECT PPSE"],
+      [hexBytes("00a4040007a0000000041010"),
+       hexBytes("6f1d8407a0000000041010a512500a4d6173746572436172648701019f38009000"),
+       "SELECT Mastercard AID"],
+      [hexBytes("80a80000"), hexBytes("6985"), "GPO (conditions not satisfied)"],
+    ];
+    const out = [];
+    for(const [c,r,name] of pairs){
+      const f = await request(CU.HF14A_4_STATIC_RESP, [c.length, ...c, ...u16be(r.length), ...r]);
+      out.push((f.status===0x00?" Loaded: ":" Failed: ")+name);
+    }
+    out.push("", " Default responses loaded. Run: hw mode -e");
+    return out;
+  }
+  return [" Specify --cmd/--resp, --clear, or --defaults (--file JSON mode needs a filesystem this terminal doesn't have)"];
+});
+
+emv.command("apdu", "(not ported to this terminal yet -- the real command is an interactive relay that waits for typed hex mid-command, which this request/response terminal can't do)", [], notPorted("emv apdu").run);
+
 /* Stub out the remaining real CLI groups so they exist for help/tab-complete
    but are honest about not being implemented here yet. */
 const lf = ROOT.subgroup("lf", "Low Frequency commands");
@@ -772,14 +1233,225 @@ lfHidProx.command("write", "Write hidprox card data to t55xx", [
 
 /* Stub out the remaining real CLI groups/subgroups so they exist for
    help/tab-complete but are honest about not being implemented here yet. */
-for(const path of ["indala","ioprox","pac","viking","jablotron","fdxb","generic","idteck","t55xx"]){
+for(const path of ["fdxb","generic","idteck","t55xx"]){
   lf.subgroup(path, "("+path+" commands)").command("*", null, [], notPorted("lf "+path).run);
 }
+
+/* ---- pm3-style LF decode/encode, ported from lf_info.py / cli_core.py ---- */
+function vikingRaw(idb){ // pm3 getVikingBits(): F2 00 00 <id32> <chk>
+  const chk = (idb[0]^idb[1]^idb[2]^idb[3]^0xF2^0xA8) & 0xFF;
+  return [0xF2,0,0,...idb.slice(0,4),chk];
+}
+function jablotronRaw(full){ // pm3 getJablotronBits(): FFFF <5 byte code> <chk>
+  const sum5 = full.slice(0,5).reduce((a,b)=>a+b,0) & 0xFF;
+  return [0xFF,0xFF,...full.slice(0,5),(sum5^0x3A)&0xFF];
+}
+function jablotronCardId(raw){ // 5 raw bytes -> decimal via BCD
+  let id = 0;
+  for(const b of raw) id = id*100 + ((b>>4)*10) + (b&0x0F);
+  return id;
+}
+function jablotronPrinted(full){ // 1410-nn-nnnn-nnnn
+  const h = bhex(full.slice(0,5)).toUpperCase();
+  return "1410-"+h.slice(0,2)+"-"+h.slice(2,6)+"-"+h.slice(6,10);
+}
+function indalaDecodeRaw(raw){ // 26-bit FC/CN from an 8-byte frame
+  const bits=[];
+  for(const b of raw) for(let i=7;i>=0;i--) bits.push((b>>i)&1);
+  let fc=0;
+  for(const [bi,sh] of [[57,7],[49,6],[44,5],[47,4],[48,3],[53,2],[39,1],[58,0]]) fc |= bits[bi]<<sh;
+  let cn=0;
+  for(const [bi,sh] of [[42,15],[45,14],[43,13],[40,12],[52,11],[36,10],[35,9],[51,8],
+                         [46,7],[33,6],[37,5],[54,4],[56,3],[59,2],[50,1],[41,0]]) cn |= bits[bi]<<sh;
+  return [fc,cn];
+}
+function indalaEncodeRaw(fc,cn){ // inverse of indalaDecodeRaw
+  const bits = new Array(64).fill(0);
+  bits[0]=1; bits[2]=1; bits[32]=1;
+  for(const [bi,sh] of [[57,7],[49,6],[44,5],[47,4],[48,3],[53,2],[39,1],[58,0]]) bits[bi]=(fc>>sh)&1;
+  for(const [bi,sh] of [[42,15],[45,14],[43,13],[40,12],[52,11],[36,10],[35,9],[51,8],
+                         [46,7],[33,6],[37,5],[54,4],[56,3],[59,2],[50,1],[41,0]]) bits[bi]=(cn>>sh)&1;
+  let chk=0;
+  for(const sh of [14,12,9,8,6,5,2,0]) chk += (cn>>sh)&1;
+  if(chk%2===0){ bits[62]=1; bits[63]=0; } else { bits[62]=0; bits[63]=1; }
+  let p1=1,p2=1;
+  for(let i=33;i<64;i++){ if(i%2) p1^=bits[i]; else p2^=bits[i]; }
+  bits[34]=p1; bits[38]=p2;
+  const raw=new Array(8).fill(0);
+  for(let i=0;i<64;i++) if(bits[i]) raw[i>>3] |= 1<<(7-(i%8));
+  return raw;
+}
+function indalaLines(raw, fc, cn){ // pm3 demodIndala() de-scramble patterns
+  const bit = n => (raw[n>>3]>>(7-(n%8)))&1;
+  const uid2 = (raw[4]<<24|raw[5]<<16|raw[6]<<8|raw[7])>>>0;
+  let p1=0;
+  for(const [n,sh] of [[3,8],[6,5],[8,4],[9,3],[11,1],[16,6],[19,7],[20,10],[21,2],[22,0],[24,9]]) p1 |= bit(32+n)<<sh;
+  let heden=0;
+  for(const [n,w] of [[8,1],[10,2],[14,4],[15,8],[12,16],[28,32],[3,64],[11,128],[19,256],
+                       [26,512],[17,1024],[18,2048],[20,4096],[13,8192],[7,16384],[23,32768]])
+    if(bit(31+n)) heden += w;
+  return [
+    "Indala (len 64)  Raw: "+bhex(raw).toUpperCase(),
+    "Fmt 26 FC: "+fc+" Card: "+cn,
+    "",
+    "Possible de-scramble patterns",
+    "  Printed....... __"+String(p1).padStart(4,"0")+"__  ( 0x"+p1.toString(16).toUpperCase()+" )",
+    "  Internal ID... "+(uid2 & 0x7FFFFFFF),
+    "  Heden-2L...... "+heden,
+  ];
+}
+function pacEncodeRaw(cardId){ // 8-byte card ID -> 16-byte T55XX bitstream
+  const payload = [0x02,0x32,0x30,...cardId];
+  let xorCheck=0; for(const b of cardId) xorCheck ^= b;
+  payload.push(xorCheck);
+  const bits = new Array(8).fill(1); // 0xFF sync
+  for(const byteVal of payload){
+    bits.push(0); // start bit
+    let ones=0;
+    for(let i=0;i<7;i++){ const b=(byteVal>>i)&1; bits.push(b); ones+=b; }
+    bits.push(ones&1 ? 0 : 1); // odd parity
+    bits.push(1); // stop bit
+  }
+  const raw = new Array(16).fill(0);
+  for(let i=0;i<128;i++) if(bits[i]) raw[i>>3] |= 1<<(7-(i&7));
+  return raw;
+}
+
+const lfViking = lf.subgroup("viking", "Viking commands");
+lfViking.command("read", "Scan Viking tag and print id", [], async () => {
+  await needReader();
+  const f = await request(CU.VIKING_SCAN);
+  if(!OK_STATUSES.has(f.status)) return ["No tag: "+stname(f.status)];
+  const id = f.data.slice(0,4);
+  return ["Viking - Card "+bhex(id).toUpperCase()+", Raw: "+bhex(vikingRaw(id)).toUpperCase()];
+});
+lfViking.command("write", "Write Viking id to t55xx", [
+  {names:["--id"], takesValue:true, dest:"id", required:true},
+], async (a) => {
+  await needReader();
+  const id = hexBytes(a.id,4);
+  if(id.length!==4) throw new ArgError("id must be 8 hex chars (4 bytes)");
+  okOrThrow(await request(CU.VIKING_WRITE_TO_T55XX, t55xxPayload(id)));
+  return [" - Viking ID(8H): "+a.id+" write done."];
+});
+
+const lfPac = lf.subgroup("pac", "PAC/Stanley commands");
+lfPac.command("read", "Scan PAC/Stanley tag and print card ID", [], async () => {
+  await needReader();
+  const f = await request(CU.PAC_SCAN);
+  if(!OK_STATUSES.has(f.status)) return ["No tag: "+stname(f.status)];
+  const id = f.data.slice(0,8);
+  const ascii = Array.from(id).map(b => (b>=0x20&&b<0x7F) ? String.fromCharCode(b) : ".").join("");
+  return [" PAC/Stanley - CN: "+ascii+" | Raw: "+bhex(pacEncodeRaw(id)).toUpperCase()];
+});
+lfPac.command("write", "Write PAC/Stanley id to T55xx (--cn only here; --raw bitstream decode not ported)", [
+  {names:["--cn"], takesValue:true, dest:"cn", required:true},
+], async (a) => {
+  await needReader();
+  if(a.cn.length!==8) throw new ArgError("Card number must be exactly 8 characters");
+  const id = Array.from(a.cn, c => c.charCodeAt(0));
+  if(id.some(b => b>0x7F)) throw new ArgError("PAC card IDs are 7-bit only (each byte must be 0x00-0x7F)");
+  okOrThrow(await request(CU.PAC_WRITE_TO_T55XX, t55xxPayload(id)));
+  return [" - PAC/Stanley write done - CN: "+a.cn+" | Raw: "+bhex(pacEncodeRaw(id)).toUpperCase()];
+});
+
+const lfJablotron = lf.subgroup("jablotron", "Jablotron commands");
+lfJablotron.command("read", "Scan Jablotron tag and print id", [], async () => {
+  await needReader();
+  const f = await request(CU.JABLOTRON_SCAN);
+  if(!OK_STATUSES.has(f.status)) return ["No tag: "+stname(f.status)];
+  const code = f.data.slice(0,5);
+  return [
+    "Jablotron - Card: "+jablotronCardId(code)+", Raw: "+bhex(jablotronRaw(code)).toUpperCase(),
+    "Printed: "+jablotronPrinted(code),
+  ];
+});
+lfJablotron.command("write", "Write Jablotron id to t55xx", [
+  {names:["--id"], takesValue:true, dest:"id", required:true},
+], async (a) => {
+  await needReader();
+  const id = hexBytes(a.id,5);
+  if(id.length!==5) throw new ArgError("id must be 10 hex chars (5 bytes)");
+  okOrThrow(await request(CU.JABLOTRON_WRITE_TO_T55XX, t55xxPayload(id)));
+  return [" - Jablotron ID: "+a.id.toUpperCase()+" write done."];
+});
+
+const lfIndala = lf.subgroup("indala", "Indala commands");
+lfIndala.command("read", "Scan for an Indala tag", [], async () => {
+  await needReader();
+  const f = await request(CU.INDALA_SCAN);
+  if(!OK_STATUSES.has(f.status)) return ["Indala scan failed: "+stname(f.status)];
+  const raw = f.data.slice(0,8);
+  const [fc,cn] = indalaDecodeRaw(raw);
+  return indalaLines(raw, fc, cn);
+});
+lfIndala.command("write", "Clone Indala tag to T55XX (use -r <hex>, or --fc <n> --cn <n>)", [
+  {names:["-r","--raw"], takesValue:true, dest:"raw"},
+  {names:["--fc"], takesValue:true, dest:"fc"},
+  {names:["--cn"], takesValue:true, dest:"cn"},
+], async (a) => {
+  await needReader();
+  let raw;
+  if(a.raw!==undefined){
+    if(a.fc!==undefined || a.cn!==undefined) throw new ArgError("-r/--raw and --fc/--cn are mutually exclusive");
+    raw = hexBytes(a.raw,8);
+    if(raw.length!==8) throw new ArgError("Raw 64-bit frame must be 16 hex chars");
+  } else {
+    if(a.fc===undefined || a.cn===undefined) throw new ArgError("--fc and --cn must be used together");
+    const fc=Number(a.fc), cn=Number(a.cn);
+    if(fc<0||fc>255) throw new ArgError("FC must be 0-255");
+    if(cn<0||cn>65535) throw new ArgError("CN must be 0-65535");
+    raw = indalaEncodeRaw(fc,cn);
+  }
+  okOrThrow(await request(CU.INDALA_WRITE_TO_T55XX, t55xxPayload(raw)));
+  const [fc,cn] = indalaDecodeRaw(raw);
+  return [...indalaLines(raw,fc,cn), " Write done. Verify with 'lf indala read'."];
+});
+
+const lfIoprox = lf.subgroup("ioprox", "ioProx commands");
+lfIoprox.command("read", "Scan ioProx tag and print version, facility, card number and raw", [], async () => {
+  await needReader();
+  const f = await request(CU.IOPROX_SCAN);
+  if(!OK_STATUSES.has(f.status)) return ["No tag: "+stname(f.status)];
+  const d = f.data, ver=d[0], fc=d[1], cn=(d[2]<<8)|d[3], raw8=d.slice(4,12);
+  return [
+    "IO Prox - XSF("+String(ver).padStart(2,"0")+")"+fc.toString(16).padStart(2,"0")+":"+String(cn).padStart(5,"0")+", Raw: "+bhex(raw8),
+    "   Facility: "+fc+" [0x"+fc.toString(16).padStart(2,"0").toUpperCase()+"]",
+  ];
+});
+lfIoprox.command("write", "Write ioProx card data to t55xx", [
+  {names:["--ver"], takesValue:true, dest:"ver"},
+  {names:["--fc"], takesValue:true, dest:"fc"},
+  {names:["--cn"], takesValue:true, dest:"cn"},
+  {names:["--raw8"], takesValue:true, dest:"raw8"},
+], async (a) => {
+  await needReader();
+  let resp;
+  if(a.raw8!==undefined){
+    const raw8 = hexBytes(a.raw8,8);
+    if(raw8.length!==8) throw new ArgError("raw8 must be 16 hex chars (8 bytes)");
+    resp = await request(CU.IOPROX_DECODE_RAW, raw8);
+  } else {
+    const ver = a.ver!==undefined?Number(a.ver):1, fc = a.fc!==undefined?Number(a.fc):0, cn = a.cn!==undefined?Number(a.cn):0;
+    resp = await request(CU.IOPROX_COMPOSE_ID, [ver, fc, ...u16be(cn)]);
+  }
+  if(!OK_STATUSES.has(resp.status)) return ["error: "+stname(resp.status)];
+  const d = resp.data, ver=d[0], fc=d[1], cn=(d[2]<<8)|d[3], raw8=d.slice(4,12);
+  const payload16 = [ver, fc, ...u16be(cn), ...raw8, 0,0,0,0];
+  okOrThrow(await request(CU.IOPROX_WRITE_TO_T55XX, t55xxPayload(payload16)));
+  return [
+    "ioProx XSF format",
+    "   Version: "+ver,
+    "   Facility: "+fc+" [0x"+fc.toString(16).padStart(2,"0").toUpperCase()+"]",
+    "   ID: "+cn,
+    "   Raw: "+bhex(raw8).toUpperCase(),
+    "Write done.",
+  ];
+});
 lf.command("clone", "(not ported to this terminal yet -- use the matching GUI tab)", [], notPorted("lf clone").run);
 lf.command("sniff", "(not ported to this terminal yet -- use the matching GUI tab)", [], notPorted("lf sniff").run);
 
 for(const [path, grp] of [["data", ROOT.subgroup("data","Data analysis and visualization commands")],
-                          ["emv", ROOT.subgroup("emv","EMV contactless payment card commands")],
                           ["standalone", ROOT.subgroup("standalone","Host-less standalone modes -- use the Standalone tab")]]){
   grp.command("*", "(not ported to this terminal yet -- use the matching GUI tab)", [], async () =>
     ["("+path+" commands aren't ported to this terminal yet -- use the "+path+" tab above.)"]);
