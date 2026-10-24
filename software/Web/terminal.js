@@ -1049,7 +1049,7 @@ emv.command("scan", "Full EMV contactless card scan (PPSE/SELECT AID/GPO/READ RE
 
   out.push("", " -- Card Details --");
   const seenLabels = new Set();
-  for(const v of [...tags[0x50], ...appTags[0x50]]){
+  for(const v of appTags[0x50]){
     const lbl = bytesToAscii(v).trim();
     if(lbl && !seenLabels.has(lbl)){ seenLabels.add(lbl); out.push(" App Label     : "+lbl); }
   }
