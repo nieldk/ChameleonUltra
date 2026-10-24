@@ -1,0 +1,1166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Device Console — ChameleonUltra (Phreakbyte) — Sec1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,700;1,400&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:#0b0f1a; --bg-card:#0f1624; --bg-code:#080c14;
+  --border:#1a2236; --border2:#1e2a40;
+  /* Primary accent — kept the variable name --cyan (canary.js's --poll etc.
+     alias to it) but the value is now the violet-magenta neon from the
+     reference mockup, not literal cyan. */
+  --cyan:#39ff14; --cyan-dim:rgba(57,255,20,0.12); --cyan-border:rgba(57,255,20,0.4);
+  --red:#ff3d57; --red-dim:rgba(255,61,87,0.12); --red-border:rgba(255,61,87,0.38);
+  --amber:#ffb020; --amber-dim:rgba(255,176,32,0.1); --amber-border:rgba(255,176,32,0.38);
+  --green:#00e676; --green-dim:rgba(0,230,118,0.09); --green-border:rgba(0,230,118,0.32);
+  --purple:#b388ff; --purple-dim:rgba(179,136,255,0.1); --purple-border:rgba(179,136,255,0.32);
+  --text:#8899b4; --text-mid:#a0b4cc; --text-bright:#dde8f5;
+  --mono:'JetBrains Mono',monospace; --sans:'Inter',sans-serif;
+  /* legacy names kept for canary.js */
+  --panel:var(--bg-card); --ink:var(--text-bright); --mute:var(--text); --line:var(--border);
+  --field:#4b5967; --poll:var(--cyan); --select:var(--amber); --engage:var(--red); --ok:var(--green);
+}
+html { scroll-behavior: smooth; }
+body { background-color:var(--bg); color:var(--text); font-family:var(--sans); font-size:16px; line-height:1.7;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+  background-image:
+    linear-gradient(rgba(255,255,255,0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.028) 1px, transparent 1px);
+  background-size:28px 28px; }
+
+nav { border-bottom:1px solid var(--border); padding:16px 0; position:sticky; top:env(safe-area-inset-top,0px); background:rgba(11,15,26,0.97); backdrop-filter:blur(10px); z-index:100; }
+.nav-inner { max-width:980px; margin:0 auto; padding:0 28px; display:flex; align-items:center; justify-content:space-between; }
+.nav-logo { font-family:var(--mono); font-size:13px; font-weight:700; color:var(--text-bright); letter-spacing:0.06em; }
+.nav-logo span { color:var(--cyan); text-shadow:0 0 8px var(--cyan-border); }
+
+/* ASCII logo — the exact banner the CLI prints on connect (chameleon
+   silhouette + CHAMELEON wordmark + ULTRA badge + tagline), same
+   green/amber split. overflow-x:auto is the fallback; the media query
+   below shrinks it to actually fit a phone width instead of relying on
+   scrolling. */
+.ascii-logo { font-family:var(--mono); white-space:pre; line-height:1.15; font-size:9px;
+  margin:28px 0 4px; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.ascii-logo .g { color:var(--cyan); }
+.ascii-logo .y { color:var(--amber); }
+.sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
+
+.page { max-width:980px; margin:0 auto; padding:0 28px 80px; }
+.eyebrow { padding:48px 0 0; font-family:var(--mono); font-size:11px; letter-spacing:0.14em; color:var(--text); text-transform:uppercase; display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:22px; }
+.eyebrow-sep { color:var(--border2); }
+.hero-sub { font-family:var(--mono); font-size:11px; letter-spacing:0.08em; color:var(--text); text-transform:uppercase; margin-bottom:10px; }
+h1 { font-family:var(--sans); font-size:clamp(26px,4.5vw,44px); font-weight:700; line-height:1.15; color:var(--text-bright); letter-spacing:-0.025em; margin-bottom:20px; }
+h1 em { font-style:italic; color:var(--cyan); text-shadow:0 0 12px var(--cyan-border); }
+.lead { font-family:var(--mono); font-size:13px; color:var(--text); line-height:1.8; max-width:760px; margin-bottom:28px; }
+.tags { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:32px; }
+.tag { font-family:var(--mono); font-size:11px; font-weight:500; letter-spacing:0.1em; text-transform:uppercase; padding:4px 12px; border-radius:3px; border:1px solid; }
+.tag-fw   { color:var(--green);  border-color:var(--green-border);  background:var(--green-dim); }
+.tag-py   { color:var(--amber);  border-color:var(--amber-border);  background:var(--amber-dim); }
+.tag-hf   { color:var(--cyan);   border-color:var(--cyan-border);   background:var(--cyan-dim); }
+.tag-new  { color:var(--purple); border-color:var(--purple-border); background:var(--purple-dim); }
+
+.meta-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); border:1px solid var(--border); border-radius:4px; overflow:hidden; margin-bottom:32px; background:var(--bg-card); }
+.meta-item { padding:16px 20px; border-right:1px solid var(--border); }
+.meta-item:last-child { border-right:none; }
+.meta-label { font-family:var(--mono); font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:var(--text); margin-bottom:5px; }
+.meta-val { font-family:var(--mono); font-size:13px; color:var(--text-bright); font-weight:500; }
+
+/* Each section header is a full, filled bar — not a thin rule — so it reads
+   as a hard break between sections at a glance, phone screen or not. */
+h2 { font-family:var(--mono); font-size:13px; font-weight:700; letter-spacing:0.14em; text-transform:uppercase; color:var(--text-bright);
+  margin:48px 0 22px; padding:14px 18px; background:var(--green-dim); border:1px solid var(--green-border);
+  border-left:4px solid var(--amber); border-radius:0 6px 6px 0; display:flex; align-items:center; gap:14px; }
+h2::after { content:none; }
+h2 button { margin-left:auto; }
+h2:first-of-type { margin-top:28px; }
+.sec-num { display:inline-flex; align-items:center; justify-content:center; min-width:26px; height:22px; padding:0 7px;
+  border-radius:4px; background:var(--amber); color:var(--bg); font-size:11px; font-weight:700; flex-shrink:0; }
+
+strong { color:var(--text-bright); font-weight:600; }
+code { font-family:var(--mono); font-size:12px; background:var(--bg-code); border:1px solid var(--border2); padding:1px 7px; border-radius:3px; color:var(--amber); }
+
+/* tab bar — the primary nav, so it needs to visually outrank the content
+   below it rather than read as another muted mono-text row. Contained panel
+   + solid-fill active state reuses the same filled-cyan language the page's
+   primary buttons already use, so "active section" reads unmistakably. */
+.tabnav { position:sticky; top:var(--nav-h,52px); background:var(--bg); z-index:90; padding-top:14px; margin-bottom:10px; }
+.tabs { display:flex; flex-wrap:wrap; align-items:center; gap:10px; background:var(--bg-card); border:1px solid var(--border2); border-radius:8px; padding:7px; }
+.tabgroup { display:flex; flex-wrap:wrap; gap:4px; }
+.tabgroup-sep { width:1px; align-self:stretch; min-height:30px; background:var(--border2); }
+.tabbtn { background:transparent; border:1px solid transparent; color:var(--text-mid); border-radius:5px;
+  font-family:var(--mono); font-size:13px; font-weight:500; letter-spacing:.04em; padding:11px 18px; cursor:pointer; }
+.tabbtn:hover { color:var(--text-bright); background:rgba(255,255,255,0.04); }
+.tabbtn.active { color:#0b0f1a; background:var(--cyan); font-weight:700; }
+.tabpanel { display:none; }
+.tabpanel.active { display:block; }
+/* per-tab quick-jump strip, built from that tab's own h2 sections. Each
+   pill is a self-contained chip (visible border + its own number badge) and
+   gapped wide enough that adjacent pills don't read as one run-on strip. */
+.quicknav { display:flex; flex-wrap:wrap; gap:10px; padding:10px 0 12px; }
+.qlink { display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:11px; letter-spacing:.03em; color:var(--text-mid); background:var(--bg-card); border:1px solid var(--border2); border-radius:14px; padding:5px 13px 5px 6px; text-decoration:none; cursor:pointer; }
+.qlink:hover { color:var(--text-bright); border-color:var(--cyan-border); background:var(--cyan-dim); }
+.qlink .sec-num { display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px; padding:0 5px; border-radius:10px; background:var(--amber-dim); color:var(--amber); font-size:10px; }
+
+/* callout card */
+.card { background:var(--bg-card); border:1px solid var(--border); border-left:3px solid var(--cyan); border-radius:0 4px 4px 0; padding:20px 22px; margin:22px 0; }
+.card-amber { border-left-color:var(--amber); }
+.card-red { border-left-color:var(--red); }
+.card-label { font-family:var(--mono); font-size:10px; letter-spacing:0.14em; text-transform:uppercase; margin-bottom:10px; color:var(--cyan); }
+.card-amber .card-label { color:var(--amber); }
+.card-red .card-label { color:var(--red); }
+.card p { font-size:14px; color:var(--text-mid); line-height:1.8; }
+
+/* status */
+.status { display:flex; align-items:center; gap:14px; background:var(--bg-card); border:1px solid var(--border); border-left:3px solid var(--cyan); border-radius:0 4px 4px 0; padding:18px 22px; }
+.lamp { width:18px; height:18px; border-radius:50%; background:var(--cyan); opacity:.4; box-shadow:0 0 0 5px var(--cyan-dim); flex:none; transition:background .2s,box-shadow .2s,opacity .2s; }
+.lamp.on { background:var(--green); opacity:1; box-shadow:0 0 0 5px rgba(0,230,118,0.22); }
+.lamp.wait { background:var(--amber); opacity:1; }
+.lamp.alert { background:var(--red); opacity:1; animation:pulse 1s ease-out 3; }
+@keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(255,61,87,0.6)} 100%{box-shadow:0 0 0 22px transparent} }
+.status b { display:block; font-family:var(--mono); font-size:13px; font-weight:500; color:var(--text-bright); }
+.status span { font-size:13.5px; color:var(--text); }
+.status button { margin-left:auto; }
+
+/* Buttons default to an outlined/glow treatment (dark fill, neon border,
+   soft glow on hover) per the reference mockup — most buttons there read as
+   secondary actions. The two true primary CTAs on the page (#btn Connect,
+   #arm) stay solid-filled so there's still one unmistakable "do this" pill
+   per section, matching the mockup's two filled buttons. */
+button { display:inline-flex; align-items:center; gap:8px; padding:10px 22px; border-radius:4px;
+  border:1px solid var(--cyan-border); background:var(--cyan-dim); color:var(--cyan);
+  font-family:var(--mono); font-size:12px; letter-spacing:0.08em; font-weight:500; cursor:pointer;
+  transition:background .15s, box-shadow .15s, opacity .15s; }
+button:hover { background:rgba(57,255,20,0.22); box-shadow:0 0 14px rgba(57,255,20,0.35); }
+/* .ghost needs a solid, opaque panel + a border with real contrast against
+   it — not a border barely darker/lighter than whatever it's sitting on
+   (card, header bar, etc). A dark solid fill reads as a distinct box on
+   any background; the pale border is what actually sells "clickable". */
+button.ghost { background:var(--bg-code); color:var(--text-bright); border:1px solid var(--text-mid); font-weight:600; box-shadow:0 1px 0 rgba(0,0,0,0.3); }
+button.ghost:hover { border-color:var(--cyan); background:var(--cyan-dim); color:var(--text-bright); box-shadow:none; }
+button.danger { background:var(--red); border-color:var(--red); color:#1a0b0e; }
+button.danger:hover { background:var(--red); box-shadow:0 0 14px rgba(255,61,87,0.4); }
+button.small { padding:7px 14px; font-size:11px; }
+button:disabled { opacity:.45; cursor:default; box-shadow:none; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid var(--cyan); outline-offset:2px; }
+#btn, #arm { background:var(--cyan); border-color:var(--cyan); color:#0b0f1a; }
+#btn:hover, #arm:hover { opacity:.85; box-shadow:0 0 16px var(--cyan-border); }
+
+.opts { display:flex; flex-wrap:wrap; gap:10px 22px; margin:18px 0 0; font-family:var(--mono); font-size:12px; color:var(--text); }
+.opts label { display:flex; align-items:center; gap:9px; cursor:pointer; }
+/* iOS-style pill toggle, built purely with CSS on the existing <input
+   type=checkbox> — no markup change needed. Scoped to .opts so it can't
+   affect a checkbox elsewhere on the page. */
+.opts input[type=checkbox] { appearance:none; -webkit-appearance:none; width:34px; height:19px; border-radius:999px;
+  background:var(--border2); border:1px solid var(--border2); position:relative; cursor:pointer; flex:none;
+  transition:background .2s, border-color .2s; }
+.opts input[type=checkbox]::before { content:''; position:absolute; top:2px; left:2px; width:13px; height:13px;
+  border-radius:50%; background:var(--text-mid); transition:transform .2s, background .2s; }
+.opts input[type=checkbox]:checked { background:var(--cyan-dim); border-color:var(--cyan); }
+.opts input[type=checkbox]:checked::before { transform:translateX(15px); background:var(--cyan); }
+.msg { display:none; margin:14px 0; padding:12px 16px; border-radius:0 4px 4px 0; border:1px solid var(--red-border); border-left:3px solid var(--red); background:var(--red-dim); color:var(--red); font-size:14px; }
+.msg.show { display:block; }
+
+ul { list-style:none; }
+li.ev { background:var(--bg-card); border:1px solid var(--border); border-left:3px solid var(--field); border-radius:0 4px 4px 0; padding:12px 16px; margin-bottom:8px; }
+li.ev.l1 { border-left-color:var(--cyan); }
+li.ev.l2 { border-left-color:var(--amber); }
+li.ev.l3 { border-left-color:var(--red); }
+li.ev.test { border-left-color:var(--green); }
+.top { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
+.top strong { font-family:var(--sans); font-size:15px; }
+.top time { margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--text); }
+.det { font-size:13.5px; color:var(--text); line-height:1.65; margin-top:4px; }
+.gap { font-size:13.5px; color:var(--red); margin-top:4px; }
+.ctl { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+select { font-family:var(--mono); font-size:12px; padding:10px 12px; border-radius:4px; border:1px solid var(--border2); background:var(--bg-card); color:var(--text-mid); }
+details { margin-top:8px; }
+summary { cursor:pointer; font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--text); }
+pre { margin-top:8px; padding:16px; border:1px solid var(--border); border-radius:4px; background:var(--bg-code); overflow-x:auto; font-family:var(--mono); font-size:12.5px; line-height:1.7; color:var(--text); white-space:pre; }
+.nonce { margin-top:6px; font-family:var(--mono); font-size:12px; color:var(--text-mid); overflow-wrap:anywhere; }
+.empty { margin-top:8px; padding:16px; border:1px dashed var(--border2); border-radius:4px; font-size:14px; color:var(--text); }
+.cfgf { display:inline-flex; flex-direction:column; gap:4px; font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text); }
+.cfgf input, .cfgf select { padding:8px 10px; border-radius:4px; border:1px solid var(--border2); background:var(--bg-code); color:var(--text-bright); font-family:var(--mono); font-size:12px; letter-spacing:0; text-transform:none; width:13ch; }
+.cfgf textarea { padding:8px 10px; border-radius:4px; border:1px solid var(--border2); background:var(--bg-code); color:var(--text-bright); font-family:var(--mono); font-size:12px; letter-spacing:0; text-transform:none; width:100%; min-height:64px; resize:vertical; }
+.shell-log { margin-top:14px; padding:12px 14px; border-radius:4px; border:1px solid var(--border2); background:var(--bg-code);
+  color:var(--text-mid); font-family:var(--mono); font-size:12px; line-height:1.6; white-space:pre-wrap; word-break:break-all;
+  max-height:420px; overflow-y:auto; }
+.shell-log .sh-tx { color:var(--text-bright); }
+.shell-log .sh-ok { color:var(--green); }
+.shell-log .sh-err { color:var(--red); }
+.shell-log .sh-meta { color:var(--text); }
+
+.term-screen { height:420px; overflow-y:auto; padding:12px 14px; border-radius:4px; border:1px solid var(--border2);
+  background:#05070c; color:#c9f7d8; font-family:ui-monospace,Menlo,Consolas,"Courier New",monospace; font-size:13px;
+  line-height:1.45; white-space:pre-wrap; word-break:break-word; }
+.term-out .term-echo { color:#7fd4ff; }
+.term-out .term-err { color:var(--red); }
+.term-out .term-meta { color:var(--text-mid); }
+.term-line { display:flex; }
+.term-prompt { color:var(--green); flex:0 0 auto; }
+.term-typed { color:#c9f7d8; white-space:pre; }
+.term-cursor { display:inline-block; width:0.6em; height:1.1em; background:#c9f7d8; margin-left:1px;
+  animation:term-blink 1s steps(1) infinite; vertical-align:text-bottom; }
+@keyframes term-blink { 50% { opacity:0; } }
+.term-hidden-input { position:absolute; left:-9999px; width:1px; height:1px; opacity:0; }
+.cfgf.wide { width:100%; }
+.cfgf.wide input { width:100%; }
+.block { background:var(--bg-card); border:1px solid var(--border); border-radius:4px; padding:18px 20px; margin-bottom:16px; }
+.block h3 { font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-bright); margin-bottom:12px; }
+.block .ctl { margin-top:10px; }
+.row { display:flex; flex-wrap:wrap; gap:10px 18px; align-items:flex-end; }
+.result { margin-top:10px; font-family:var(--mono); font-size:12.5px; color:var(--text-mid); overflow-wrap:anywhere; white-space:pre-wrap; }
+.result.err { color:var(--red); }
+.result.ok { color:var(--green); }
+table.tbl { width:100%; border-collapse:collapse; margin-top:10px; font-family:var(--mono); font-size:12px; }
+table.tbl th, table.tbl td { border:1px solid var(--border); padding:6px 10px; text-align:left; color:var(--text-mid); }
+table.tbl th { color:var(--text-bright); background:var(--bg-code); font-weight:500; }
+table.tbl input, table.tbl select { width:100%; font-size:11.5px; padding:5px 6px; }
+
+footer { border-top:1px solid var(--border); padding:32px 0; }
+.footer-inner { max-width:980px; margin:0 auto; padding:0 28px; display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.footer-l { font-family:var(--mono); font-size:12px; color:var(--text); }
+.footer-l span { color:var(--cyan); }
+.footer-r { font-family:var(--mono); font-size:11px; color:var(--border2); }
+::-webkit-scrollbar { width:5px; height:5px; }
+::-webkit-scrollbar-track { background:var(--bg); }
+::-webkit-scrollbar-thumb { background:var(--border2); border-radius:3px; }
+@media (max-width:600px) {
+  /* Most traffic is phones — tighten side padding, shrink the tab bar so
+     8 tabs don't eat the screen, and let wide result tables scroll instead
+     of squeezing or overflowing the viewport. */
+  .nav-inner, .page, .footer-inner { padding-left:16px; padding-right:16px; }
+  .page { padding-bottom:60px; }
+  .meta-grid { grid-template-columns:1fr 1fr; }
+  .status { flex-wrap:wrap; }
+  .status button { margin-left:0; }
+  .ascii-logo { font-size:5px; }
+  .tabs { padding:5px; gap:6px; }
+  .tabgroup { gap:3px; }
+  .tabbtn { padding:9px 12px; font-size:12px; }
+  .tabgroup-sep { display:none; }
+  .qlink { padding:6px 12px 6px 6px; }
+  .row, .ctl { gap:8px 10px; }
+  pre, .result, .nonce { font-size:11.5px; word-break:break-all; }
+  table.tbl { display:block; overflow-x:auto; white-space:nowrap; -webkit-overflow-scrolling:touch; }
+  table.tbl thead, table.tbl tbody, table.tbl tr { display:table-row; }
+  table.tbl th, table.tbl td { display:table-cell; }
+}
+@media (prefers-reduced-motion:reduce) { .lamp.alert { animation:none; } }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <span class="nav-logo">Sec1<span>.dk</span></span>
+  </div>
+</nav>
+
+<div class="page">
+
+  <pre class="ascii-logo" aria-hidden="true"><span class="g">          ▄█            █</span>
+<span class="g">         ▄███          ██▄▄██▄▄</span>
+<span class="g">   ▄▄█████████▄▄▄▄     ▄██▀▀███</span>
+<span class="g">  ▄██▀██████████████▄▄███  █ ██</span>
+<span class="g"> █████████████████████████  ██</span>
+<span class="g">█████████▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span>
+<span class="g">█████████</span><span class="y">██████╗██╗</span><span class="g">  </span><span class="y">██╗</span><span class="g"> </span><span class="y">█████╗</span><span class="g"> </span><span class="y">███╗</span><span class="g">   </span><span class="y">███╗███████╗██╗</span><span class="g">     </span><span class="y">███████╗</span><span class="g"> </span><span class="y">██████╗</span><span class="g"> </span><span class="y">███╗</span><span class="g">   </span><span class="y">██╗</span>
+<span class="g">████ ████</span><span class="y">██╔════╝██║</span><span class="g">  </span><span class="y">██║██╔══██╗████╗</span><span class="g"> </span><span class="y">████║██╔════╝██║</span><span class="g">     </span><span class="y">██╔════╝██╔═══██╗████╗</span><span class="g">  </span><span class="y">██║</span>
+<span class="g">██ ██ ███</span><span class="y">██║</span><span class="g">     </span><span class="y">███████║███████║██╔████╔██║█████╗</span><span class="g">  </span><span class="y">██║</span><span class="g">     </span><span class="y">█████╗</span><span class="g">  </span><span class="y">██║</span><span class="g">   </span><span class="y">██║██╔██╗</span><span class="g"> </span><span class="y">██║</span>
+<span class="g">▀██ █████</span><span class="y">██║</span><span class="g">▄▄▄▄▄</span><span class="y">██╔══██║██╔══██║██║╚██╔╝██║██╔══╝</span><span class="g">  </span><span class="y">██║</span><span class="g">     </span><span class="y">██╔══╝</span><span class="g">  </span><span class="y">██║</span><span class="g">   </span><span class="y">██║██║╚██╗██║</span>
+<span class="g"> ▀███▀███</span><span class="y">╚██████╗██║</span><span class="g">██</span><span class="y">██║██║</span><span class="g">  </span><span class="y">██║██║</span><span class="g"> </span><span class="y">╚═╝</span><span class="g"> </span><span class="y">██║███████╗███████╗███████╗╚██████╔╝██║</span><span class="g"> </span><span class="y">╚████║</span>
+<span class="g">  ▀███████</span><span class="y">╚═════╝╚═╝</span><span class="g">██</span><span class="y">╚═╝╚═╝</span><span class="g">  </span><span class="y">╚═╝╚═╝</span><span class="g">     </span><span class="y">╚═╝╚══════╝╚══════╝╚══════╝</span><span class="g"> </span><span class="y">╚═════╝</span><span class="g"> </span><span class="y">╚═╝</span><span class="g">  </span><span class="y">╚═══╝</span>
+<span class="g">    ▀▀▀█▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀                                      </span><span class="y">╦</span><span class="g"> </span><span class="y">╦╦</span><span class="g"> </span><span class="y">╔╦╗╦═╗╔═╗</span>
+<span class="g">    ▄▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄                            </span><span class="y">███████</span><span class="g">      </span><span class="y">║</span><span class="g"> </span><span class="y">║║</span><span class="g">  </span><span class="y">║</span><span class="g"> </span><span class="y">╠╦╝╠═╣</span>
+<span class="g">   ▄███████████▄▄▄██████                                        </span><span class="y">╚═╝╩═╝╩</span><span class="g"> </span><span class="y">╩╚═╩</span><span class="g"> </span><span class="y">╩</span>
+<span class="g">   ▀███████████  ▄██████</span>
+<span class="g">                          </span><span class="y">P</span><span class="g"> </span><span class="y">H</span><span class="g"> </span><span class="y">R</span><span class="g"> </span><span class="y">E</span><span class="g"> </span><span class="y">A</span><span class="g"> </span><span class="y">K</span><span class="g"> </span><span class="y">B</span><span class="g"> </span><span class="y">Y</span><span class="g"> </span><span class="y">T</span><span class="g"> </span><span class="y">E</span><span class="g">   </span><span class="y">E</span><span class="g"> </span><span class="y">D</span><span class="g"> </span><span class="y">I</span><span class="g"> </span><span class="y">T</span><span class="g"> </span><span class="y">I</span><span class="g"> </span><span class="y">O</span><span class="g"> </span><span class="y">N</span></pre>
+  <span class="sr-only">ChameleonUltra — Phreakbyte Edition</span>
+
+  <div class="eyebrow">
+    <span>Firmware</span><span class="eyebrow-sep">/</span>
+    <span>Web Bluetooth</span><span class="eyebrow-sep">/</span>
+    <span>HF 13.56MHz + LF 125kHz</span>
+  </div>
+
+  <div class="hero-sub">Live Tool</div>
+  <h1><em>Device console</em><br>for ChameleonUltra (Phreakbyte)</h1>
+
+  <p class="lead">
+    Full command surface for Niel's Phreakbyte fork: standalone modes, device &amp; slot management,
+    HF14A / MIFARE Classic, LF read/write/emulation, and MF0/NTAG emulation — all over Web Bluetooth.<br>
+    Connect once, then switch tabs; every tab shares the same connection.
+  </p>
+
+  <div class="tags">
+    <span class="tag tag-fw">Firmware</span>
+    <span class="tag tag-py">Standalone</span>
+    <span class="tag tag-hf">ISO14443A / LF</span>
+    <span class="tag tag-new">BLE</span>
+  </div>
+
+  <div class="meta-grid">
+    <div class="meta-item"><div class="meta-label">Author</div><div class="meta-val">Niel Nielsen</div></div>
+    <div class="meta-item"><div class="meta-label">Platform</div><div class="meta-val">ChameleonUltra</div></div>
+    <div class="meta-item"><div class="meta-label">Transport</div><div class="meta-val">Web Bluetooth</div></div>
+    <div class="meta-item"><div class="meta-label">Commands</div><div class="meta-val">~90 wired</div></div>
+  </div>
+
+  <h2><span class="sec-num">01</span>Connection</h2>
+
+  <div class="status">
+    <div class="lamp" id="lamp"></div>
+    <div><b id="st">Not connected</b><span id="stsub">Connect once — every tab below shares this link.</span></div>
+    <button id="btn">Connect</button>
+  </div>
+  <div class="msg" id="err" role="alert"></div>
+
+  <div class="opts">
+    <label><input type="checkbox" id="oSound" checked> Sound</label>
+    <label><input type="checkbox" id="oVib" checked> Vibrate</label>
+    <label><input type="checkbox" id="oNotif"> Browser notification</label>
+    <label><input type="checkbox" id="oWake" checked> Keep screen on</label>
+    <label><input type="checkbox" id="oRe" checked> Reconnect automatically</label>
+  </div>
+
+  <div class="tabnav">
+    <div class="tabs" id="tabs">
+      <div class="tabgroup">
+        <button class="tabbtn active" data-tab="standalone">Standalone</button>
+        <button class="tabbtn" data-tab="device">Device</button>
+        <button class="tabbtn" data-tab="slots">Slots</button>
+      </div>
+      <div class="tabgroup-sep"></div>
+      <div class="tabgroup">
+        <button class="tabbtn" data-tab="hf">HF14A / MF1</button>
+        <button class="tabbtn" data-tab="lf">LF</button>
+        <button class="tabbtn" data-tab="mfu">MF0 / NTAG</button>
+        <button class="tabbtn" data-tab="desfire">DESFire</button>
+        <button class="tabbtn" data-tab="emv">EMV</button>
+        <button class="tabbtn" data-tab="shell">Shell</button>
+        <button class="tabbtn" data-tab="terminal">Terminal</button>
+      </div>
+    </div>
+    <div class="quicknav" id="quicknav"></div>
+  </div>
+
+  <!-- ================= STANDALONE (existing console, unchanged) ================= -->
+  <section class="tabpanel active" id="tab-standalone">
+
+    <h2><span class="sec-num">02</span>Device control</h2>
+
+    <div class="ctl">
+      <select id="modeSel" aria-label="Standalone mode"><option value="9">nfc_canary</option><option value="6">emul_trace</option><option value="3">authtrace</option><option value="8">hf14a_tap_sniff</option><option value="7">relay</option><option value="4">slot_cycle</option><option value="1">autoclone</option><option value="2">read_replay</option><option value="5">dict_check</option><option value="10">gdb_gateway</option><option value="11">u2f</option></select>
+      <button class="ghost" id="setmode">Set mode</button>
+      <button id="arm">Arm</button>
+      <button class="ghost" id="disarm">Disarm</button>
+      <button class="ghost" id="test">Send test event</button>
+      <button class="ghost" id="refresh">Refresh status</button>
+      <button class="ghost" id="clrdev">Clear device log</button>
+    </div>
+    <div class="det" id="cstat">Connect to see whether the device is armed.</div>
+    <div class="ctl" id="cfg" style="margin-top:10px;display:none"></div>
+    <div id="rdwrap" style="display:none;margin-top:8px"><div class="det" id="rdiag">relay idle</div></div>
+
+    <div class="block" style="margin-top:18px">
+      <h3>Per-mode result (7011–7013)</h3>
+      <div class="det">GET_AVAILABLE greys out modes this build doesn't have compiled in. GET_RESULT_FOR / CLEAR_RESULT_FOR read or wipe a mode's stored log without first switching the active mode to it.</div>
+      <div class="ctl" style="margin-top:10px">
+        <select id="availSel"></select>
+        <button class="ghost small" id="fetchFor">Fetch result for mode</button>
+        <button class="ghost small" id="clearFor">Clear result for mode</button>
+        <button class="ghost small" id="refreshAvail">Refresh availability</button>
+      </div>
+      <div class="result" id="availResult"></div>
+    </div>
+
+    <h2><span class="sec-num">03</span>Saved on device <button class="ghost" id="fetch">Fetch saved events</button></h2>
+    <div class="det" id="fstat">Reads the device's own log (windows that have already closed), including ones from while this page was offline.</div>
+    <ul id="saved"></ul>
+
+    <h2><span class="sec-num">04</span>Live events <button class="ghost" id="clr">Clear</button></h2>
+    <ul id="log"></ul>
+    <div class="empty" id="empty">No events yet. Press both buttons briefly on the device to send a test event.</div>
+
+    <div class="card card-amber">
+      <div class="card-label">Note</div>
+      <p>Needs Chrome or Edge on Android/desktop, or the Bluefy browser on iOS. The device allows one BLE connection, so close other Chameleon apps first. Alerts only arrive while this page stays open and connected; anything missed is still in the device log (<code>standalone get-result</code>).</p>
+    </div>
+  </section>
+
+  <!-- ================= DEVICE ================= -->
+  <section class="tabpanel" id="tab-device">
+    <h2><span class="sec-num">D1</span>Identity &amp; status</h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="ghost small" id="d_version">App version</button>
+        <button class="ghost small" id="d_git">Git version</button>
+        <button class="ghost small" id="d_model">Device model</button>
+        <button class="ghost small" id="d_chipid">Chip ID</button>
+        <button class="ghost small" id="d_addr">BLE address</button>
+        <button class="ghost small" id="d_blver">Bootloader version</button>
+        <button class="ghost small" id="d_freemem">Free memory</button>
+        <button class="ghost small" id="d_battery">Battery</button>
+        <button class="ghost small" id="d_mode">Reader/tag mode</button>
+        <button class="ghost small" id="d_caps">Capabilities (cmd list)</button>
+        <button class="ghost small" id="d_settings">Full settings dump</button>
+      </div>
+      <div class="result" id="d_identResult"></div>
+    </div>
+
+    <h2><span class="sec-num">D2</span>Device mode</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">Mode<select id="d_modeSel"><option value="0">Tag (emulate)</option><option value="1">Reader</option></select></label>
+        <button class="small" id="d_setmode">Change device mode</button>
+      </div>
+      <div class="det">Lite ignores reader mode (not implemented on that hardware).</div>
+      <div class="result" id="d_modeResult"></div>
+    </div>
+
+    <h2><span class="sec-num">D3</span>BLE name &amp; pairing</h2>
+    <div class="block">
+      <div class="row">
+        <button class="ghost small" id="d_getname">Get BLE name</button>
+        <label class="cfgf">New name (≤20B)<input id="d_newname" placeholder="leave empty = default"></label>
+        <button class="small" id="d_setname">Set BLE name</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost small" id="d_getpair">Get pairing key</button>
+        <label class="cfgf">New key (6 digits)<input id="d_newpair" maxlength="6" placeholder="123456"></label>
+        <button class="small" id="d_setpair">Set pairing key</button>
+        <button class="danger small" id="d_delbonds">Delete all BLE bonds</button>
+      </div>
+      <div class="result" id="d_bleResult"></div>
+    </div>
+
+    <h2><span class="sec-num">D4</span>Behaviour</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">Animation mode<select id="d_animSel"><option value="0">Full</option><option value="1">Minimal</option><option value="2">None</option></select></label>
+        <button class="ghost small" id="d_getanim">Get</button>
+        <button class="small" id="d_setanim">Set</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Sleep timeout (s)<input id="d_sleep" value="0"></label>
+        <button class="ghost small" id="d_getsleep">Get</button>
+        <button class="small" id="d_setsleep">Set</button>
+      </div>
+      <div class="result" id="d_behResult"></div>
+    </div>
+
+    <h2><span class="sec-num">D5</span>Settings &amp; power <button class="ghost" id="d_noop_spacer" style="visibility:hidden">·</button></h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="ghost small" id="d_save">Save settings</button>
+        <button class="ghost small" id="d_resetset">Reset settings</button>
+        <button class="danger small" id="d_wipe">Factory wipe (WIPE_FDS)</button>
+        <button class="ghost small" id="d_resetdev">Reboot device</button>
+        <button class="danger small" id="d_bootloader">Enter bootloader (DFU)</button>
+      </div>
+      <div class="det">Factory wipe and entering the bootloader are destructive / disruptive — both ask to confirm and will drop the BLE link.</div>
+      <div class="result" id="d_pwrResult"></div>
+    </div>
+
+    <h2><span class="sec-num">D6</span>Button actions &amp; pairing requirement</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">Button<select id="d_btnSel"><option value="A">A</option><option value="B">B</option></select></label>
+        <label class="cfgf">Press<select id="d_btnPress"><option value="short">Short</option><option value="long">Long</option></select></label>
+        <label class="cfgf">Function<select id="d_btnFn">
+          <option value="0">Disabled</option>
+          <option value="1">Cycle slot +</option>
+          <option value="2">Cycle slot -</option>
+          <option value="3">Clone IC UID</option>
+          <option value="4">Show battery</option>
+          <option value="5">NFC field generator (Ultra)</option>
+          <option value="6">Disarm standalone mode</option>
+        </select></label>
+        <button class="ghost small" id="d_getbtn">Get</button>
+        <button class="small" id="d_setbtn">Set</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">BLE pairing<select id="d_pairreq"><option value="1">Required</option><option value="0">Not required</option></select></label>
+        <button class="ghost small" id="d_getpairreq">Get</button>
+        <button class="small" id="d_setpairreq">Set</button>
+      </div>
+      <div class="det">"Required" means a BLE pairing key (see D3) must be supplied before a host can connect. Turning it off removes that check.</div>
+      <div class="result" id="d_btnResult"></div>
+    </div>
+
+    <h2><span class="sec-num">D7</span>Debug log</h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="ghost small" id="d_logstatus">Get log status</button>
+        <label class="cfgf">Level<select id="d_loglevel">
+          <option value="0">0 Off</option>
+          <option value="1">1 Error</option>
+          <option value="2">2 Warning</option>
+          <option value="3">3 Info</option>
+          <option value="4">4 Debug</option>
+        </select></label>
+        <button class="small" id="d_logsetlevel">Set level</button>
+        <button class="danger small" id="d_logclear">Clear log</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="small" id="d_logdump">Fetch full log text</button>
+      </div>
+      <div class="det">Persistent debug log stored in flash, survives reboot. "Fetch full log text" pages through it 512 bytes at a time (LOG_READ) until it runs dry.</div>
+      <div class="result" id="d_logResult"></div>
+      <pre id="d_logText" style="display:none;max-height:320px;overflow-y:auto"></pre>
+    </div>
+
+    <h2><span class="sec-num">D8</span>Flash diagnostics</h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="ghost small" id="d_blinfo">Bootloader info (BL_INFO)</button>
+        <button class="ghost small" id="d_fdslist">List FDS records</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">File ID (hex)<input id="d_fdsfile" value="0000" placeholder="e.g. 1020"></label>
+        <label class="cfgf">Key (hex)<input id="d_fdskey" value="0000" placeholder="e.g. 0001"></label>
+        <button class="small" id="d_fdsread">Read record (hex dump)</button>
+      </div>
+      <div class="det">A read on a protected or non-existent record fails the same way either way (no "protected" disclosure) — this fork deliberately hides the U2F master key / attestation private key records this way. "Read record" pages the whole thing in 240-byte slices.</div>
+      <div class="result" id="d_fdsResult"></div>
+      <pre id="d_fdsHex" style="display:none;max-height:320px;overflow-y:auto"></pre>
+    </div>
+  </section>
+
+  <!-- ================= SLOTS ================= -->
+  <section class="tabpanel" id="tab-slots">
+    <h2><span class="sec-num">S1</span>Slot overview</h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="ghost small" id="s_info">Get slot info</button>
+        <button class="ghost small" id="s_enabled">Get enabled slots</button>
+        <button class="ghost small" id="s_nicks">Get all nicks</button>
+        <button class="ghost small" id="s_active">Get active slot</button>
+      </div>
+      <div id="s_table"></div>
+    </div>
+
+    <h2><span class="sec-num">S2</span>Active slot</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">Slot (1-8)<input id="s_setactive" value="1"></label>
+        <button class="small" id="s_setactivebtn">Set active slot</button>
+      </div>
+      <div class="result" id="s_activeResult"></div>
+    </div>
+
+    <h2><span class="sec-num">S3</span>Slot type &amp; enable</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">Slot (1-8)<input id="s_slot" value="1"></label>
+        <label class="cfgf">Sense<select id="s_sense"><option value="2">HF</option><option value="1">LF</option></select></label>
+        <label class="cfgf">Tag type (code)<input id="s_tagtype" value="1001" placeholder="see table below"></label>
+        <button class="ghost small" id="s_settype">Set slot tag type</button>
+        <button class="ghost small" id="s_setdefault">Set slot data default</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Enabled<select id="s_enflag"><option value="1">On</option><option value="0">Off</option></select></label>
+        <button class="small" id="s_setenable">Set slot enable</button>
+        <button class="small" id="s_savecfg">Save slot config to flash</button>
+        <button class="danger small" id="s_delsense">Delete {sense} data in slot</button>
+      </div>
+      <div class="det">"Delete {sense} data in slot" wipes just the HF or LF tag data for that slot (per the Sense dropdown above) without touching the other sense or the slot's nickname — use it to clear a slot's old tag before reusing it with a different type.</div>
+      <details style="margin-top:10px"><summary>Common tag type codes</summary>
+        <pre id="s_typecodes">LF 100 EM410X · 104 EM410X_ELECTRA · 150 PAC · 170 Viking · 180 Jablotron
+LF 200 HIDProx · 201 ioProx · 310 IDTECK · 311 Indala
+HF 1000 MIFARE_Mini · 1001 MIFARE_1024 (1K) · 1002 MIFARE_2048 (2K) · 1003 MIFARE_4096 (4K)
+HF 1100 NTAG_213 · 1101 NTAG_215 · 1102 NTAG_216 · 1103 MF0ICU1 · 1105 MF0UL11 · 1106 MF0UL21
+HF 1300 DESFire EV1 2K · 1301 DESFire EV1 4K · 1302 DESFire EV1 8K
+HF 1303 DESFire EV2 2K · 1304 DESFire EV2 4K · 1305 DESFire EV2 8K</pre>
+      </details>
+      <div class="det">The DESFire tab needs the active slot's HF type set to one of the DESFire codes above. On a slot that's never held DESFire data, "Set slot tag type" alone is <b>not</b> enough — the device only reloads existing flash data, and there is none yet. You also need this slot to be the <i>active</i> slot (Set active slot) before "Set slot data default", since that's the step that only writes live if the slot is already active. See DESFire tab → F0 for a one-click helper that does this in the right order.</div>
+      <div class="result" id="s_typeResult"></div>
+    </div>
+
+    <h2><span class="sec-num">S4</span>Slot nickname</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">Slot (1-8)<input id="s_nslot" value="1"></label>
+        <label class="cfgf">Sense<select id="s_nsense"><option value="2">HF</option><option value="1">LF</option></select></label>
+        <label class="cfgf wide">Nickname (≤32B utf8)<input id="s_nname" placeholder="e.g. office badge"></label>
+      </div>
+      <div class="ctl" style="margin-top:10px">
+        <button class="ghost small" id="s_getname">Get nick</button>
+        <button class="small" id="s_setname">Set nick</button>
+        <button class="danger small" id="s_delname">Delete nick</button>
+      </div>
+      <div class="result" id="s_nameResult"></div>
+    </div>
+  </section>
+
+  <!-- ================= HF14A / MF1 ================= -->
+  <section class="tabpanel" id="tab-hf">
+    <h2><span class="sec-num">H1</span>Field &amp; scan</h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="ghost small" id="h_scan">HF14A scan</button>
+        <button class="ghost small" id="h_scankeep">Scan (keep field)</button>
+        <button class="ghost small" id="h_fieldon">Field on</button>
+        <button class="ghost small" id="h_fieldoff">Field off</button>
+        <button class="ghost small" id="h_support">MF1 detect support</button>
+        <button class="ghost small" id="h_prng">MF1 detect PRNG</button>
+      </div>
+      <div class="result" id="h_scanResult"></div>
+    </div>
+
+    <h2><span class="sec-num">H2</span>HF14A anticollision config</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">BCC<select id="h_bcc"><option value="-1">auto</option><option value="0">off</option><option value="1">on</option></select></label>
+        <label class="cfgf">CL2<select id="h_cl2"><option value="-1">auto</option><option value="0">off</option><option value="1">on</option></select></label>
+        <label class="cfgf">CL3<select id="h_cl3"><option value="-1">auto</option><option value="0">off</option><option value="1">on</option></select></label>
+        <label class="cfgf">RATS<select id="h_rats"><option value="-1">auto</option><option value="0">off</option><option value="1">on</option></select></label>
+      </div>
+      <div class="ctl" style="margin-top:10px">
+        <button class="ghost small" id="h_getcfg">Get config</button>
+        <button class="small" id="h_setcfg">Set config</button>
+      </div>
+      <div class="result" id="h_cfgResult"></div>
+    </div>
+
+    <h2><span class="sec-num">H3</span>MF1 one-block auth / read / write</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">Block<input id="h_block" value="4"></label>
+        <label class="cfgf">Key type<select id="h_keytype"><option value="0x60">A</option><option value="0x61">B</option></select></label>
+        <label class="cfgf wide">Key (12 hex)<input id="h_key" value="FFFFFFFFFFFF"></label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf wide">Data to write (32 hex = 16 bytes)<input id="h_wdata" value="00000000000000000000000000000000"></label>
+      </div>
+      <div class="ctl" style="margin-top:10px">
+        <button class="ghost small" id="h_auth">Auth</button>
+        <button class="ghost small" id="h_read">Read block</button>
+        <button class="small" id="h_write">Write block</button>
+      </div>
+      <div class="result" id="h_rwResult"></div>
+    </div>
+
+    <h2><span class="sec-num">H4</span>Key check (dictionary attack)</h2>
+    <div class="block">
+      <div class="det">Checks a key list against one block, or against many sectors at once. Comes pre-filled with common/public default keys — add your own, one 12-hex-digit key per line.</div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Block (on-block check)<input id="h_ckblock" value="0"></label>
+        <label class="cfgf">Key type<select id="h_ckkeytype"><option value="0x60">A</option><option value="0x61">B</option></select></label>
+        <label class="cfgf">Sectors (sector check)<input id="h_cksectors" value="16"></label>
+      </div>
+      <label class="cfgf wide" style="margin-top:10px">Keys (12 hex each, one per line, max 83)<textarea id="h_ckkeys">FFFFFFFFFFFF
+A0A1A2A3A4A5
+D3F7D3F7D3F7
+000000000000
+B0B1B2B3B4B5
+4D3A99C351DD
+1A982C7E459A
+AABBCCDDEEFF</textarea></label>
+      <div class="ctl" style="margin-top:10px">
+        <button class="ghost small" id="h_ckonblock">Check keys on block</button>
+        <button class="small" id="h_ckofsectors">Check keys of sectors</button>
+      </div>
+      <div class="result" id="h_ckResult"></div>
+    </div>
+
+    <h2><span class="sec-num">H5</span>Live reader-side auth trace</h2>
+    <div class="block">
+      <div class="det">Full anticoll + Crypto1 AUTH against a real card, every frame returned — decoded the same way as the authtrace standalone mode.</div>
+      <div class="row">
+        <label class="cfgf">Block<input id="h_atblock" value="4"></label>
+        <label class="cfgf">Key type<select id="h_atkeytype"><option value="0x60">A</option><option value="0x61">B</option></select></label>
+        <label class="cfgf">Key (12 hex)<input id="h_atkey" value="FFFFFFFFFFFF"></label>
+        <label class="cfgf">Timeout ms<input id="h_attimeout" value="5000"></label>
+      </div>
+      <div class="ctl" style="margin-top:10px"><button class="small" id="h_authtrace">Run auth trace</button></div>
+      <div id="h_atOut"></div>
+    </div>
+
+    <h2><span class="sec-num">H6</span>Emulation data (active slot)</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">Block start<input id="h_eblock" value="0"></label>
+        <label class="cfgf">Block count<input id="h_ecount" value="4"></label>
+      </div>
+      <label class="cfgf wide" style="margin-top:10px">Data to write (hex, multiple of 32 chars)<textarea id="h_edata"></textarea></label>
+      <div class="ctl" style="margin-top:10px">
+        <button class="ghost small" id="h_eread">Read emu blocks</button>
+        <button class="small" id="h_ewrite">Write emu blocks</button>
+      </div>
+      <div class="result" id="h_eResult"></div>
+    </div>
+
+    <h2><span class="sec-num">H7</span>Anti-collision data (active slot)</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">UID (hex, 4/7/10B)<input id="h_auid" value="DEADBEEF"></label>
+        <label class="cfgf">ATQA (4 hex)<input id="h_aatqa" value="0400"></label>
+        <label class="cfgf">SAK (2 hex)<input id="h_asak" value="08"></label>
+        <label class="cfgf">ATS (hex, optional)<input id="h_aats" value=""></label>
+      </div>
+      <div class="ctl" style="margin-top:10px">
+        <button class="ghost small" id="h_aget">Get anti-coll data</button>
+        <button class="small" id="h_aset">Set anti-coll data</button>
+      </div>
+      <div class="result" id="h_aResult"></div>
+    </div>
+
+    <h2><span class="sec-num">H8</span>Emulator behaviour &amp; detection</h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="ghost small" id="h_getemu">Get emulator config</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Gen1a magic<select id="h_gen1a"><option value="1">On</option><option value="0">Off</option></select></label>
+        <button class="small" id="h_setgen1a">Set</button>
+        <label class="cfgf">Gen2 magic<select id="h_gen2"><option value="1">On</option><option value="0">Off</option></select></label>
+        <button class="small" id="h_setgen2">Set</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Block0 anti-coll<select id="h_bacm"><option value="1">On</option><option value="0">Off</option></select></label>
+        <button class="small" id="h_setbacm">Set</button>
+        <label class="cfgf">Write mode<select id="h_wmode"><option value="0">Normal</option><option value="1">Deny</option><option value="2">Deceive</option><option value="3">Shadow</option></select></label>
+        <button class="small" id="h_setwmode">Set</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">PRNG type<select id="h_prngtype"><option value="0">Static</option><option value="1">Weak</option><option value="2">Hard</option></select></label>
+        <button class="ghost small" id="h_getprngtype">Get</button>
+        <button class="small" id="h_setprngtype">Set</button>
+        <label class="cfgf">Mfkey32 detection<select id="h_detect"><option value="1">On</option><option value="0">Off</option></select></label>
+        <button class="small" id="h_setdetect">Set</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost small" id="h_getfor">Get field-off resets card state</button>
+        <label class="cfgf">Field-off resets card state<select id="h_for"><option value="1">On</option><option value="0">Off</option></select></label>
+        <button class="small" id="h_setfor">Set</button>
+      </div>
+      <div class="det">When on, the emulated MF1 card's internal state (authentication, value-block session) resets whenever the reader's RF field drops — matches real card behaviour. Off keeps state across field drops.</div>
+      <div class="result" id="h_emuResult"></div>
+    </div>
+
+    <h2><span class="sec-num">H9</span>Mfkey32 detection log</h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="ghost small" id="h_detcount">Get count</button>
+        <label class="cfgf">Start index<input id="h_detidx" value="0"></label>
+        <button class="small" id="h_detlog">Get log (from index)</button>
+      </div>
+      <div id="h_detTable"></div>
+    </div>
+
+    <h2><span class="sec-num">H10</span>Raw ISO14443A bytes</h2>
+    <div class="block">
+      <div class="det">Sends arbitrary bits to any 14A tag (card or reader-mode emulation), below the MF1/APDU layer. This is HF14A_RAW (not the DESFire tab's F4, which only talks to the active slot's own DESFire emulation).</div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Activate field<select id="h_rawfield"><option value="1">Yes</option><option value="0">No</option></select></label>
+        <label class="cfgf">Auto-select<select id="h_rawautosel"><option value="1">Yes</option><option value="0">No</option></select></label>
+        <label class="cfgf">Append CRC<select id="h_rawcrc"><option value="1">Yes</option><option value="0">No</option></select></label>
+        <label class="cfgf">Wait for response<select id="h_rawwait"><option value="1">Yes</option><option value="0">No</option></select></label>
+        <label class="cfgf">Keep RF field on<select id="h_rawkeep"><option value="0">No</option><option value="1">Yes</option></select></label>
+        <label class="cfgf">Check response CRC<select id="h_rawcheckcrc"><option value="1">Yes</option><option value="0">No</option></select></label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Timeout (ms)<input id="h_rawtimeout" value="1000"></label>
+        <label class="cfgf wide">Data to send (hex)<input id="h_rawdata" value="3000" placeholder="e.g. 3000 = MF1 read block 0"></label>
+        <button class="small" id="h_rawsend">Send</button>
+      </div>
+      <div class="result" id="h_rawResult"></div>
+    </div>
+
+    <h2><span class="sec-num">H11</span>MF1 value block (increment / decrement / restore)</h2>
+    <div class="block">
+      <div class="det">Authenticates against a source block, runs the value-block operation, then (if different) authenticates the destination block and transfers the result into it. Source = destination is the common case (operate in place).</div>
+      <div class="row">
+        <label class="cfgf">Source block<input id="h_vbsrc" value="4"></label>
+        <label class="cfgf">Src key type<select id="h_vbsrctype"><option value="0x60">A</option><option value="0x61">B</option></select></label>
+        <label class="cfgf wide">Src key (12 hex)<input id="h_vbsrckey" value="FFFFFFFFFFFF"></label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Operation<select id="h_vbop"><option value="0xC1">Increment</option><option value="0xC0">Decrement</option><option value="0xC2">Restore (no transfer value)</option></select></label>
+        <label class="cfgf">Operand (signed i32)<input id="h_vboperand" value="1"></label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Dest block (= source if same)<input id="h_vbdst" value="4"></label>
+        <label class="cfgf">Dst key type<select id="h_vbdsttype"><option value="0x60">A</option><option value="0x61">B</option></select></label>
+        <label class="cfgf wide">Dst key (12 hex)<input id="h_vbdstkey" value="FFFFFFFFFFFF"></label>
+        <button class="small" id="h_vbrun">Run</button>
+      </div>
+      <div class="result" id="h_vbResult"></div>
+    </div>
+  </section>
+
+  <!-- ================= LF ================= -->
+  <section class="tabpanel" id="tab-lf">
+    <h2><span class="sec-num">L1</span>Search / generic</h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="ghost small" id="l_search">LF search (sweep all)</button>
+        <button class="ghost small" id="l_adc">ADC generic read</button>
+      </div>
+      <div class="result" id="l_genResult"></div>
+    </div>
+
+    <h2><span class="sec-num">L2</span>EM410x</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf wide">ID (10 hex=5B, or 26 hex=13B Electra)<input id="l_em_id" value="DEADBEEF00"></label>
+      </div>
+      <div class="ctl" style="margin-top:10px">
+        <button class="ghost small" id="l_em_scan">Scan</button>
+        <button class="small" id="l_em_write">Write to T55xx</button>
+        <button class="ghost small" id="l_em_getemu">Get emu id</button>
+        <button class="small" id="l_em_setemu">Set emu id</button>
+      </div>
+      <div class="result" id="l_emResult"></div>
+    </div>
+
+    <h2><span class="sec-num">L3</span>HID Prox</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">Format (0=auto)<input id="l_hid_fmt" value="0"></label>
+        <label class="cfgf wide">ID (26 hex = 13B)<input id="l_hid_id" value="00000000000000000000000000"></label>
+      </div>
+      <div class="ctl" style="margin-top:10px">
+        <button class="ghost small" id="l_hid_scan">Scan</button>
+        <button class="small" id="l_hid_write">Write to T55xx</button>
+        <button class="ghost small" id="l_hid_getemu">Get emu id</button>
+        <button class="small" id="l_hid_setemu">Set emu id</button>
+      </div>
+      <div class="result" id="l_hidResult"></div>
+    </div>
+
+    <h2><span class="sec-num">L4</span>ioProx</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">Version<input id="l_io_ver" value="1"></label>
+        <label class="cfgf">Facility code<input id="l_io_fc" value="1"></label>
+        <label class="cfgf">Card number<input id="l_io_cn" value="1234"></label>
+        <label class="cfgf wide">ID (32 hex = 16B, from scan/compose)<input id="l_io_id" value=""></label>
+      </div>
+      <div class="ctl" style="margin-top:10px">
+        <button class="ghost small" id="l_io_scan">Scan</button>
+        <button class="ghost small" id="l_io_compose">Compose ID from ver/fc/cn</button>
+        <button class="small" id="l_io_write">Write to T55xx</button>
+        <button class="ghost small" id="l_io_getemu">Get emu id</button>
+        <button class="small" id="l_io_setemu">Set emu id</button>
+      </div>
+      <div class="result" id="l_ioResult"></div>
+    </div>
+
+    <h2><span class="sec-num">L5</span>Viking / PAC / Jablotron / Indala / IDTECK</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">Viking ID (8 hex)<input id="l_vk_id" value="DEADBEEF"></label>
+        <button class="ghost small" id="l_vk_scan">Scan</button>
+        <button class="small" id="l_vk_write">Write</button>
+        <button class="ghost small" id="l_vk_getemu">Get emu</button>
+        <button class="small" id="l_vk_setemu">Set emu</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="cfgf">PAC ID (16 hex=8B ascii)<input id="l_pac_id" value="3030303030303030"></label>
+        <button class="ghost small" id="l_pac_scan">Scan</button>
+        <button class="small" id="l_pac_write">Write</button>
+        <button class="ghost small" id="l_pac_getemu">Get emu</button>
+        <button class="small" id="l_pac_setemu">Set emu</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="cfgf">Jablotron ID (10 hex=5B)<input id="l_jb_id" value="DEADBEEF00"></label>
+        <button class="ghost small" id="l_jb_scan">Scan</button>
+        <button class="small" id="l_jb_write">Write</button>
+        <button class="ghost small" id="l_jb_getemu">Get emu</button>
+        <button class="small" id="l_jb_setemu">Set emu</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="cfgf">Indala ID (16 hex=8B)<input id="l_in_id" value="0000000000000000"></label>
+        <button class="ghost small" id="l_in_scan">Scan</button>
+        <button class="small" id="l_in_write">Write</button>
+        <button class="ghost small" id="l_in_getemu">Get emu</button>
+        <button class="small" id="l_in_setemu">Set emu</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="cfgf">IDTECK frame (16 hex=8B)<input id="l_id_id" value="0000000000000000"></label>
+        <button class="small" id="l_id_write">Write (no scan cmd)</button>
+        <button class="ghost small" id="l_id_getemu">Get emu</button>
+        <button class="small" id="l_id_setemu">Set emu</button>
+      </div>
+      <div class="result" id="l_miscResult"></div>
+    </div>
+
+    <h2><span class="sec-num">L6</span>FDX-B / EM4x05 / raw T55xx</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf wide">FDX-B frame (26 hex = 13B)<input id="l_fx_data" value=""></label>
+        <button class="ghost small" id="l_fx_scan">Scan</button>
+        <button class="small" id="l_fx_write">Write to T55xx</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="cfgf">EM4x05 password (8 hex)<input id="l_em4_pwd" value="00000000"></label>
+        <button class="ghost small" id="l_em4_scan">Scan</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="cfgf">Block<input id="l_t5_block" value="0"></label>
+        <label class="cfgf">Word (8 hex)<input id="l_t5_word" value="00000000"></label>
+        <label class="cfgf">Password (8 hex, optional)<input id="l_t5_pwd" value=""></label>
+        <label class="cfgf">Page1?<select id="l_t5_page1"><option value="0">No</option><option value="1">Yes</option></select></label>
+        <button class="small" id="l_t5_writeblk">Raw write block</button>
+      </div>
+      <div class="result" id="l_fxResult"></div>
+    </div>
+  </section>
+
+  <!-- ================= MF0/NTAG ================= -->
+  <section class="tabpanel" id="tab-mfu">
+    <h2><span class="sec-num">M1</span>Emulation pages (active slot)</h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="ghost small" id="m_pagecount">Get page count</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Page start<input id="m_pstart" value="0"></label>
+        <label class="cfgf">Page count<input id="m_pcount" value="4"></label>
+      </div>
+      <label class="cfgf wide" style="margin-top:10px">Data to write (hex, multiple of 8 chars = 4B pages)<textarea id="m_pdata"></textarea></label>
+      <div class="ctl" style="margin-top:10px">
+        <button class="ghost small" id="m_pread">Read pages</button>
+        <button class="small" id="m_pwrite">Write pages</button>
+      </div>
+      <div class="result" id="m_pResult"></div>
+    </div>
+
+    <h2><span class="sec-num">M2</span>UID magic mode, version &amp; signature</h2>
+    <div class="block">
+      <div class="row">
+        <button class="ghost small" id="m_getmagic">Get UID magic mode</button>
+        <label class="cfgf">Magic mode<select id="m_magicsel"><option value="1">On</option><option value="0">Off</option></select></label>
+        <button class="small" id="m_setmagic">Set</button>
+        <button class="ghost small" id="m_resetauth">Reset auth counter</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost small" id="m_getver">Get version data</button>
+        <label class="cfgf wide">Version data (16 hex = 8 bytes)<input id="m_verdata" value="0004040201001103"></label>
+        <button class="small" id="m_setver">Set version data</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost small" id="m_getsig">Get signature data</button>
+        <label class="cfgf wide">Signature data (64 hex = 32 bytes)<textarea id="m_sigdata"></textarea></label>
+        <button class="small" id="m_setsig">Set signature data</button>
+      </div>
+      <div class="det">Version/signature data lives on NTAG21x and MF0UL* chips only — "invalid slot type" means the active slot's tag type doesn't carry them (plain MF0ICU1, for instance).</div>
+      <div class="result" id="m_magicResult"></div>
+    </div>
+
+    <h2><span class="sec-num">M3</span>Counters</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">Index (0-2)<input id="m_cidx" value="0"></label>
+        <button class="ghost small" id="m_cget">Get counter</button>
+        <label class="cfgf">New value<input id="m_cval" value="0"></label>
+        <label class="cfgf">Reset tearing flag<select id="m_ctear"><option value="0">No</option><option value="1">Yes</option></select></label>
+        <button class="small" id="m_cset">Set counter</button>
+      </div>
+      <div class="result" id="m_cResult"></div>
+    </div>
+
+    <h2><span class="sec-num">M4</span>Write mode &amp; mfkey-style detection</h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="ghost small" id="m_getemu">Get emulator config</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost small" id="m_getwmode">Get write mode</button>
+        <label class="cfgf">Write mode<select id="m_wmode">
+          <option value="0">Normal</option>
+          <option value="1">Denied</option>
+          <option value="2">Deceive</option>
+          <option value="3">Shadow</option>
+          <option value="4">Shadow (request)</option>
+        </select></label>
+        <button class="small" id="m_setwmode">Set</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost small" id="m_getdetect">Get detection enable</button>
+        <label class="cfgf">Password-auth detection<select id="m_detect"><option value="1">On</option><option value="0">Off</option></select></label>
+        <button class="small" id="m_setdetect">Set (also clears log)</button>
+      </div>
+      <div class="result" id="m_wmResult"></div>
+    </div>
+
+    <h2><span class="sec-num">M5</span>Password-auth detection log</h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="ghost small" id="m_detcount">Get count</button>
+        <label class="cfgf">Start index<input id="m_detidx" value="0"></label>
+        <button class="small" id="m_detlog">Get log (from index)</button>
+      </div>
+      <div class="det">Every PWD_AUTH attempt against this slot (MF0UL/NTAG password auth) logs the 4-byte password tried — same idea as the MF1 mfkey32 log, for the password-protected UL/NTAG variants.</div>
+      <div id="m_detTable"></div>
+    </div>
+  </section>
+
+  <!-- ================= DESFIRE ================= -->
+  <section class="tabpanel" id="tab-desfire">
+    <div class="card card-amber">
+      <div class="card-label">Note</div>
+      <p>The active slot's DESFire credential is an opaque <code>.dfcb</code> blob — apps, files and keys packed by <code>chameleon_dfc.py</code>. This tab backs it up/restores it as raw bytes and reads the device's own counters; it doesn't build a credential from scratch (use the CLI / <code>chameleon_dfc.py</code> for that and paste the result here).</p>
+    </div>
+
+    <h2><span class="sec-num">F0</span>Prepare a slot for DESFire</h2>
+    <div class="block">
+      <div class="ctl">
+        <label class="cfgf">Slot (1-8)<input id="f_prepslot" value="1"></label>
+        <label class="cfgf">Tag type<select id="f_preptype">
+          <option value="1300">1300 DESFire EV1 2K</option>
+          <option value="1301">1301 DESFire EV1 4K</option>
+          <option value="1302">1302 DESFire EV1 8K</option>
+          <option value="1303">1303 DESFire EV2 2K</option>
+          <option value="1304">1304 DESFire EV2 4K</option>
+          <option value="1305">1305 DESFire EV2 8K</option>
+        </select></label>
+        <button class="small" id="f_prepare">Prepare slot</button>
+      </div>
+      <div class="det">GET_INFO / GET_CREDENTIAL / FACTORY_BLANK act on a live in-RAM buffer, not on the slot's flash record directly. <b>Set slot tag type</b> alone only tries to reload that buffer from an existing flash record — on a slot that's never held DESFire data there is none yet, so the buffer stays empty and every DESFire command keeps returning PAR_ERR. <b>Set slot data default</b> writes the factory record to flash, but only reloads the live buffer immediately if the slot is already the <i>active</i> slot — otherwise the record sits on flash until the slot is activated. This button runs the three steps in the one order that always works: set tag type → make this the active slot → set slot data default (now live). Do this once per slot before using F1-F3 below.</div>
+      <div class="result" id="f_prepResult"></div>
+    </div>
+
+    <h2><span class="sec-num">F1</span>Active slot info &amp; stats</h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="ghost small" id="f_info">Get info</button>
+        <button class="ghost small" id="f_stats">Get stats</button>
+        <label class="cfgf">New UID (14 hex, optional)<input id="f_blankuid" value=""></label>
+        <button class="danger small" id="f_blank">Factory blank slot</button>
+      </div>
+      <div class="det">Factory blank re-initializes the active slot to an empty, emulatable DESFire card (random UID if none given) — this overwrites whatever credential is loaded. Run F0 above first if this slot has never held DESFire data.</div>
+      <div class="result" id="f_infoResult"></div>
+    </div>
+
+    <h2><span class="sec-num">F2</span>Credential backup / restore</h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="small" id="f_download">Download credential from device</button>
+        <button class="ghost small" id="f_dlfile">Save last download as .dfcb</button>
+        <button class="ghost small" id="f_filepickbtn" type="button">Load .dfcb file&hellip;</button>
+        <input type="file" id="f_filepick" accept=".dfcb,application/octet-stream" style="display:none">
+      </div>
+      <label class="cfgf wide" style="margin-top:10px">Credential (.dfcb, hex — must start with <code>60</code>)<textarea id="f_blob" style="min-height:120px"></textarea></label>
+      <div class="ctl" style="margin-top:10px">
+        <button class="small" id="f_upload">Upload credential to device</button>
+      </div>
+      <div class="result" id="f_credResult"></div>
+    </div>
+
+    <h2><span class="sec-num">F3</span>Reader mode (against a physical DESFire card)</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">Key number (0-31)<input id="f_keyno" value="0"></label>
+        <label class="cfgf">Algorithm<select id="f_alg"><option value="aes">AES (16B key/challenge)</option><option value="2tdea">2TDEA (16B key, 8B challenge)</option><option value="3tdea">3TDEA (24B key, 16B challenge)</option></select></label>
+        <label class="cfgf wide">Key (hex)<input id="f_key" value="00000000000000000000000000000000"></label>
+        <label class="cfgf">AID (6 hex, optional)<input id="f_aid" value=""></label>
+      </div>
+      <div class="ctl" style="margin-top:10px">
+        <button class="small" id="f_auth">Authenticate (ISO 7816)</button>
+        <button class="ghost small" id="f_getversion">Reader info (UID, GetVersion, AIDs)</button>
+      </div>
+      <div class="result" id="f_readerResult"></div>
+    </div>
+
+    <h2><span class="sec-num">F4</span>Real card — raw command &amp; auto-dump</h2>
+    <div class="card card-amber">
+      <div class="card-label">Note</div>
+      <p>All of F3/F4 needs the device itself in <b>Reader</b> mode (Device tab → Device mode), not Tag/emulation mode — that's a separate requirement from the slot prep in F0, which only matters for the emulated side. Auto-dump only reads files whose <code>comm_settings</code> is plain (0x00, no secure messaging) and only applications/files the card lets you see without authenticating first — encrypted/MAC'd files and anything gated behind auth are reported, not read. This talks to native DESFire command bytes directly (<code>dfc_command.c</code> / <code>dfc_common.h</code> in the fork), wrapped as <code>90 INS 00 00 [Lc data] 00</code> over <code>HF14A_4_READER_APDU</code>.</p>
+      <p><b>Known limit:</b> <code>HF14A_4_READER_APDU</code> re-selects the card (full antenna-off/reset/RATS) on <i>every</i> call, so it can't carry a multi-frame reply (native status 0x91/0xAF) — you'll get a clear error instead of silent garbage; use F3's GetVersion button for that one case, and keep ReadData/ReadRecords lengths short enough to fit one frame. <b>Unverified:</b> whether SelectApplication's effect survives into the <i>next</i> separate call (same re-select-per-call behavior) is not something I could confirm from source alone — if auto-dump's files all come back as if nothing were selected (wrong AID's files, or application-not-found), that's the likely reason; the raw sender above is the way to test SelectApplication followed by GetFileIDs by hand.</p>
+    </div>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf">INS (hex byte)<input id="f_rawins" value="60"></label>
+        <label class="cfgf wide">Data (hex, optional)<input id="f_rawdata" value=""></label>
+      </div>
+      <div class="ctl" style="margin-top:10px">
+        <button class="small" id="f_rawsend">Send command</button>
+      </div>
+      <div class="det">Common INS: 60 GetVersion · 51 GetCardUID · 6A GetApplicationIDs · 5A SelectApplication (3B AID) · 6F GetFileIDs · F5 GetFileSettings (1B file no) · BD ReadData (file no + 3B offset + 3B length, 0/0=all) · 6C GetValue (1B file no) · BB ReadRecords (file no + 3B record no + 3B count, 0/0=all).</div>
+      <div class="result" id="f_rawResult"></div>
+    </div>
+    <div class="block">
+      <div class="ctl">
+        <button class="small" id="f_dump">Auto-dump real card (unauthenticated)</button>
+      </div>
+      <div class="det">Walks GetApplicationIDs → SelectApplication → GetFileIDs → GetFileSettings → reads whatever's readable without auth. Place the card in the field first.</div>
+      <div class="result" id="f_dumpResult" style="white-space:pre-wrap"></div>
+    </div>
+  </section>
+
+  <!-- ================= EMV ================= -->
+  <section class="tabpanel" id="tab-emv">
+    <div class="card card-amber">
+      <div class="card-label">Note</div>
+      <p>Ported from this fork's <code>emv scan</code> CLI command (<code>chameleon_cli_unit.py</code>), built on the firmware's single-call <code>HF14A_4_EMV_SCAN</code> (6005) — the whole PPSE → SELECT AID → GPO → READ RECORD sequence runs inside one firmware call with the field held continuously, so it doesn't hit the per-call-reselect problem DESFire's generic reader path does. Needs the device in <b>Reader</b> mode (Device tab). Place a contactless EMV card (bank card) on the antenna first.</p>
+    </div>
+    <h2><span class="sec-num">E1</span>Scan card</h2>
+    <div class="block">
+      <div class="ctl">
+        <button class="small" id="e_scan">Scan EMV card</button>
+        <button class="ghost small" id="e_savejson">Save last scan as .json</button>
+      </div>
+      <div class="result" id="e_cardResult" style="white-space:pre-wrap"></div>
+    </div>
+    <h2><span class="sec-num">E2</span>Raw APDU exchange</h2>
+    <div class="block">
+      <div class="result" id="e_apduResult" style="white-space:pre-wrap"></div>
+    </div>
+  </section>
+
+  <!-- ================= SHELL (raw command console) ================= -->
+  <section class="tabpanel" id="tab-shell">
+    <div class="card card-amber">
+      <div class="card-label">Note</div>
+      <p>Sends one raw <code>DATA_CMD_*</code> frame and shows the raw reply. Command accepts a name from <code>fullcmd.js</code>'s <code>CU</code> map (e.g. <code>GET_BATTERY_INFO</code>), a decimal id, or <code>0x</code>-hex. Payload is hex bytes, big-endian per-field as each command documents in <code>data_cmd.h</code> — this sends exactly what you type, with no per-command validation. <kbd>&uarr;</kbd>/<kbd>&darr;</kbd> recall history, <kbd>Enter</kbd> sends.</p>
+    </div>
+    <h2><span class="sec-num">S1</span>Console</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf" style="flex:1 1 220px">Command<input id="sh_cmd" list="sh_cmdlist" placeholder="name, decimal, or 0xHEX" autocomplete="off" spellcheck="false" style="width:100%"></label>
+        <label class="cfgf" style="flex:2 1 320px">Payload (hex)<input id="sh_data" placeholder="optional, e.g. 00 or 0102ff" autocomplete="off" spellcheck="false" style="width:100%"></label>
+        <button id="sh_send">Send</button>
+        <button class="ghost" id="sh_clear">Clear</button>
+      </div>
+      <datalist id="sh_cmdlist"></datalist>
+      <pre class="shell-log" id="sh_log" aria-live="polite"></pre>
+    </div>
+  </section>
+
+  <!-- ================= TERMINAL (full CLI grammar, batch 1) ================= -->
+  <section class="tabpanel" id="tab-terminal">
+    <div class="card card-amber">
+      <div class="card-label">Note</div>
+      <p>Mirrors the real Python CLI's command tree (<code>chameleon_cli_unit.py</code>) with the same group/command/flag names. Batch 1 covers <code>hw</code>, <code>hw slot</code>, <code>hw settings</code>, <code>hf 14a</code>, and <code>hf mf rdbl/wrbl</code>. Everything else (<code>hf mf</code>'s crypto attacks, <code>hf mfu/des/seos/st25ta/mfplus</code>, most of <code>lf</code>, <code>data</code>, <code>emv</code>, <code>standalone</code>) answers with "not ported yet" rather than faking a result. Type <code>help</code> for the live command tree, <kbd>Tab</kbd> to complete, <kbd>&uarr;</kbd>/<kbd>&darr;</kbd> for history.</p>
+    </div>
+    <h2><span class="sec-num">T1</span>Terminal</h2>
+    <div class="block">
+      <div class="term-screen" id="term_screen">
+        <div class="term-out" id="term_out"></div>
+        <div class="term-line"><span class="term-prompt">chameleon&gt; </span><span class="term-typed" id="term_typed"></span><span class="term-cursor" id="term_cursor"></span></div>
+      </div>
+      <input id="term_hidden" class="term-hidden-input" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div class="footer-l">Sec1<span>.dk</span> — Niel Nielsen</div>
+    <div class="footer-r">ChameleonUltra / Full device console</div>
+  </div>
+</footer>
+
+<script src="canary.js?v=17"></script>
+<script src="fullcmd.js?v=9"></script>
+<script src="terminal.js?v=1"></script>
+</body>
+</html>
