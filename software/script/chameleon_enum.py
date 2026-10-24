@@ -61,9 +61,12 @@ class Command(enum.IntEnum):
     GET_SLEEP_TIMEOUT = 1039
     SET_SLEEP_TIMEOUT = 1040
 
-    GET_BOOTLOADER_VERSION = 1041
     GET_DFU_APP_VERSION = 1046
-    GET_FREE_MEMORY = 1042
+
+    # 1041/1042 reserved -- see firmware data_cmd.h (collided with RRG's
+    # long-press-threshold IDs, which the official GUI gates on).
+    GET_BOOTLOADER_VERSION = 1061
+    GET_FREE_MEMORY = 1062
 
     GET_BLE_NAME = 1043
     SET_BLE_NAME = 1044
