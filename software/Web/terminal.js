@@ -240,10 +240,77 @@ hw.command("raw", "Send a raw command (same as this page's Shell tab) -- see `hw
   return lines;
 });
 
+CU.GET_DFU_APP_VERSION = 1046; // only hw status needs this opcode so far
+
+// Mirrors HWStatus (chameleon_cli_unit.py): one-shot summary of already-ported
+// single calls. Link speed/transport name isn't meaningful over this page's
+// Web Bluetooth/Serial transport, so that line is left out.
+hw.command("status", "Show a one-shot summary of connection, firmware and hardware status", [], async () => {
+  need();
+  const model = ["Ultra","Lite"][(okOrThrow(await request(CU.GET_DEVICE_MODEL))).data[0]];
+  const t0 = (performance||Date).now();
+  const fv = okOrThrow(await request(CU.GET_APP_VERSION));
+  const latencyMs = (performance||Date).now() - t0;
+  const gv = okOrThrow(await request(CU.GET_GIT_VERSION));
+  const lines = [" - Device status",
+    "   latency     -> "+latencyMs.toFixed(1)+" ms (round-trip)",
+    "   model       -> Phreakbyte edition ("+model+")",
+    "   firmware    -> v"+fv.data[0]+"."+fv.data[1]+" ("+bytesToUtf8(gv.data)+")"];
+  try{ lines.push("   bootloader  -> "+bhex(okOrThrow(await request(CU.GET_BOOTLOADER_VERSION)).data)); }
+  catch(e){ lines.push("   bootloader  -> not supported by current firmware"); }
+  try{ lines.push("   application -> "+bhex(okOrThrow(await request(CU.GET_DFU_APP_VERSION)).data)); }
+  catch(e){ lines.push("   application -> not supported by current firmware"); }
+  lines.push("   chip ID     -> "+bhex(okOrThrow(await request(CU.GET_DEVICE_CHIP_ID)).data));
+  lines.push("   address     -> "+bhex(okOrThrow(await request(CU.GET_DEVICE_ADDRESS)).data));
+  try{
+    const bn = okOrThrow(await request(CU.GET_BLE_NAME));
+    lines.push("   ble name    -> "+(bn.data.length?bytesToUtf8(bn.data):"(default)"));
+  }catch(e){ lines.push("   ble name    -> not supported by current firmware"); }
+  lines.push("   mode        -> Tag "+((okOrThrow(await request(CU.GET_DEVICE_MODE))).data[0]?"Reader":"Emulator"));
+  try{ lines.push("   active slot -> "+(okOrThrow(await request(CU.GET_ACTIVE_SLOT)).data[0]+1)); }catch(e){}
+  try{
+    const bf = okOrThrow(await request(CU.GET_BATTERY_INFO));
+    const mv=(bf.data[0]<<8)|bf.data[1], pct=bf.data[2];
+    lines.push("   battery     -> "+mv+" mV, "+pct+"%"+(pct<30?" [!] Low battery":""));
+  }catch(e){ lines.push("   battery     -> not supported by current firmware"); }
+  try{
+    const mf = okOrThrow(await request(CU.GET_FREE_MEMORY));
+    const free=(mf.data[0]<<24|mf.data[1]<<16|mf.data[2]<<8|mf.data[3])>>>0;
+    const total=(mf.data[4]<<24|mf.data[5]<<16|mf.data[6]<<8|mf.data[7])>>>0;
+    const used=total-free, pct=total>0?(used/total*100):0;
+    lines.push("   heap        -> "+used.toLocaleString()+"/"+total.toLocaleString()+" bytes used ("+pct.toFixed(1)+"%)");
+  }catch(e){ lines.push("   heap        -> not supported by current firmware"); }
+  return lines;
+});
+
+hw.command("reset", "Reboot the device. Plain restart only -- slots and settings are untouched.", [], async () => {
+  need();
+  try{ await request(CU.RESET_DEVICE); }catch(e){} // device closes the link as part of the reset
+  return [" - Reset successful! Please reconnect."];
+});
+
+hw.command("factory_reset", "Wipe all slot data and custom settings and return to factory settings", [
+  {names:["--force"], takesValue:false, dest:"force"},
+], async (a) => {
+  need();
+  if(!a.force) return ["If you are you really sure, read the command documentation to see how to proceed."];
+  try{ await request(CU.WIPE_FDS); }catch(e){} // device closes the link as part of the wipe
+  return [" - Reset successful! Please reconnect."];
+});
+
+hw.command("dfu", "Restart application to bootloader/DFU mode", [], async () => {
+  need();
+  try{ await request(CU.ENTER_BOOTLOADER); }catch(e){} // device closes the port entering DFU
+  return ["Application restarting...", " - Enter success @.@~"];
+});
+
+hw.command("flash", "(not ported to this terminal yet -- needs a local .zip/.hex/.bin file; this terminal has no filesystem)", [], notPorted("hw flash").run);
+
 /* ---- hw slot ---- */
 const hwSlot = hw.subgroup("slot", "Emulation slots commands");
 
 function slotFlag(required){ return {names:["-s","--slot"], takesValue:true, dest:"slot", required: !!required}; }
+const PRNG_TYPE_NAMES = {0:"Static", 1:"Weak", 2:"Hard"}; // MifareClassicPrngType (chameleon_enum.py)
 function senseFlags(){ return [
   {names:["--hf"], takesValue:false, dest:"hf"},
   {names:["--lf"], takesValue:false, dest:"lf"},
@@ -334,6 +401,50 @@ hwSlot.command("nick", "Get/Set/Delete tag nick name for slot", [slotFlag(false)
   }
 });
 
+hwSlot.command("init", "Set emulation tag data to default", [slotFlag(false), {names:["-t","--type"], takesValue:true, dest:"type", required:true, choices:Object.keys(TAG_TYPE_BY_NAME)}], async (a) => {
+  need();
+  const typeId = TAG_TYPE_BY_NAME[a.type];
+  const slot = a.slot !== undefined ? Number(a.slot) : await currentSlot1();
+  okOrThrow(await request(CU.SET_SLOT_DATA_DEFAULT, [slot-1, ...u16be(typeId)]));
+  return [" - Set slot tag data init success."];
+});
+
+hwSlot.command("store", "Store slots config & data to device flash", [], async () => {
+  need();
+  okOrThrow(await request(CU.SLOT_DATA_CONFIG_SAVE));
+  return [" - Store slots config and data from device memory to flash success."];
+});
+
+hwSlot.command("prng", "Get or set the PRNG type for the MF1 emulator of a slot (0=Static, 1=Weak, 2=Hard)", [slotFlag(false), {names:["-t","--type"], takesValue:true, dest:"type", choices:["0","1","2"]}], async (a) => {
+  need();
+  return withSlot(a.slot, async (slot) => {
+    if(a.type === undefined){
+      const f = okOrThrow(await request(CU.MF1_GET_PRNG_TYPE));
+      return [" - Slot "+slot+" PRNG type: "+PRNG_TYPE_NAMES[f.data[0]]+" ("+f.data[0]+")"];
+    }
+    okOrThrow(await request(CU.MF1_SET_PRNG_TYPE, [Number(a.type)]));
+    return [" - Slot "+slot+" PRNG type set to: "+PRNG_TYPE_NAMES[Number(a.type)]+" ("+a.type+")"];
+  });
+});
+
+hwSlot.command("openall", "Open all slots and set to default data", [], async () => {
+  need();
+  const lines = [];
+  for(let s=0;s<8;s++){
+    lines.push(" Slot "+(s+1)+" setting...");
+    okOrThrow(await request(CU.SET_SLOT_TAG_TYPE, [s, ...u16be(TAG_TYPE_BY_NAME.MIFARE_1024)]));
+    okOrThrow(await request(CU.SET_SLOT_TAG_TYPE, [s, ...u16be(TAG_TYPE_BY_NAME.EM410X)]));
+    okOrThrow(await request(CU.SET_SLOT_DATA_DEFAULT, [s, ...u16be(TAG_TYPE_BY_NAME.MIFARE_1024)]));
+    okOrThrow(await request(CU.SET_SLOT_DATA_DEFAULT, [s, ...u16be(TAG_TYPE_BY_NAME.EM410X)]));
+    okOrThrow(await request(CU.SET_SLOT_ENABLE, [s, 1, 1])); // HF
+    okOrThrow(await request(CU.SET_SLOT_ENABLE, [s, 2, 1])); // LF
+    lines.push(" Slot "+(s+1)+" setting done.");
+  }
+  okOrThrow(await request(CU.SLOT_DATA_CONFIG_SAVE));
+  lines.push(" - Succeeded opening all slots and setting data to default.");
+  return lines;
+});
+
 /* ---- hw settings ---- */
 const hwSettings = hw.subgroup("settings", "Chameleon settings commands");
 
@@ -400,15 +511,269 @@ hwSettings.command("btnpress", "Get or set button press function of Button A and
   return ["Button "+(a.a?"A":"B")+" ("+(isLong?"long":"short")+" press): "+name];
 });
 
+hwSettings.command("blekey", "Get or set the ble connect key", [
+  {names:["-k","--key"], takesValue:true, dest:"key"},
+], async (a) => {
+  need();
+  const cur = okOrThrow(await request(CU.GET_BLE_PAIRING_KEY));
+  const lines = [" - The current key of the device(ascii): "+bytesToUtf8(cur.data)];
+  if(a.key !== undefined){
+    if(a.key.length !== 6){ lines.push(" - The ble connect key length must be 6"); return lines; }
+    if(!/^[0-9]{6}$/.test(a.key)){ lines.push(" - Only 6 ASCII characters from 0 to 9 are supported."); return lines; }
+    okOrThrow(await request(CU.SET_BLE_PAIRING_KEY, utf8Bytes(a.key)));
+    lines.push(" - Successfully set ble connect key to : "+a.key, "Do not forget to store your settings in flash!");
+  }
+  return lines;
+});
+
+hwSettings.command("blepair", "Show or configure BLE pairing", [
+  {names:["-e","--enable"], takesValue:false, dest:"enable"},
+  {names:["-d","--disable"], takesValue:false, dest:"disable"},
+], async (a) => {
+  need();
+  if(a.enable && a.disable) throw new ArgError("-e/--enable and -d/--disable are mutually exclusive");
+  const cur = okOrThrow(await request(CU.GET_BLE_PAIRING_ENABLE)).data[0];
+  if(!a.enable && !a.disable) return [" - BLE pairing: "+(cur?"Enabled":"Disabled")];
+  if(a.enable){
+    if(cur) return ["BLE pairing is already enabled."];
+    okOrThrow(await request(CU.SET_BLE_PAIRING_ENABLE, [1]));
+    return [" - Successfully change ble pairing to Enabled.", "Do not forget to store your settings in flash!"];
+  }
+  if(!cur) return ["BLE pairing is already disabled."];
+  okOrThrow(await request(CU.SET_BLE_PAIRING_ENABLE, [0]));
+  return [" - Successfully change ble pairing to Disabled.", "Do not forget to store your settings in flash!"];
+});
+
+hwSettings.command("blename", "Get or set the BLE advertised name (max 20 chars). Pass an empty string to reset to the firmware default.", [
+  {names:["-n","--name"], takesValue:true, dest:"name"},
+], async (a) => {
+  need();
+  const cur = okOrThrow(await request(CU.GET_BLE_NAME));
+  const lines = [" - The current BLE name of the device: "+(cur.data.length?bytesToUtf8(cur.data):"(default)")];
+  if(a.name !== undefined){
+    if(a.name.length > 20){ lines.push(" - The BLE name must be at most 20 characters"); return lines; }
+    okOrThrow(await request(CU.SET_BLE_NAME, utf8Bytes(a.name)));
+    lines.push(" - Successfully set BLE name to: "+(a.name||"(default)"),
+      "Do not forget to store your settings in flash!",
+      "You may need to reconnect/rescan for the new name to show up.");
+  }
+  return lines;
+});
+
+hwSettings.command("store", "Store current settings to flash", [], async () => {
+  need();
+  okOrThrow(await request(CU.SAVE_SETTINGS));
+  return ["Storing settings...", " - Store success @.@~"];
+});
+
+hwSettings.command("reset", "Reset settings to default values", [
+  {names:["--force"], takesValue:false, dest:"force"},
+], async (a) => {
+  need();
+  if(!a.force) return ["If you are you really sure, read the command documentation to see how to proceed."];
+  okOrThrow(await request(CU.RESET_SETTINGS));
+  return ["Initializing settings...", " - Reset success @.@~"];
+});
+
+/* ---- hw bl ---- */
+const hwBl = hw.subgroup("bl", "Bootloader update through the running firmware");
+
+// Mirrors HWBlInfo (cli_hw_bl.py) -- the Python CLI only decodes the leading
+// 28-byte MBR/UICR header plus (if present) a 96-byte ACL block, NOT the
+// trailing bl_info_t identity block this page's own Device tab (D8) also
+// shows -- that's a GUI-only extra, kept out here to match the real CLI.
+hwBl.command("info", "Read-only bootloader-forwarding snapshot: where the MBR boots from (UICR NRFFW / MBR flash words), REGOUT0, and the vector table at 0xF3000. Does not write anything.", [], async () => {
+  need();
+  const f = await request(CU.BL_INFO);
+  if(f.status !== 0x68 || !f.data || f.data.length < 28) return [" - bl info not supported by this app build (reflash the app)"];
+  const d = f.data;
+  const u32 = o => ((d[o] | d[o+1]<<8 | d[o+2]<<16 | d[o+3]<<24) >>> 0);
+  const [nrffw0, nrffw1, mbrBl, mbrPp, regout0, sp, rst] = [u32(0),u32(4),u32(8),u32(12),u32(16),u32(20),u32(24)];
+  const a = x => x===0xFFFFFFFF ? "blank" : "0x"+x.toString(16).padStart(8,"0").toUpperCase();
+  const VOUT = {0:"1.8V",1:"2.1V",2:"2.4V",3:"2.7V",4:"3.0V",5:"3.3V",7:"default 1.8V"};
+  const lines = [
+    " UICR NRFFW[0] bootloader addr : "+a(nrffw0),
+    " UICR NRFFW[1] MBR param page  : "+a(nrffw1),
+    " MBR flash 0xFF8 (bl addr)     : "+a(mbrBl),
+    " MBR flash 0xFFC (param page)  : "+a(mbrPp),
+  ];
+  const rv = regout0===0xFFFFFFFF ? 7 : (regout0 & 7);
+  lines.push(" UICR REGOUT0                  : "+a(regout0)+"  (VOUT "+(VOUT[rv]||rv)+")");
+  lines.push(" Vector @0xF3000  SP / reset   : 0x"+sp.toString(16).padStart(8,"0").toUpperCase()+" / 0x"+rst.toString(16).padStart(8,"0").toUpperCase());
+  const boot = nrffw0!==0xFFFFFFFF ? nrffw0 : (mbrBl!==0xFFFFFFFF ? mbrBl : null);
+  if(boot===null){
+    lines.push(" - MBR has no bootloader address: it boots the SoftDevice/app directly,");
+    lines.push("   so a bootloader at 0xF3000 is never entered via MBR forwarding.");
+  } else {
+    lines.push(" - MBR boots the bootloader at "+a(boot)+(boot===0xF3000?"  (matches 0xF3000)":"  (NOT 0xF3000)"));
+  }
+  if(d.length >= 7*4 + 8*3*4){
+    lines.push(" ACL regions (flash write/erase lock):");
+    let any=false, blocksBl=false;
+    for(let i=0;i<8;i++){
+      const o = 28 + i*12;
+      const addr=u32(o), size=u32(o+4), perm=u32(o+8);
+      if(size===0) continue;
+      any = true;
+      const w = (perm>>1)&1 ? "WRITE-BLOCKED" : "write-ok";
+      const r = (perm>>2)&1 ? "read-blocked" : "read-ok";
+      const covers = addr <= 0xF3000 && 0xF3000 < addr+size;
+      if(covers && ((perm>>1)&1)) blocksBl = true;
+      lines.push("   ["+i+"] 0x"+addr.toString(16).padStart(8,"0").toUpperCase()+" +0x"+size.toString(16)+"  "+w+", "+r+(covers?"  <-- covers 0xF3000":""));
+    }
+    if(!any) lines.push("   (none set)");
+    if(blocksBl){
+      lines.push(" - 0xF3000 is ACL write-locked: no app-side write (raw NVMC or COPY_BL)");
+      lines.push("   can change the bootloader. ACL is re-applied every boot and clears");
+      lines.push("   only on reset, so this needs SWD or the bootloader's own update path.");
+    }
+  }
+  return lines;
+});
+hwBl.command("push", "(not ported to this terminal yet -- needs a local .hex/.bin file; this terminal has no filesystem, and this write bypasses the MBR with no power-loss safety net)", [], notPorted("hw bl push").run);
+
+/* ---- hw fds ---- */
+const hwFds = hw.subgroup("fds", "Inspect the device FDS flash store");
+
+function fdsKind(fileId, key){
+  if(fileId === 0x1000) return "emulation config";
+  if(fileId === 0x1001) return "settings";
+  if(fileId === 0x1010) return "standalone modes";
+  if(fileId >= 0x1100 && fileId <= 0x1107) return "slot "+(fileId-0x1100+1)+" ("+({1:"LF",2:"HF"}[key]||"?")+") tag dump";
+  if(fileId >= 0x1200 && fileId <= 0x1207) return "slot "+(fileId-0x1200+1)+" ("+({1:"LF",2:"HF"}[key]||"?")+") nickname";
+  if(fileId >= 0xC000) return "BLE bond (peer manager)";
+  return "";
+}
+
+hwFds.command("ls", "List FDS records: file_id, key, size and kind.", [], async () => {
+  need();
+  const f = okOrThrow(await request(CU.FDS_LIST));
+  const recs = [];
+  for(let i=0;i+5<f.data.length;i+=6){
+    recs.push({fileId:(f.data[i]<<8)|f.data[i+1], key:(f.data[i+2]<<8)|f.data[i+3], len:(f.data[i+4]<<8)|f.data[i+5]});
+  }
+  if(!recs.length) return [" - No FDS records."];
+  recs.sort((x,y)=> x.fileId-y.fileId || x.key-y.key);
+  const total = recs.reduce((s,r)=>s+r.len,0);
+  const lines = [" - "+recs.length+" record(s), "+total+" bytes", "   file_id  key     size  kind"];
+  for(const r of recs){
+    lines.push("   0x"+r.fileId.toString(16).padStart(4,"0").toUpperCase()+"   0x"+r.key.toString(16).padStart(4,"0").toUpperCase()+"  "+String(r.len).padStart(5)+"  "+fdsKind(r.fileId,r.key));
+  }
+  return lines;
+});
+
+hwFds.command("dump", "Hex-dump one FDS record by file_id and key.", [
+  {names:["-f","--file-id"], takesValue:true, dest:"fileId", required:true},
+  {names:["-k","--key"], takesValue:true, dest:"key"},
+], async (a) => {
+  need();
+  const fileId = parseInt(a.fileId, a.fileId.toLowerCase().startsWith("0x") ? 16 : 10);
+  const key = a.key !== undefined ? parseInt(a.key, a.key.toLowerCase().startsWith("0x") ? 16 : 10) : 1;
+  const fileIdB = [(fileId>>8)&0xFF, fileId&0xFF], keyB = [(key>>8)&0xFF, key&0xFF];
+  const CHUNK = 240;
+  let offset=0, bytes=[], guard=0;
+  while(guard++ < 64){
+    const f = await request(CU.FDS_READ, [...fileIdB, ...keyB, ...u16be(offset), ...u16be(CHUNK)]);
+    if(!OK_STATUSES.has(f.status)){
+      if(offset===0) return [" - No record for file 0x"+fileId.toString(16).padStart(4,"0").toUpperCase()+" key 0x"+key.toString(16).padStart(4,"0").toUpperCase()+"."];
+      break;
+    }
+    if(f.data.length===0) break;
+    bytes.push(...f.data);
+    offset += f.data.length;
+    if(f.data.length < CHUNK) break;
+  }
+  if(!bytes.length) return [" - Record is empty."];
+  const lines = [" - file 0x"+fileId.toString(16).padStart(4,"0").toUpperCase()+" key 0x"+key.toString(16).padStart(4,"0").toUpperCase()+" ("+fdsKind(fileId,key)+"): "+bytes.length+" bytes"];
+  for(let off=0; off<bytes.length; off+=16){
+    const chunk = bytes.slice(off, off+16);
+    const hexs = chunk.map(b=>b.toString(16).padStart(2,"0")).join(" ");
+    const text = chunk.map(b => (b>=0x20&&b<0x7F) ? String.fromCharCode(b) : ".").join("");
+    lines.push("   "+off.toString(16).padStart(4,"0")+"  "+hexs.padEnd(47)+"  "+text);
+  }
+  return lines;
+});
+
+/* ---- hw log ---- */
+const hwLog = hw.subgroup("log", "Persistent debug log (kept in flash, readable as LOG.TXT in UF2 mode)");
+const LOG_LEVELS = ["off","error","warning","info","debug"];
+
+async function logStatus(){
+  const f = okOrThrow(await request(CU.LOG_GET_STATUS));
+  const d = f.data, u32 = o => (d[o]<<24|d[o+1]<<16|d[o+2]<<8|d[o+3])>>>0;
+  return {level:d[0], failed:d[1], pages:d[2], stored:u32(4), pending:u32(8), dropped:u32(12), boots:u32(16), err:u32(20)};
+}
+
+hwLog.command("status", "Show debug log level and storage", [], async () => {
+  need();
+  const st = await logStatus();
+  const lines = [
+    " - Level   : "+st.level+" ("+LOG_LEVELS[st.level]+")",
+    " - Stored  : "+st.stored.toLocaleString()+" bytes in flash ("+st.pages+" pages)",
+    " - Pending : "+st.pending.toLocaleString()+" bytes in RAM, not yet in flash",
+    " - Dropped : "+st.dropped.toLocaleString()+" bytes (RAM buffer was full)",
+    " - Boots   : "+st.boots,
+  ];
+  if(st.failed){
+    lines.push(" - Flash writes FAILED, logging to RAM only until reboot");
+    if(st.err) lines.push(" - Error   : stage "+(st.err>>>24)+" (1 call, 2 event, 3 init), op "+((st.err>>>16)&0xFF)+" (1 erase, 2 hdr, 3 data, 4 clear), code 0x"+(st.err&0xFFFF).toString(16).padStart(4,"0"));
+  }
+  return lines;
+});
+
+hwLog.command("level", "Get or set the debug log level (persisted)", [
+  {positional:true, dest:"level", optional:true},
+], async (a) => {
+  need();
+  let level;
+  if(!a.level || !a.level.length){ level = (await logStatus()).level; }
+  else {
+    const arg = a.level[0];
+    level = LOG_LEVELS.includes(arg) ? LOG_LEVELS.indexOf(arg) : Number(arg);
+    if(!(level>=0 && level<=4)) throw new ArgError("level must be off/error/warning/info/debug (0-4)");
+    okOrThrow(await request(CU.LOG_SET_LEVEL, [level]));
+  }
+  return [" - Log level: "+level+" ("+LOG_LEVELS[level]+")"];
+});
+
+hwLog.command("dump", "Read the stored debug log", [], async () => {
+  need();
+  await logStatus(); // asks the device to flush its RAM tail
+  const total = (await logStatus()).stored;
+  const CHUNK = 480;
+  let offset=0, text="";
+  while(offset < total){
+    const f = okOrThrow(await request(CU.LOG_READ, [...u32be(offset), ...u16be(Math.min(CHUNK, total-offset))]));
+    if(!f.data.length) break;
+    text += bytesToUtf8(f.data);
+    offset += f.data.length;
+  }
+  if(offset===0) return [" - Log is empty (is the level above 0?)"];
+  return text.split("\n");
+});
+
+hwLog.command("clear", "Erase the stored debug log", [], async () => {
+  need();
+  okOrThrow(await request(CU.LOG_CLEAR));
+  return [" - Log clear requested"];
+});
+
+hwLog.command("stream", "(not ported to this terminal yet -- the real CLI's Ctrl-C/Enter-to-stop live poll doesn't map onto this terminal's synchronous command model; use `hw log dump` to fetch what's stored)", [], notPorted("hw log stream").run);
+
+/* ---- hw u2f ---- */
+hw.subgroup("u2f", "Provision the U2F standalone mode").command("set-attestation",
+  "(not ported to this terminal yet -- needs a local PEM/DER key+cert file and a crypto library this terminal doesn't have)",
+  [], notPorted("hw u2f set-attestation").run);
+
 /* ================= hf ================= */
 const hf = ROOT.subgroup("hf", "High Frequency commands");
 const hf14a = hf.subgroup("14a", "ISO14443-a commands");
 const hfMf  = hf.subgroup("mf", "MIFARE Classic commands");
 hf.subgroup("mfu", "MIFARE Ultralight / NTAG commands").command("*", null, [], notPorted("hf mfu").run);
 const hfDes = hf.subgroup("des", "MIFARE DESFire commands");
-hf.subgroup("seos", "SEOS commands");
-hf.subgroup("st25ta", "ST25TA (NFC Forum Type 4) commands");
-hf.subgroup("mfplus", "MIFARE Plus SL3 (AES) commands");
+hf.subgroup("seos", "SEOS commands").command("*", null, [], notPorted("hf seos").run);
+hf.subgroup("st25ta", "ST25TA (NFC Forum Type 4) commands").command("*", null, [], notPorted("hf st25ta").run);
+hf.subgroup("mfplus", "MIFARE Plus SL3 (AES) commands").command("*", null, [], notPorted("hf mfplus").run);
 
 // one tag: uid_len(1) uid(uid_len) atqa(2) sak(1) ats_len(1) ats(ats_len) --
 // uid is exactly uid_len bytes on the wire, NOT padded (app_cmd.c
@@ -684,6 +1049,12 @@ hfMf.command("value", "Mifare Classic value block commands (--get/--set/--inc/--
   if(!OK_STATUSES.has(f.status)) return [" - "+label+" fail."];
   return [" - "+label+" done.", ...(await getValue(dstBlk, dstType, dstKey))];
 });
+
+// Catch-all for everything else under `hf mf` (dump/sim/nested/hardnested/
+// darkside/autopwn/clone/gen3*/gdm*/e*/c* -- magic-card and crypto-attack
+// flows this JS terminal doesn't implement). Added after rdbl/wrbl/fchk/
+// value so it only catches names those four don't already own.
+hfMf.command("*", null, [], notPorted("hf mf").run);
 
 /* ================= hf des ================= */
 // Reuses fullcmd.js's already-tested DESFire/EMV plumbing directly (same
@@ -992,7 +1363,9 @@ function emvPanLuhn(panHex){
   return total % 10 === 0;
 }
 
-emv.command("scan", "Full EMV contactless card scan (PPSE/SELECT AID/GPO/READ RECORD) in one firmware call -- like PM3 'emv scan -at'", [], async () => {
+emv.command("scan", "Full EMV contactless card scan (PPSE/SELECT AID/GPO/READ RECORD) in one firmware call -- like PM3 'emv scan -at' (-f/--file JSON output not ported -- no filesystem here)", [
+  {names:["-s","--slot"], takesValue:true, dest:"slot"},
+], async (a) => {
   need();
   const f = await request(CU.HF14A_4_EMV_SCAN);
   if(f.status !== 0x00 || !f.data.length) return [" [!] No card found or scan failed (status="+stname(f.status)+")"];
@@ -1090,6 +1463,31 @@ emv.command("scan", "Full EMV contactless card scan (PPSE/SELECT AID/GPO/READ RE
       if(name) out.push(" Cardholder    : "+name);
     }
   }
+
+  // -s/--slot (EMVScan.on_exec, chameleon_cli_unit.py): load the just-scanned
+  // card straight into an emulation slot. Uses the in-memory uid/atqa/sak/ats
+  // and full (cmd,resp) pairs already captured above -- no filesystem needed,
+  // unlike -f/--file (PM3 JSON), which stays unported here for that reason.
+  if(a.slot !== undefined){
+    const slot = Number(a.slot);
+    if(!(slot>=1 && slot<=8)) throw new ArgError("--slot must be 1-8");
+    out.push("", " Loading into slot "+slot+"...");
+    try{
+      okOrThrow(await request(CU.SET_SLOT_TAG_TYPE, [slot-1, ...u16be(TAG_TYPE_BY_NAME.HF14A_4)]));
+      okOrThrow(await request(CU.SET_SLOT_DATA_DEFAULT, [slot-1, ...u16be(TAG_TYPE_BY_NAME.HF14A_4)]));
+      okOrThrow(await request(CU.SET_SLOT_ENABLE, [slot-1, 1, 1])); // 1 = HF
+      okOrThrow(await request(CU.HF14A_4_SET_ANTI_COLL, [uid.length, ...uid, ...atqa, sak, ats.length, ...ats]));
+      okOrThrow(await request(CU.HF14A_4_STATIC_RESP, [0])); // clear existing
+      for(const [c, r] of pairs){ // full exchange, original SW -- matches as-captured
+        okOrThrow(await request(CU.HF14A_4_STATIC_RESP, [c.length, ...c, ...u16be(r.length), ...r]));
+      }
+      okOrThrow(await request(CU.SLOT_DATA_CONFIG_SAVE));
+      out.push(" Slot "+slot+" ready. Run: hw slot change -s "+slot+" && hw mode -e");
+    }catch(e){
+      out.push(" Slot load failed: "+e.message);
+    }
+  }
+
   return out;
 });
 
@@ -1186,6 +1584,34 @@ lfEm410x.command("write", "Write em410x id to t55xx", [
   return [" - EM410x ID write sent: "+idHex+" (verify with `lf em 410x read`)"];
 });
 
+// *_econfig commands (cli_lf.py) get/set the emulated card id held in the
+// active slot's emulator memory -- distinct from the T55xx write commands
+// above, which target a physical tag. Several of them warn when the active
+// slot's own LF tag type doesn't match; this reads GET_SLOT_INFO the same
+// way `hw slot list` does (8 slots * {hf u16, lf u16}, big-endian).
+async function lfSlotTypeWarnIfNot(expectedName){
+  const info = okOrThrow(await request(CU.GET_SLOT_INFO));
+  const active = await currentSlot1();
+  const off = (active-1)*4;
+  const lfType = (info.data[off+2]<<8)|info.data[off+3];
+  if(lfType !== TAG_TYPE_BY_NAME[expectedName]) return "WARNING: Slot type not set to "+expectedName+".";
+  return null;
+}
+
+lfEm410x.command("econfig", "Set/get the emulated em410x card id (in the active slot)", [
+  {names:["--id"], takesValue:true, dest:"id"},
+], async (a) => {
+  need();
+  if(a.id !== undefined){
+    const id = hexBytes(a.id);
+    if(id.length!==5 && id.length!==13) throw new ArgError("id must be 10 hex chars (5 bytes) or 26 hex chars (13 bytes, Electra)");
+    okOrThrow(await request(CU.EM410X_SET_EMU_ID, id));
+    return [" - Set em410x tag id success."];
+  }
+  const f = okOrThrow(await request(CU.EM410X_GET_EMU_ID));
+  return [" - Get em410x tag id success.", "ID: "+bhex(f.data)];
+});
+
 const lfHid = lf.subgroup("hid", "HID commands");
 const lfHidProx = lfHid.subgroup("prox", "HID Prox commands");
 
@@ -1228,6 +1654,38 @@ lfHidProx.command("write", "Write hidprox card data to t55xx", [
   if(il>0) lines.push(" IL: "+il);
   if(oem>0) lines.push(" OEM: "+oem);
   lines.push(" CN: "+cn, "write done.");
+  return lines;
+});
+
+lfHidProx.command("econfig", "Set/get the emulated hidprox card id (in the active slot)", [
+  {names:["-f","--format"], takesValue:true, dest:"format", choices:Object.keys(HID_FORMAT_BY_NAME)},
+  {names:["--fc"], takesValue:true, dest:"fc"},
+  {names:["--cn"], takesValue:true, dest:"cn"},
+  {names:["--il"], takesValue:true, dest:"il"},
+  {names:["--oem"], takesValue:true, dest:"oem"},
+], async (a) => {
+  need();
+  if(a.cn !== undefined){
+    const warn = await lfSlotTypeWarnIfNot("HIDProx");
+    const lines = warn ? [warn] : [];
+    const format = a.format ? HID_FORMAT_BY_NAME[a.format] : HID_FORMAT_BY_NAME.H10301;
+    const fc = a.fc!==undefined ? Number(a.fc) : 0, il = a.il!==undefined ? Number(a.il) : 0, oem = a.oem!==undefined ? Number(a.oem) : 0;
+    const cn = Number(a.cn), cnHi = Math.floor(cn / 0x100000000), cnLo = cn >>> 0;
+    const id = [format, ...u32be(fc), cnHi&0xFF, ...u32be(cnLo), il&0xFF, (oem>>8)&0xFF, oem&0xFF];
+    okOrThrow(await request(CU.HIDPROX_SET_EMU_ID, id));
+    lines.push(" - SET hidprox tag id success.");
+    return lines;
+  }
+  const f = okOrThrow(await request(CU.HIDPROX_GET_EMU_ID));
+  const d = f.data;
+  const [format, fc, cn1, cn2, il, oem] = [d[0], (d[1]<<24|d[2]<<16|d[3]<<8|d[4])>>>0, d[5],
+    (d[6]<<24|d[7]<<16|d[8]<<8|d[9])>>>0, d[10], (d[11]<<8|d[12])];
+  const cn = cn1*0x100000000 + cn2;
+  const lines = [" - GET hidprox tag id success.", "HIDProx/"+(HID_FORMAT_BY_VALUE[format]||format)];
+  if(fc>0) lines.push(" FC: "+fc);
+  if(il>0) lines.push(" IL: "+il);
+  if(oem>0) lines.push(" OEM: "+oem);
+  lines.push(" CN: "+cn);
   return lines;
 });
 
@@ -1335,6 +1793,21 @@ lfViking.command("write", "Write Viking id to t55xx", [
   return [" - Viking ID(8H): "+a.id+" write done."];
 });
 
+lfViking.command("econfig", "Set/get the emulated Viking card id (in the active slot)", [
+  {names:["--id"], takesValue:true, dest:"id"},
+], async (a) => {
+  need();
+  if(a.id !== undefined){
+    const warn = await lfSlotTypeWarnIfNot("Viking");
+    const id = hexBytes(a.id,4);
+    if(id.length!==4) throw new ArgError("id must be 8 hex chars (4 bytes)");
+    okOrThrow(await request(CU.VIKING_SET_EMU_ID, id));
+    return [...(warn?[warn]:[]), " - Set Viking tag id success."];
+  }
+  const f = okOrThrow(await request(CU.VIKING_GET_EMU_ID));
+  return [" - Get Viking tag id success.", "ID: "+bhex(f.data).toUpperCase()];
+});
+
 const lfPac = lf.subgroup("pac", "PAC/Stanley commands");
 lfPac.command("read", "Scan PAC/Stanley tag and print card ID", [], async () => {
   await needReader();
@@ -1353,6 +1826,24 @@ lfPac.command("write", "Write PAC/Stanley id to T55xx (--cn only here; --raw bit
   if(id.some(b => b>0x7F)) throw new ArgError("PAC card IDs are 7-bit only (each byte must be 0x00-0x7F)");
   okOrThrow(await request(CU.PAC_WRITE_TO_T55XX, t55xxPayload(id)));
   return [" - PAC/Stanley write done - CN: "+a.cn+" | Raw: "+bhex(pacEncodeRaw(id)).toUpperCase()];
+});
+
+lfPac.command("econfig", "Set/get the emulated PAC/Stanley card id (in the active slot; --cn only here, same as `lf pac write` -- --raw bitstream decode not ported)", [
+  {names:["--cn"], takesValue:true, dest:"cn"},
+], async (a) => {
+  need();
+  if(a.cn !== undefined){
+    if(a.cn.length!==8) throw new ArgError("Card number must be exactly 8 characters");
+    const id = Array.from(a.cn, c => c.charCodeAt(0));
+    if(id.some(b => b>0x7F)) throw new ArgError("PAC card IDs are 7-bit only (each byte must be 0x00-0x7F)");
+    const warn = await lfSlotTypeWarnIfNot("PAC");
+    okOrThrow(await request(CU.PAC_SET_EMU_ID, id));
+    return [...(warn?[warn]:[]), " - Set PAC/Stanley tag id success."];
+  }
+  const f = okOrThrow(await request(CU.PAC_GET_EMU_ID));
+  const id = f.data;
+  const ascii = Array.from(id).map(b => (b>=0x20&&b<0x7F) ? String.fromCharCode(b) : ".").join("");
+  return [" - Get PAC/Stanley tag id success.", "CN: "+ascii+" | Raw: "+bhex(pacEncodeRaw(id)).toUpperCase()];
 });
 
 const lfJablotron = lf.subgroup("jablotron", "Jablotron commands");
@@ -1374,6 +1865,21 @@ lfJablotron.command("write", "Write Jablotron id to t55xx", [
   if(id.length!==5) throw new ArgError("id must be 10 hex chars (5 bytes)");
   okOrThrow(await request(CU.JABLOTRON_WRITE_TO_T55XX, t55xxPayload(id)));
   return [" - Jablotron ID: "+a.id.toUpperCase()+" write done."];
+});
+
+lfJablotron.command("econfig", "Set/get the emulated Jablotron card id (in the active slot)", [
+  {names:["--id"], takesValue:true, dest:"id"},
+], async (a) => {
+  need();
+  if(a.id !== undefined){
+    const warn = await lfSlotTypeWarnIfNot("Jablotron");
+    const id = hexBytes(a.id,5);
+    if(id.length!==5) throw new ArgError("id must be 10 hex chars (5 bytes)");
+    okOrThrow(await request(CU.JABLOTRON_SET_EMU_ID, id));
+    return [...(warn?[warn]:[]), " - Set Jablotron tag id success."];
+  }
+  const f = okOrThrow(await request(CU.JABLOTRON_GET_EMU_ID));
+  return [" - Get Jablotron tag id success.", "ID: "+bhex(f.data).toUpperCase(), "Card: "+jablotronCardId(f.data)];
 });
 
 const lfIndala = lf.subgroup("indala", "Indala commands");
@@ -1406,6 +1912,34 @@ lfIndala.command("write", "Clone Indala tag to T55XX (use -r <hex>, or --fc <n> 
   okOrThrow(await request(CU.INDALA_WRITE_TO_T55XX, t55xxPayload(raw)));
   const [fc,cn] = indalaDecodeRaw(raw);
   return [...indalaLines(raw,fc,cn), " Write done. Verify with 'lf indala read'."];
+});
+
+lfIndala.command("econfig", "Get or set the Indala emulated frame on a slot (-r <hex>, or --fc/--cn)", [
+  {names:["-r","--raw"], takesValue:true, dest:"raw"},
+  {names:["--fc"], takesValue:true, dest:"fc"},
+  {names:["--cn"], takesValue:true, dest:"cn"},
+], async (a) => {
+  need();
+  if(a.raw!==undefined || a.fc!==undefined || a.cn!==undefined){
+    let raw;
+    if(a.raw!==undefined){
+      if(a.fc!==undefined || a.cn!==undefined) throw new ArgError("-r/--raw and --fc/--cn are mutually exclusive");
+      raw = hexBytes(a.raw,8);
+      if(raw.length!==8) throw new ArgError("Raw 64-bit frame must be 16 hex chars");
+    } else {
+      if(a.fc===undefined || a.cn===undefined) throw new ArgError("--fc and --cn must be used together");
+      const fc=Number(a.fc), cn=Number(a.cn);
+      if(fc<0||fc>255) throw new ArgError("FC must be 0-255");
+      if(cn<0||cn>65535) throw new ArgError("CN must be 0-65535");
+      raw = indalaEncodeRaw(fc,cn);
+    }
+    const warn = await lfSlotTypeWarnIfNot("Indala");
+    okOrThrow(await request(CU.INDALA_SET_EMU_ID, raw));
+    return [...(warn?[warn]:[]), " - Indala emu frame set to "+bhex(raw).toUpperCase()+"."];
+  }
+  const f = okOrThrow(await request(CU.INDALA_GET_EMU_ID));
+  const [fc,cn] = indalaDecodeRaw(f.data);
+  return [" - Get Indala emu frame success.", ...indalaLines(f.data,fc,cn)];
 });
 
 const lfIoprox = lf.subgroup("ioprox", "ioProx commands");
@@ -1448,6 +1982,40 @@ lfIoprox.command("write", "Write ioProx card data to t55xx", [
     "Write done.",
   ];
 });
+
+lfIoprox.command("econfig", "Set/get emulated ioProx card id (in the active slot)", [
+  {names:["--ver"], takesValue:true, dest:"ver"},
+  {names:["--fc"], takesValue:true, dest:"fc"},
+  {names:["--cn"], takesValue:true, dest:"cn"},
+  {names:["--raw8"], takesValue:true, dest:"raw8"},
+], async (a) => {
+  need();
+  const doSet = a.cn!==undefined || a.raw8!==undefined || a.fc!==undefined || a.ver!==undefined;
+  if(doSet){
+    const warn = await lfSlotTypeWarnIfNot("ioProx");
+    let ver = a.ver!==undefined?Number(a.ver):1, fc = a.fc!==undefined?Number(a.fc):0, cn = a.cn!==undefined?Number(a.cn):0, raw8;
+    if(a.raw8!==undefined){
+      const rawIn = hexBytes(a.raw8,8);
+      if(rawIn.length!==8) throw new ArgError("raw8 must be 16 hex chars (8 bytes)");
+      const resp = okOrThrow(await request(CU.IOPROX_DECODE_RAW, rawIn));
+      ver=resp.data[0]; fc=resp.data[1]; cn=(resp.data[2]<<8)|resp.data[3]; raw8=resp.data.slice(4,12);
+    } else {
+      const resp = okOrThrow(await request(CU.IOPROX_COMPOSE_ID, [ver, fc, ...u16be(cn)]));
+      raw8 = resp.data.slice(4,12);
+    }
+    const payload16 = [ver, fc, ...u16be(cn), ...raw8, 0,0,0,0];
+    okOrThrow(await request(CU.IOPROX_SET_EMU_ID, payload16));
+    return [...(warn?[warn]:[]), "ioProx XSF format", "   Version: "+ver,
+      "   Facility: "+fc+" [0x"+fc.toString(16).padStart(2,"0").toUpperCase()+"]",
+      "   ID: "+cn, "   Raw: "+bhex(raw8).toUpperCase()];
+  }
+  const f = okOrThrow(await request(CU.IOPROX_GET_EMU_ID));
+  const d = f.data, ver=d[0], fc=d[1], cn=(d[2]<<8)|d[3], raw8=d.slice(4,12);
+  return ["ioProx XSF format", "   Version: "+ver,
+    "   Facility: "+fc+" [0x"+fc.toString(16).padStart(2,"0").toUpperCase()+"]",
+    "   ID: "+cn, "   Raw: "+bhex(raw8).toUpperCase()];
+});
+
 lf.command("clone", "(not ported to this terminal yet -- use the matching GUI tab)", [], notPorted("lf clone").run);
 lf.command("sniff", "(not ported to this terminal yet -- use the matching GUI tab)", [], notPorted("lf sniff").run);
 

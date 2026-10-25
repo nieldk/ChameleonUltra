@@ -88,6 +88,10 @@ code { font-family:var(--mono); font-size:12px; background:var(--bg-code); borde
    + solid-fill active state reuses the same filled-cyan language the page's
    primary buttons already use, so "active section" reads unmistakably. */
 .tabnav { position:sticky; top:var(--nav-h,52px); background:var(--bg); z-index:90; padding-top:14px; margin-bottom:10px; }
+/* Quicknav jump-links land each h2 at the viewport top, but nav+.tabnav are
+   both sticky and would cover it — scroll-margin-top reserves their combined
+   height so the jumped-to heading lands below them instead of behind them. */
+.tabpanel h2 { scroll-margin-top: var(--sticky-h, 160px); }
 .tabs { display:flex; flex-wrap:wrap; align-items:center; gap:10px; background:var(--bg-card); border:1px solid var(--border2); border-radius:8px; padding:7px; }
 .tabgroup { display:flex; flex-wrap:wrap; gap:4px; }
 .tabgroup-sep { width:1px; align-self:stretch; min-height:30px; background:var(--border2); }
@@ -99,8 +103,15 @@ code { font-family:var(--mono); font-size:12px; background:var(--bg-code); borde
 .tabpanel.active { display:block; }
 /* per-tab quick-jump strip, built from that tab's own h2 sections. Each
    pill is a self-contained chip (visible border + its own number badge) and
-   gapped wide enough that adjacent pills don't read as one run-on strip. */
-.quicknav { display:flex; flex-wrap:wrap; gap:10px; padding:10px 0 12px; }
+   gapped wide enough that adjacent pills don't read as one run-on strip.
+   nowrap + overflow-x:auto (not flex-wrap) because this strip lives inside
+   the sticky .tabnav: a tab with many sections (HF14A/MF1 has 13) would
+   wrap to a dozen-plus rows on a phone-width screen, making the sticky
+   header itself taller than the viewport and burying all real content
+   under it. A single horizontally-swipeable row keeps the sticky header's
+   height constant regardless of section count. */
+.quicknav { display:flex; flex-wrap:nowrap; gap:10px; padding:10px 0 12px; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:thin; }
+.qlink { flex-shrink:0; }
 .qlink { display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:11px; letter-spacing:.03em; color:var(--text-mid); background:var(--bg-card); border:1px solid var(--border2); border-radius:14px; padding:5px 13px 5px 6px; text-decoration:none; cursor:pointer; }
 .qlink:hover { color:var(--text-bright); border-color:var(--cyan-border); background:var(--cyan-dim); }
 .qlink .sec-num { display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px; padding:0 5px; border-radius:10px; background:var(--amber-dim); color:var(--amber); font-size:10px; }
@@ -792,6 +803,42 @@ AABBCCDDEEFF</textarea></label>
       </div>
       <div class="result" id="h_vbResult"></div>
     </div>
+
+    <h2><span class="sec-num">H12</span>Magic auth (gen1a-style raw auth, reader mode)</h2>
+    <div class="block">
+      <div class="det">Sends a raw backdoor auth command (e.g. 0x80 for GDM/gen1a magic cards) directly to the RC522, bypassing the normal MF1 authenticate flow. Ultra only — not available on Lite.</div>
+      <div class="row">
+        <label class="cfgf">Auth cmd byte (hex)<input id="h_maType" value="80"></label>
+        <label class="cfgf">Block<input id="h_maBlock" value="0"></label>
+        <label class="cfgf wide">Key (12 hex)<input id="h_maKey" value="FFFFFFFFFFFF"></label>
+        <label class="cfgf">Keep field on<select id="h_maKeep"><option value="0">No</option><option value="1">Yes</option></select></label>
+        <button class="small" id="h_marun">Run</button>
+      </div>
+      <div class="result" id="h_maResult"></div>
+    </div>
+
+    <h2><span class="sec-num">H13</span>ISO14443-4 (T=CL) emulation — static APDU responses</h2>
+    <div class="block">
+      <div class="det">Low-level building block behind this fork's EMV/smartcard emulation profile: canned responses keyed off the incoming command bytes, plus manual anti-collision data (UID/ATQA/SAK/ATS) and a one-shot push/poll pair for a custom reader loop.</div>
+      <div class="row">
+        <label class="cfgf wide">Match command prefix (hex, empty clears all static responses)<input id="h4_cmd" placeholder="e.g. 00A404"></label>
+        <label class="cfgf wide">Static response (hex)<input id="h4_resp" placeholder="e.g. 6A82"></label>
+        <button class="small" id="h4_setstatic">Set / clear</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">UID (hex)<input id="h4_uid" value="08A1B2C3"></label>
+        <label class="cfgf">ATQA (4 hex)<input id="h4_atqa" value="0400"></label>
+        <label class="cfgf">SAK (2 hex)<input id="h4_sak" value="20"></label>
+        <label class="cfgf wide">ATS (hex, optional)<input id="h4_ats" value="7577810280"></label>
+        <button class="small" id="h4_setanticoll">Set anti-collision</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost small" id="h4_recv">Poll for pending APDU</button>
+        <label class="cfgf wide">Push response for pending APDU (hex)<input id="h4_sendresp"></label>
+        <button class="small" id="h4_send">Send</button>
+      </div>
+      <div class="result" id="h4_Result"></div>
+    </div>
   </section>
 
   <!-- ================= LF ================= -->
@@ -1160,7 +1207,7 @@ AABBCCDDEEFF</textarea></label>
 </footer>
 
 <script src="canary.js?v=17"></script>
-<script src="fullcmd.js?v=9"></script>
-<script src="terminal.js?v=1"></script>
+<script src="fullcmd.js?v=13"></script>
+<script src="terminal.js?v=4"></script>
 </body>
 </html>
