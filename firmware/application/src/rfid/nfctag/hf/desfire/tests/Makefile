@@ -82,6 +82,12 @@ TESTS := test_dfc_crypto test_cmac test_dfc_session test_dfc_secure_messaging te
 
 TESTS += test_dfc_ev2_capabilities test_dfc_static_signature
 
+# test_dfc_reader drives the reader-role engine through a link-time stub
+# rather than a real transport; dfc-core v2 split that stub out of the test
+# file into its own translation unit.
+READER_LINK_TESTS := test_dfc_reader
+$(READER_LINK_TESTS): dfc_reader_test_link.c
+
 # Debugging tools that drive the engine from a workstation.
 TOOLS := dfc_probe_apdu dfc_virtual_picc_host
 

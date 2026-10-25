@@ -21,7 +21,7 @@ static void seed(DfcCredential* c) {
     c->picc_num_keys = 1;
 }
 
-static MunitResult test_default_profile_accepts(const MunitParameter params[], void *data) {
+static MunitResult test_default_profile_accepts(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCredential c;
@@ -42,7 +42,7 @@ static MunitResult test_default_profile_accepts(const MunitParameter params[], v
     return MUNIT_OK;
 }
 
-static MunitResult test_picc_files_unsupported(const MunitParameter params[], void *data) {
+static MunitResult test_picc_files_unsupported(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCredential c;
@@ -69,7 +69,7 @@ static MunitResult test_picc_files_unsupported(const MunitParameter params[], vo
     return MUNIT_OK;
 }
 
-static MunitResult test_generation_unsupported(const MunitParameter params[], void *data) {
+static MunitResult test_generation_unsupported(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCredential c;
@@ -89,16 +89,16 @@ static MunitResult test_generation_unsupported(const MunitParameter params[], vo
     return MUNIT_OK;
 }
 
-static MunitResult test_capacity_named(const MunitParameter params[], void *data) {
+static MunitResult test_capacity_named(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCredential c;
     memset(&c, 0, sizeof(c));
     seed(&c);
-    for (size_t i = 0; i < 3; i++) {
+    for(size_t i = 0; i < 3; i++) {
         uint8_t aid[3] = {(uint8_t)(i + 1), 0x00, 0x00};
-        munit_assert_not_null(dfc_credential_create_application_desfire_order(
-                                  &c, aid, 0x0F, DFC_KEY_TYPE_AES | 1));
+        munit_assert_not_null(
+            dfc_credential_create_application_desfire_order(&c, aid, 0x0F, DFC_KEY_TYPE_AES | 1));
     }
 
     DfcProfile p;
@@ -111,7 +111,7 @@ static MunitResult test_capacity_named(const MunitParameter params[], void *data
     return MUNIT_OK;
 }
 
-static MunitResult test_declared_space_capacity(const MunitParameter params[], void *data) {
+static MunitResult test_declared_space_capacity(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCredential c;
@@ -147,7 +147,7 @@ static MunitResult test_declared_space_capacity(const MunitParameter params[], v
     return MUNIT_OK;
 }
 
-static MunitResult test_record_capacity_uses_max(const MunitParameter params[], void *data) {
+static MunitResult test_record_capacity_uses_max(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCredential c;
@@ -174,7 +174,7 @@ static MunitResult test_record_capacity_uses_max(const MunitParameter params[], 
 // A user ATS states its own length in its first octet. One that disagrees with
 // the stored length cannot be answered with, only clamped or padded, so it is
 // refused at admission rather than turned into a frame no card would send.
-static MunitResult test_user_ats_length_octet(const MunitParameter params[], void *data) {
+static MunitResult test_user_ats_length_octet(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCredential c;
@@ -227,9 +227,8 @@ static MunitResult test_user_ats_length_octet(const MunitParameter params[], voi
 // Random ID and the recorded provenance of the stored UID are independent: a
 // credential may carry a real UID and still present a generated one, and the
 // admission check must not treat that as a contradiction.
-static MunitResult test_random_id_with_real_uid_admitted(
-    const MunitParameter params[],
-    void *data) {
+static MunitResult
+    test_random_id_with_real_uid_admitted(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCredential c;
@@ -249,16 +248,17 @@ static MunitResult test_random_id_with_real_uid_admitted(
 // belonging to them. A PICC-level file is owned by a sentinel that is larger
 // than any real index, so a naive "greater than" test decrements the sentinel
 // and the file silently stops being a PICC file.
-static MunitResult test_delete_app_preserves_picc_owner(const MunitParameter params[], void *data) {
+static MunitResult
+    test_delete_app_preserves_picc_owner(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCredential c;
     memset(&c, 0, sizeof(c));
     seed(&c);
-    for (size_t i = 0; i < 2; i++) {
+    for(size_t i = 0; i < 2; i++) {
         uint8_t aid[3] = {(uint8_t)(i + 1), 0x00, 0x00};
-        munit_assert_not_null(dfc_credential_create_application_desfire_order(
-                                  &c, aid, 0x0F, DFC_KEY_TYPE_AES | 1));
+        munit_assert_not_null(
+            dfc_credential_create_application_desfire_order(&c, aid, 0x0F, DFC_KEY_TYPE_AES | 1));
     }
     // One file in the second application, one at PICC level.
     DfcFile* in_app = dfc_credential_create_file(&c, 1, 0x01);
@@ -280,8 +280,8 @@ static MunitResult test_delete_app_preserves_picc_owner(const MunitParameter par
     munit_assert_not_null(moved);
     // The PICC file still belongs to the PICC.
     bool found_picc = false;
-    for (size_t i = 0; i < c.num_files; i++) {
-        if (c.files[i].number == 0x02) {
+    for(size_t i = 0; i < c.num_files; i++) {
+        if(c.files[i].number == 0x02) {
             munit_assert_size(c.files[i].app_index, ==, DFC_FILE_OWNER_PICC);
             found_picc = true;
         }
@@ -291,39 +291,50 @@ static MunitResult test_delete_app_preserves_picc_owner(const MunitParameter par
 }
 
 static MunitTest tests[] = {
-    {
-        "/default-profile-accepts", test_default_profile_accepts, NULL, NULL,
-        MUNIT_TEST_OPTION_NONE, NULL
-    },
-    {
-        "/picc-files-unsupported", test_picc_files_unsupported, NULL, NULL,
-        MUNIT_TEST_OPTION_NONE, NULL
-    },
-    {
-        "/generation-unsupported", test_generation_unsupported, NULL, NULL,
-        MUNIT_TEST_OPTION_NONE, NULL
-    },
+    {"/default-profile-accepts",
+     test_default_profile_accepts,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/picc-files-unsupported",
+     test_picc_files_unsupported,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/generation-unsupported",
+     test_generation_unsupported,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
     {"/capacity-named", test_capacity_named, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
-    {
-        "/declared-space-capacity", test_declared_space_capacity, NULL, NULL,
-        MUNIT_TEST_OPTION_NONE, NULL
-    },
-    {
-        "/record-capacity-uses-max", test_record_capacity_uses_max, NULL, NULL,
-        MUNIT_TEST_OPTION_NONE, NULL
-    },
-    {
-        "/user-ats-length-octet", test_user_ats_length_octet, NULL, NULL, MUNIT_TEST_OPTION_NONE,
-        NULL
-    },
-    {
-        "/random-id-with-real-uid-admitted", test_random_id_with_real_uid_admitted, NULL, NULL,
-        MUNIT_TEST_OPTION_NONE, NULL
-    },
-    {
-        "/delete-app-preserves-picc-owner", test_delete_app_preserves_picc_owner, NULL, NULL,
-        MUNIT_TEST_OPTION_NONE, NULL
-    },
+    {"/declared-space-capacity",
+     test_declared_space_capacity,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/record-capacity-uses-max",
+     test_record_capacity_uses_max,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/user-ats-length-octet", test_user_ats_length_octet, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/random-id-with-real-uid-admitted",
+     test_random_id_with_real_uid_admitted,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/delete-app-preserves-picc-owner",
+     test_delete_app_preserves_picc_owner,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
 };
 
@@ -335,6 +346,6 @@ static const MunitSuite suite = {
     MUNIT_SUITE_OPTION_NONE,
 };
 
-int main(int argc, char *argv[MUNIT_ARRAY_PARAM(argc + 1)]) {
+int main(int argc, char* argv[MUNIT_ARRAY_PARAM(argc + 1)]) {
     return munit_suite_main(&suite, NULL, argc, argv);
 }

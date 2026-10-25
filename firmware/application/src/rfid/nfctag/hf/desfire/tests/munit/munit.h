@@ -183,7 +183,7 @@ typedef enum {
 #endif
 
 MUNIT_PRINTF(4, 5)
-void munit_logf_ex(MunitLogLevel level, const char *filename, int line, const char *format, ...);
+void munit_logf_ex(MunitLogLevel level, const char* filename, int line, const char* format, ...);
 
 #define munit_logf(level, format, ...) \
     munit_logf_ex(level, __FILE__, __LINE__, format, __VA_ARGS__)
@@ -192,7 +192,7 @@ void munit_logf_ex(MunitLogLevel level, const char *filename, int line, const ch
 
 MUNIT_NO_RETURN
 MUNIT_PRINTF(3, 4)
-void munit_errorf_ex(const char *filename, int line, const char *format, ...);
+void munit_errorf_ex(const char* filename, int line, const char* format, ...);
 
 #define munit_errorf(format, ...) munit_errorf_ex(__FILE__, __LINE__, format, __VA_ARGS__)
 
@@ -362,7 +362,7 @@ void munit_errorf_ex(const char *filename, int line, const char *format, ...);
 
 /*** Memory allocation ***/
 
-void *munit_malloc_ex(const char *filename, int line, size_t size);
+void* munit_malloc_ex(const char* filename, int line, size_t size);
 
 #define munit_malloc(size) munit_malloc_ex(__FILE__, __LINE__, (size))
 
@@ -390,22 +390,22 @@ typedef enum {
     /* Test was skipped */
     MUNIT_SKIP,
     /* Test failed due to circumstances not intended to be tested
-    * (things like network errors, invalid parameter value, failure to
-    * allocate memory in the test harness, etc.). */
+   * (things like network errors, invalid parameter value, failure to
+   * allocate memory in the test harness, etc.). */
     MUNIT_ERROR
 } MunitResult;
 
 typedef struct {
-    char *name;
-    char **values;
+    char* name;
+    char** values;
 } MunitParameterEnum;
 
 typedef struct {
-    char *name;
-    char *value;
+    char* name;
+    char* value;
 } MunitParameter;
 
-const char *munit_parameters_get(const MunitParameter params[], const char *key);
+const char* munit_parameters_get(const MunitParameter params[], const char* key);
 
 typedef enum {
     MUNIT_TEST_OPTION_NONE = 0,
@@ -413,17 +413,17 @@ typedef enum {
     MUNIT_TEST_OPTION_TODO = 1 << 1
 } MunitTestOptions;
 
-typedef MunitResult(*MunitTestFunc)(const MunitParameter params[], void *user_data_or_fixture);
-typedef void *(*MunitTestSetup)(const MunitParameter params[], void *user_data);
-typedef void (*MunitTestTearDown)(void *fixture);
+typedef MunitResult (*MunitTestFunc)(const MunitParameter params[], void* user_data_or_fixture);
+typedef void* (*MunitTestSetup)(const MunitParameter params[], void* user_data);
+typedef void (*MunitTestTearDown)(void* fixture);
 
 typedef struct {
-    char *name;
+    char* name;
     MunitTestFunc test;
     MunitTestSetup setup;
     MunitTestTearDown tear_down;
     MunitTestOptions options;
-    MunitParameterEnum *parameters;
+    MunitParameterEnum* parameters;
 } MunitTest;
 
 typedef enum {
@@ -433,18 +433,18 @@ typedef enum {
 typedef struct MunitSuite_ MunitSuite;
 
 struct MunitSuite_ {
-    char *prefix;
-    MunitTest *tests;
-    MunitSuite *suites;
+    char* prefix;
+    MunitTest* tests;
+    MunitSuite* suites;
     unsigned int iterations;
     MunitSuiteOptions options;
 };
 
 int munit_suite_main(
     const MunitSuite* suite,
-    void *user_data,
+    void* user_data,
     int argc,
-    char *const argv[MUNIT_ARRAY_PARAM(argc + 1)]);
+    char* const argv[MUNIT_ARRAY_PARAM(argc + 1)]);
 
 /* Note: I'm not very happy with this API; it's likely to change if I
  * figure out something better.  Suggestions welcome. */
@@ -452,21 +452,21 @@ int munit_suite_main(
 typedef struct MunitArgument_ MunitArgument;
 
 struct MunitArgument_ {
-    char *name;
+    char* name;
     munit_bool (*parse_argument)(
         const MunitSuite* suite,
-        void *user_data,
-        int *arg,
+        void* user_data,
+        int* arg,
         int argc,
-        char *const argv[MUNIT_ARRAY_PARAM(argc + 1)]);
-    void (*write_help)(const MunitArgument* argument, void *user_data);
+        char* const argv[MUNIT_ARRAY_PARAM(argc + 1)]);
+    void (*write_help)(const MunitArgument* argument, void* user_data);
 };
 
 int munit_suite_main_custom(
     const MunitSuite* suite,
-    void *user_data,
+    void* user_data,
     int argc,
-    char *const argv[MUNIT_ARRAY_PARAM(argc + 1)],
+    char* const argv[MUNIT_ARRAY_PARAM(argc + 1)],
     const MunitArgument arguments[]);
 
 #if defined(MUNIT_ENABLE_ASSERT_ALIASES)

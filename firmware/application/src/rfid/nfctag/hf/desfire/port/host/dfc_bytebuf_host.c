@@ -1,16 +1,15 @@
 /* Host implementation of the append-only response buffer. */
 #include "dfc_bytebuf.h"
-
-#include <stdlib.h>
+#include "dfc_port.h"
 
 DfcByteBuf* dfc_bytebuf_alloc(size_t max_size) {
     (void)max_size;
-    DfcByteBuf* buffer = calloc(1, sizeof(DfcByteBuf));
+    DfcByteBuf* buffer = dfc_platform_alloc(sizeof(DfcByteBuf), DfcAllocEmulator);
     return buffer;
 }
 
 void dfc_bytebuf_free(DfcByteBuf* b) {
-    free(b);
+    dfc_platform_free(b);
 }
 
 void dfc_bytebuf_reset(DfcByteBuf* b) {

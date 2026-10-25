@@ -6,33 +6,37 @@
 
 #include <string.h>
 
-static size_t hex(const char *text, uint8_t *out) {
+static size_t hex(const char* text, uint8_t* out) {
     size_t n = 0;
-    for (size_t i = 0; text[i] && text[i + 1]; i += 2) {
+    for(size_t i = 0; text[i] && text[i + 1]; i += 2) {
         unsigned value = 0;
-        for (size_t j = 0; j < 2; j++) {
+        for(size_t j = 0; j < 2; j++) {
             char c = text[i + j];
             value <<= 4;
-            if (c >= '0' && c <= '9') value |= (unsigned)(c - '0');
-            else if (c >= 'A' && c <= 'F') value |= (unsigned)(c - 'A' + 10);
-            else if (c >= 'a' && c <= 'f') value |= (unsigned)(c - 'a' + 10);
+            if(c >= '0' && c <= '9')
+                value |= (unsigned)(c - '0');
+            else if(c >= 'A' && c <= 'F')
+                value |= (unsigned)(c - 'A' + 10);
+            else if(c >= 'a' && c <= 'f')
+                value |= (unsigned)(c - 'a' + 10);
         }
         out[n++] = (uint8_t)value;
     }
     return n;
 }
 
-static void assert_apdu(const DfcCommand* command, const char *expected_hex) {
+static void assert_apdu(const DfcCommand* command, const char* expected_hex) {
     uint8_t expected[DFC_COMMAND_MAX_APDU];
     size_t expected_len = hex(expected_hex, expected);
     uint8_t apdu[DFC_COMMAND_MAX_APDU];
     size_t apdu_len = 0;
-    munit_assert_int(dfc_command_to_apdu(command, apdu, sizeof(apdu), &apdu_len), ==, DfcCommandOk);
+    munit_assert_int(
+        dfc_command_to_apdu(command, apdu, sizeof(apdu), &apdu_len), ==, DfcCommandOk);
     munit_assert_size(apdu_len, ==, expected_len);
     munit_assert_memory_equal(apdu_len, apdu, expected);
 }
 
-static MunitResult test_simple_commands(const MunitParameter params[], void *data) {
+static MunitResult test_simple_commands(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCommand c;
@@ -47,7 +51,10 @@ static MunitResult test_simple_commands(const MunitParameter params[], void *dat
     munit_assert_int(dfc_command_prepare_proximity_check(&c), ==, DfcCommandOk);
     assert_apdu(&c, "90F0000000");
     munit_assert_int(dfc_command_get_key_set_versions(&c), ==, DfcCommandOk);
-    assert_apdu(&c, "90640000024080" "00");
+    assert_apdu(
+        &c,
+        "90640000024080"
+        "00");
     munit_assert_int(dfc_command_clear_record_file(&c, 2), ==, DfcCommandOk);
     assert_apdu(&c, "90EB0000010200");
     munit_assert_int(dfc_command_commit_transaction_with_option(&c, 1), ==, DfcCommandOk);
@@ -61,19 +68,22 @@ static MunitResult test_simple_commands(const MunitParameter params[], void *dat
     return MUNIT_OK;
 }
 
-static MunitResult test_application_commands(const MunitParameter params[], void *data) {
+static MunitResult test_application_commands(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCommand c;
-    const uint8_t aid[3] = {0x4F, 0x49, 0xD3};
-    const uint8_t second[3] = {0x01, 0x02, 0x03};
+    // Semantic command builders take the AID as printed and stored in the
+    // credential model. Only the command boundary converts it to wire order.
+    const uint8_t aid[3] = {0xD3, 0x49, 0x4F};
+    const uint8_t second[3] = {0xAB, 0x12, 0xCD};
     munit_assert_int(dfc_command_select_application(&c, aid, NULL), ==, DfcCommandOk);
     assert_apdu(&c, "905A0000034F49D300");
     munit_assert_int(dfc_command_select_application(&c, aid, second), ==, DfcCommandOk);
-    assert_apdu(&c, "905A0000064F49D301020300");
+    assert_apdu(&c, "905A0000064F49D3CD12AB00");
 
     DfcCommandCreateApplication app = {0};
-    memcpy(app.aid, aid, 3);
+    const uint8_t wire_aid[3] = {0x4F, 0x49, 0xD3};
+    memcpy(app.aid, wire_aid, 3);
     app.key_settings_1 = 0x0F;
     app.key_settings_2 = 0x04;
     munit_assert_int(dfc_command_create_application(&c, &app), ==, DfcCommandOk);
@@ -117,7 +127,7 @@ static MunitResult test_application_commands(const MunitParameter params[], void
     return MUNIT_OK;
 }
 
-static MunitResult test_file_commands(const MunitParameter params[], void *data) {
+static MunitResult test_file_commands(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCommand c;
@@ -144,33 +154,51 @@ static MunitResult test_file_commands(const MunitParameter params[], void *data)
 
     DfcCommandValueFile value = {5, 0x03, 0x0000, -10, 1000, 100, 1};
     munit_assert_int(dfc_command_create_value_file(&c, &value), ==, DfcCommandOk);
-    assert_apdu(&c, "90CC00001105030000" "F6FFFFFF" "E8030000" "64000000" "0100");
+    assert_apdu(
+        &c,
+        "90CC00001105030000"
+        "F6FFFFFF"
+        "E8030000"
+        "64000000"
+        "0100");
     value.value = 2000;
     munit_assert_int(dfc_command_create_value_file(&c, &value), ==, DfcCommandInvalid);
 
     munit_assert_int(dfc_command_read_data(&c, 0x0F, 0, 3), ==, DfcCommandOk);
     assert_apdu(&c, "90BD0000070F00000003000000");
     const uint8_t payload[] = {0x01, 0x02, 0x03};
-    munit_assert_int(dfc_command_write_data(&c, 0x0F, 0, payload, sizeof(payload)), ==, DfcCommandOk);
+    munit_assert_int(
+        dfc_command_write_data(&c, 0x0F, 0, payload, sizeof(payload)), ==, DfcCommandOk);
     assert_apdu(&c, "903D00000A0F00000003000001020300");
     munit_assert_int(dfc_command_read_records(&c, 2, 1, 3, false), ==, DfcCommandOk);
     assert_apdu(&c, "90BB0000070201000003000000");
+    munit_assert_int(dfc_command_read_records(&c, 2, 1, 3, true), ==, DfcCommandOk);
+    assert_apdu(&c, "90AB0000070201000003000000");
     const uint8_t record[] = {0xDE, 0xAD, 0xBE, 0xEF};
-    munit_assert_int(dfc_command_write_record(&c, 2, 0, record, sizeof(record), false), ==, DfcCommandOk);
+    munit_assert_int(
+        dfc_command_write_record(&c, 2, 0, record, sizeof(record), false), ==, DfcCommandOk);
     assert_apdu(&c, "903B00000B02000000040000DEADBEEF00");
+    munit_assert_int(
+        dfc_command_write_record(&c, 2, 0, record, sizeof(record), true), ==, DfcCommandOk);
+    assert_apdu(&c, "908B00000B02000000040000DEADBEEF00");
     const uint8_t update[] = {0xA1, 0xA2, 0xA3};
-    munit_assert_int(dfc_command_update_record(&c, 2, 1, 2, update, sizeof(update), false), ==, DfcCommandOk);
+    munit_assert_int(
+        dfc_command_update_record(&c, 2, 1, 2, update, sizeof(update), false), ==, DfcCommandOk);
     assert_apdu(&c, "90DB00000D02010000020000030000A1A2A300");
-    munit_assert_int(dfc_command_read_data(&c, 1, DFC_COMMAND_UINT24_MAX + 1, 1), ==, DfcCommandInvalid);
+    munit_assert_int(
+        dfc_command_read_data(&c, 1, DFC_COMMAND_UINT24_MAX + 1, 1), ==, DfcCommandInvalid);
     return MUNIT_OK;
 }
 
-static MunitResult test_value_and_key_commands(const MunitParameter params[], void *data) {
+static MunitResult test_value_and_key_commands(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCommand c;
     munit_assert_int(dfc_command_credit(&c, 4, 25), ==, DfcCommandOk);
-    assert_apdu(&c, "900C0000050419000000" "00");
+    assert_apdu(
+        &c,
+        "900C0000050419000000"
+        "00");
     munit_assert_int(dfc_command_debit(&c, 4, -1), ==, DfcCommandOk);
     assert_apdu(&c, "90DC00000504FFFFFFFF00");
     uint8_t reader_id[16];
@@ -179,23 +207,26 @@ static MunitResult test_value_and_key_commands(const MunitParameter params[], vo
     assert_apdu(&c, "90C800001000112233445566778899AABBCCDDEEFF00");
 
     const uint8_t cryptogram[] = {0xAA, 0xBB, 0xCC};
-    munit_assert_int(dfc_command_change_key_ev2(&c, 1, 2, cryptogram, sizeof(cryptogram)), ==, DfcCommandOk);
+    munit_assert_int(
+        dfc_command_change_key_ev2(&c, 1, 2, cryptogram, sizeof(cryptogram)), ==, DfcCommandOk);
     assert_apdu(&c, "90C60000050102AABBCC00");
     munit_assert_int(dfc_command_change_key(&c, 1, cryptogram, 0), ==, DfcCommandInvalid);
 
     const uint8_t config[] = {0x01, 0x02};
-    munit_assert_int(dfc_command_set_configuration(&c, 0, config, sizeof(config)), ==, DfcCommandOk);
+    munit_assert_int(
+        dfc_command_set_configuration(&c, 0, config, sizeof(config)), ==, DfcCommandOk);
     assert_apdu(&c, "905C00000300010200");
     const uint8_t check[] = {0x01, 0x02, 0x03};
     munit_assert_int(dfc_command_proximity_check(&c, check, sizeof(check)), ==, DfcCommandOk);
     assert_apdu(&c, "90F200000301020300");
     const uint8_t verify[] = {0xAA, 0xBB};
-    munit_assert_int(dfc_command_verify_proximity_check(&c, verify, sizeof(verify)), ==, DfcCommandOk);
+    munit_assert_int(
+        dfc_command_verify_proximity_check(&c, verify, sizeof(verify)), ==, DfcCommandOk);
     assert_apdu(&c, "90FD000002AABB00");
     return MUNIT_OK;
 }
 
-static MunitResult test_authentication_commands(const MunitParameter params[], void *data) {
+static MunitResult test_authentication_commands(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCommand c;
@@ -203,26 +234,33 @@ static MunitResult test_authentication_commands(const MunitParameter params[], v
     assert_apdu(&c, "90AA0000010100");
     munit_assert_int(dfc_command_authenticate(&c, 0x42, 1), ==, DfcCommandInvalid);
     const uint8_t caps[6] = {0};
-    munit_assert_int(dfc_command_authenticate_ev2_first(&c, 0, caps, sizeof(caps)), ==, DfcCommandOk);
+    munit_assert_int(
+        dfc_command_authenticate_ev2_first(&c, 0, caps, sizeof(caps)), ==, DfcCommandOk);
     assert_apdu(&c, "9071000008000600000000000000");
     munit_assert_int(dfc_command_authenticate_ev2_first(&c, 0, NULL, 0), ==, DfcCommandOk);
-    assert_apdu(&c, "907100000200" "0000");
+    assert_apdu(
+        &c,
+        "907100000200"
+        "0000");
     munit_assert_int(dfc_command_authenticate_ev2_first(&c, 0, caps, 3), ==, DfcCommandInvalid);
     munit_assert_int(dfc_command_authenticate_ev2_non_first(&c, 1), ==, DfcCommandOk);
     assert_apdu(&c, "90770000010100");
     return MUNIT_OK;
 }
 
-static MunitResult test_framing_and_bounds(const MunitParameter params[], void *data) {
+static MunitResult test_framing_and_bounds(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
     DfcCommand c;
     uint8_t big[DFC_COMMAND_MAX_DATA + 1];
     memset(big, 0x5A, sizeof(big));
-    munit_assert_int(dfc_command_encode_raw(&c, 0x3D, big, DFC_COMMAND_MAX_DATA), ==, DfcCommandOk);
+    munit_assert_int(
+        dfc_command_encode_raw(&c, 0x3D, big, DFC_COMMAND_MAX_DATA), ==, DfcCommandOk);
     munit_assert_int(dfc_command_encode_raw(&c, 0x3D, big, sizeof(big)), ==, DfcCommandTooLong);
-    munit_assert_int(dfc_command_write_data(&c, 1, 0, big, DFC_COMMAND_MAX_DATA - 7), ==, DfcCommandOk);
-    munit_assert_int(dfc_command_write_data(&c, 1, 0, big, DFC_COMMAND_MAX_DATA - 6), ==, DfcCommandTooLong);
+    munit_assert_int(
+        dfc_command_write_data(&c, 1, 0, big, DFC_COMMAND_MAX_DATA - 7), ==, DfcCommandOk);
+    munit_assert_int(
+        dfc_command_write_data(&c, 1, 0, big, DFC_COMMAND_MAX_DATA - 6), ==, DfcCommandTooLong);
 
     munit_assert_int(dfc_command_read_data(&c, 0x0F, 0, 3), ==, DfcCommandOk);
     uint8_t frame[16];
@@ -248,6 +286,6 @@ static MunitTest tests[] = {
 
 static const MunitSuite suite = {"/dfc_command", tests, NULL, 1, MUNIT_SUITE_OPTION_NONE};
 
-int main(int argc, char *argv[MUNIT_ARRAY_PARAM(argc + 1)]) {
+int main(int argc, char* argv[MUNIT_ARRAY_PARAM(argc + 1)]) {
     return munit_suite_main(&suite, NULL, argc, argv);
 }

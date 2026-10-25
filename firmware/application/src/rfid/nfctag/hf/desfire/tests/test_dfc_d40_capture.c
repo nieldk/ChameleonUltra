@@ -37,8 +37,7 @@ static const uint8_t kDeviceCredential[] = {
     0x30, 0x32, 0x81, 0x05, 0x01, 0xb2, 0xb7, 0xad, 0x15, 0xa5, 0x02, 0x05, 0x00, 0xa6, 0x08, 0x81,
     0x01, 0x01, 0x04, 0x03, 0x03, 0x00, 0x09, 0xa7, 0x17, 0x85, 0x15, 0x52, 0xfe, 0xd5, 0x69, 0x68,
     0x32, 0xc1, 0x6e, 0xbf, 0x79, 0x9b, 0x18, 0x7b, 0xc4, 0xd9, 0x33, 0xd5, 0xff, 0x92, 0x20, 0xae,
-    0xa9, 0x02, 0x05, 0x00, 0x05, 0x00, 0x82, 0x01, 0xff
-};
+    0xa9, 0x02, 0x05, 0x00, 0x05, 0x00, 0x82, 0x01, 0xff};
 
 /* RndB the card must have generated, given the ek(RndB) it sent. */
 static const uint8_t kRndB[] = {0xb2, 0x09, 0x4a, 0xa9, 0x33, 0x43, 0x75, 0x4f};
@@ -47,11 +46,10 @@ static const uint8_t kRndB[] = {0xb2, 0x09, 0x4a, 0xa9, 0x33, 0x43, 0x75, 0x4f};
 static const uint8_t kEncRndB[] = {0x2a, 0x2c, 0xd1, 0xa3, 0xb4, 0x84, 0x82, 0x09};
 
 /* Captured: the reader's second frame, ek(RndA) || ek(RndB' xor previous). */
-static const uint8_t kReaderResponse[] = {0xd3, 0xf8, 0xf6, 0x02, 0x6a, 0x2b, 0x65, 0x80,
-                                          0x4a, 0x99, 0xa7, 0xb6, 0x42, 0xa0, 0x40, 0xd1
-                                         };
+static const uint8_t kReaderResponse[] =
+    {0xd3, 0xf8, 0xf6, 0x02, 0x6a, 0x2b, 0x65, 0x80, 0x4a, 0x99, 0xa7, 0xb6, 0x42, 0xa0, 0x40, 0xd1};
 
-static MunitResult test_captured_d40_authentication(const MunitParameter params[], void *data) {
+static MunitResult test_captured_d40_authentication(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
 
@@ -76,14 +74,13 @@ static MunitResult test_captured_d40_authentication(const MunitParameter params[
      * leaves the right application current is exactly what the handshake then
      * depends on. */
     const uint8_t iso_select[] = {
-        0x00, 0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x00, 0x00
-    };
+        0x00, 0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x00, 0x00};
     munit_assert_int(
         dfc_virtual_picc_iso_dep_exchange(
             session, iso_select, sizeof(iso_select), response, sizeof(response), &response_len),
         ==,
         DfcVirtualPiccStatusOk);
-    munit_assert_memory_equal(2, response, ((uint8_t[]) {0x90, 0x00}));
+    munit_assert_memory_equal(2, response, ((uint8_t[]){0x90, 0x00}));
 
     const uint8_t select_field[] = {0x90, 0x5a, 0x00, 0x00, 0x03, 0x4f, 0x49, 0xd3, 0x00};
     munit_assert_int(
@@ -91,8 +88,7 @@ static MunitResult test_captured_d40_authentication(const MunitParameter params[
             session, select_field, sizeof(select_field), response, sizeof(response), &response_len),
         ==,
         DfcVirtualPiccStatusOk);
-    munit_assert_memory_equal(
-    2, response, ((uint8_t[]) {0x91, DFC_STATUS_APPLICATION_NOT_FOUND}));
+    munit_assert_memory_equal(2, response, ((uint8_t[]){0x91, DFC_STATUS_APPLICATION_NOT_FOUND}));
 
     /* Select the application, least significant AID octet first on the wire. */
     const uint8_t select_app[] = {0x90, 0x5a, 0x00, 0x00, 0x03, 0x4f, 0x49, 0x53, 0x00};
@@ -102,7 +98,7 @@ static MunitResult test_captured_d40_authentication(const MunitParameter params[
         ==,
         DfcVirtualPiccStatusOk);
     munit_assert_size(response_len, ==, 2);
-    munit_assert_memory_equal(2, response, ((uint8_t[]) {0x91, 0x00}));
+    munit_assert_memory_equal(2, response, ((uint8_t[]){0x91, 0x00}));
 
     /* AUTHENTICATE (legacy) on key 1, with the card's RndB pinned to the value
      * the capture implies. The answer must be the captured ek(RndB): if it is
@@ -139,19 +135,16 @@ static MunitResult test_captured_d40_authentication(const MunitParameter params[
 }
 
 static MunitTest tests[] = {
-    {
-        "/captured-d40-authentication",
-        test_captured_d40_authentication,
-        NULL,
-        NULL,
-        MUNIT_TEST_OPTION_NONE,
-        NULL
-    },
-    {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}
-};
+    {"/captured-d40-authentication",
+     test_captured_d40_authentication,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 
 static const MunitSuite suite = {"/dfc_d40_capture", tests, NULL, 1, MUNIT_SUITE_OPTION_NONE};
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
     return munit_suite_main(&suite, NULL, argc, argv);
 }

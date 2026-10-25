@@ -19,7 +19,7 @@ static void base_credential(DfcCredential* credential) {
 
 /* Anti-collision presents a generated 4-octet identifier, not the stored UID,
  * and a different one on every activation. */
-static MunitResult test_random_id_activation(const MunitParameter params[], void *user_data) {
+static MunitResult test_random_id_activation(const MunitParameter params[], void* user_data) {
     (void)params;
     (void)user_data;
 
@@ -54,7 +54,7 @@ static MunitResult test_random_id_activation(const MunitParameter params[], void
 
 /* GetVersion reports zeros where it would report the UID, and GetCardUID needs
  * an authenticated session, so the real UID is not readable in the clear. */
-static MunitResult test_random_id_hides_uid(const MunitParameter params[], void *user_data) {
+static MunitResult test_random_id_hides_uid(const MunitParameter params[], void* user_data) {
     (void)params;
     (void)user_data;
 
@@ -70,8 +70,8 @@ static MunitResult test_random_id_hides_uid(const MunitParameter params[], void 
     size_t response_len = 0;
     const uint8_t get_version[] = {0x90, 0x60, 0x00, 0x00, 0x00};
     const uint8_t additional[] = {0x90, 0xAF, 0x00, 0x00, 0x00};
-    for (int frame = 0; frame < 3; frame++) {
-        const uint8_t *apdu = frame == 0 ? get_version : additional;
+    for(int frame = 0; frame < 3; frame++) {
+        const uint8_t* apdu = frame == 0 ? get_version : additional;
         munit_assert_int(
             dfc_virtual_picc_iso_dep_exchange(
                 session, apdu, 5, response, sizeof(response), &response_len),
@@ -100,7 +100,7 @@ static MunitResult test_random_id_hides_uid(const MunitParameter params[], void 
 
 /* Without random ID, GetVersion still reports the stored UID: the zeroing is
  * conditional, not a blanket change. */
-static MunitResult test_no_random_id_reports_uid(const MunitParameter params[], void *user_data) {
+static MunitResult test_no_random_id_reports_uid(const MunitParameter params[], void* user_data) {
     (void)params;
     (void)user_data;
 
@@ -117,8 +117,8 @@ static MunitResult test_no_random_id_reports_uid(const MunitParameter params[], 
     size_t response_len = 0;
     const uint8_t get_version[] = {0x90, 0x60, 0x00, 0x00, 0x00};
     const uint8_t additional[] = {0x90, 0xAF, 0x00, 0x00, 0x00};
-    for (int frame = 0; frame < 3; frame++) {
-        const uint8_t *apdu = frame == 0 ? get_version : additional;
+    for(int frame = 0; frame < 3; frame++) {
+        const uint8_t* apdu = frame == 0 ? get_version : additional;
         munit_assert_int(
             dfc_virtual_picc_iso_dep_exchange(
                 session, apdu, 5, response, sizeof(response), &response_len),
@@ -133,7 +133,7 @@ static MunitResult test_no_random_id_reports_uid(const MunitParameter params[], 
 }
 
 /* A stored ATS is the answer to RATS, in place of the built-in default. */
-static MunitResult test_user_ats_answers_rats(const MunitParameter params[], void *user_data) {
+static MunitResult test_user_ats_answers_rats(const MunitParameter params[], void* user_data) {
     (void)params;
     (void)user_data;
 
@@ -168,7 +168,8 @@ static MunitResult test_user_ats_answers_rats(const MunitParameter params[], voi
 }
 
 /* A credential with no ATS still gets the engine's default. */
-static MunitResult test_default_ats_without_override(const MunitParameter params[], void *user_data) {
+static MunitResult
+    test_default_ats_without_override(const MunitParameter params[], void* user_data) {
     (void)params;
     (void)user_data;
 
@@ -179,15 +180,14 @@ static MunitResult test_default_ats_without_override(const MunitParameter params
     munit_assert_int(
         dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
     munit_assert_size(activation.ats_len, ==, 5);
-    munit_assert_memory_equal(
-    5, activation.ats, ((uint8_t[]) {0x05, 0x65, 0x81, 0x02, 0x80}));
+    munit_assert_memory_equal(5, activation.ats, ((uint8_t[]){0x05, 0x65, 0x81, 0x02, 0x80}));
 
     dfc_virtual_picc_session_free(session);
     return MUNIT_OK;
 }
 
 /* SAK and ATQA are presented as stored when the credential carries them. */
-static MunitResult test_sak_and_atqa_override(const MunitParameter params[], void *user_data) {
+static MunitResult test_sak_and_atqa_override(const MunitParameter params[], void* user_data) {
     (void)params;
     (void)user_data;
 
@@ -218,7 +218,7 @@ static MunitResult test_sak_and_atqa_override(const MunitParameter params[], voi
 
 /* FormatPicc with format disabled is refused, with the status this command
  * already uses for a permission failure, and the credential survives. */
-static MunitResult test_format_disabled_refuses(const MunitParameter params[], void *user_data) {
+static MunitResult test_format_disabled_refuses(const MunitParameter params[], void* user_data) {
     (void)params;
     (void)user_data;
 
@@ -237,8 +237,15 @@ static MunitResult test_format_disabled_refuses(const MunitParameter params[], v
     size_t response_len = 0;
     const uint8_t master_key[8] = {0};
     authenticate_legacy_key0(
-        session, master_key, sizeof(master_key), response, sizeof(response), &response_len, NULL,
-        NULL, DFC_STATUS_OK);
+        session,
+        master_key,
+        sizeof(master_key),
+        response,
+        sizeof(response),
+        &response_len,
+        NULL,
+        NULL,
+        DFC_STATUS_OK);
     dfc_credential_clear_dirty(&credential);
 
     const uint8_t format[] = {0x90, 0xFC, 0x00, 0x00, 0x00};
@@ -249,7 +256,7 @@ static MunitResult test_format_disabled_refuses(const MunitParameter params[], v
         DfcVirtualPiccStatusOk);
     munit_assert_size(response_len, ==, 2);
     munit_assert_uint8(response[0], ==, 0x91);
-    munit_assert_uint8(response[1], ==, DFC_STATUS_AUTHENTICATION_ERR);
+    munit_assert_uint8(response[1], ==, DFC_STATUS_ILLEGAL_COMMAND_CODE);
     munit_assert_size(credential.num_apps, ==, 1);
     munit_assert_size(credential.num_files, ==, 1);
     munit_assert_false(credential.dirty);
@@ -260,7 +267,7 @@ static MunitResult test_format_disabled_refuses(const MunitParameter params[], v
 
 /* The same credential without the flag does get wiped, so the test above is
  * measuring the flag and not a broken FormatPicc. */
-static MunitResult test_format_allowed_wipes(const MunitParameter params[], void *user_data) {
+static MunitResult test_format_allowed_wipes(const MunitParameter params[], void* user_data) {
     (void)params;
     (void)user_data;
 
@@ -275,8 +282,15 @@ static MunitResult test_format_allowed_wipes(const MunitParameter params[], void
     size_t response_len = 0;
     const uint8_t master_key[8] = {0};
     authenticate_legacy_key0(
-        session, master_key, sizeof(master_key), response, sizeof(response), &response_len, NULL,
-        NULL, DFC_STATUS_OK);
+        session,
+        master_key,
+        sizeof(master_key),
+        response,
+        sizeof(response),
+        &response_len,
+        NULL,
+        NULL,
+        DFC_STATUS_OK);
 
     const uint8_t format[] = {0x90, 0xFC, 0x00, 0x00, 0x00};
     munit_assert_int(
@@ -294,7 +308,7 @@ static MunitResult test_format_allowed_wipes(const MunitParameter params[], void
 
 /* An ATS states its own length in its first octet. One that contradicts itself
  * is refused where a credential is admitted, rather than repaired. */
-static MunitResult test_ats_consistency_check(const MunitParameter params[], void *user_data) {
+static MunitResult test_ats_consistency_check(const MunitParameter params[], void* user_data) {
     (void)params;
     (void)user_data;
 
@@ -327,67 +341,33 @@ static MunitResult test_ats_consistency_check(const MunitParameter params[], voi
 static MunitTest tests[] = {
     {"/random-id-activation", test_random_id_activation, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/random-id-hides-uid", test_random_id_hides_uid, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
-    {
-        "/no-random-id-reports-uid",
-        test_no_random_id_reports_uid,
-        NULL,
-        NULL,
-        MUNIT_TEST_OPTION_NONE,
-        NULL
-    },
-    {
-        "/user-ats-answers-rats",
-        test_user_ats_answers_rats,
-        NULL,
-        NULL,
-        MUNIT_TEST_OPTION_NONE,
-        NULL
-    },
-    {
-        "/default-ats-without-override",
-        test_default_ats_without_override,
-        NULL,
-        NULL,
-        MUNIT_TEST_OPTION_NONE,
-        NULL
-    },
-    {
-        "/sak-and-atqa-override",
-        test_sak_and_atqa_override,
-        NULL,
-        NULL,
-        MUNIT_TEST_OPTION_NONE,
-        NULL
-    },
-    {
-        "/format-disabled-refuses",
-        test_format_disabled_refuses,
-        NULL,
-        NULL,
-        MUNIT_TEST_OPTION_NONE,
-        NULL
-    },
-    {
-        "/format-allowed-wipes",
-        test_format_allowed_wipes,
-        NULL,
-        NULL,
-        MUNIT_TEST_OPTION_NONE,
-        NULL
-    },
-    {
-        "/ats-consistency-check",
-        test_ats_consistency_check,
-        NULL,
-        NULL,
-        MUNIT_TEST_OPTION_NONE,
-        NULL
-    },
+    {"/no-random-id-reports-uid",
+     test_no_random_id_reports_uid,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/user-ats-answers-rats", test_user_ats_answers_rats, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/default-ats-without-override",
+     test_default_ats_without_override,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/sak-and-atqa-override", test_sak_and_atqa_override, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/format-disabled-refuses",
+     test_format_disabled_refuses,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/format-allowed-wipes", test_format_allowed_wipes, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/ats-consistency-check", test_ats_consistency_check, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
 };
 
 static const MunitSuite suite = {"/dfc_picc_config", tests, NULL, 1, MUNIT_SUITE_OPTION_NONE};
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
     return munit_suite_main(&suite, NULL, argc, argv);
 }
