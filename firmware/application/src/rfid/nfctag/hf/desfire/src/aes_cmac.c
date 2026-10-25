@@ -1,18 +1,15 @@
 #include "aes_cmac.h"
+#include "cmac_common.h"
 #include "dfc_crypto_internal.h"
 
 #define BLOCK_SIZE 16
 
 #define TAG "AESCMAC"
 
-static const uint8_t zeroes[] =
-    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-static const uint8_t Rb[] =
-    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x87};
-
 static void aes_cmac_wipe(void* value, size_t length) {
     volatile uint8_t* p = value;
-    while(length--) *p++ = 0;
+    while(length--)
+        *p++ = 0;
 }
 
 static void aes_cmac_padBlock(uint8_t* block, size_t len) {
@@ -30,29 +27,22 @@ static void aes_cmac_bitShiftLeft(uint8_t* input, uint8_t* output, size_t len) {
     output[last] = input[last] << 1;
 }
 
-// x = a ^ b
-static void aes_cmac_xor(const uint8_t* a, const uint8_t* b, uint8_t* x, size_t len) {
-    for(size_t i = 0; i < len; i++) {
-        x[i] = a[i] ^ b[i];
-    }
-}
-
-static bool aes_cmac_generateSubkeys(
-    DfcCryptoAesBlock* cipher, uint8_t* subkey1, uint8_t* subkey2) {
+static bool
+    aes_cmac_generateSubkeys(DfcCryptoAesBlock* cipher, uint8_t* subkey1, uint8_t* subkey2) {
     uint8_t l[BLOCK_SIZE] = {0};
-    if(!dfc_crypto_aes_block_encrypt(cipher, zeroes, l)) {
+    if(!dfc_crypto_aes_block_encrypt(cipher, l, l)) {
         aes_cmac_wipe(l, sizeof(l));
         return false;
     }
 
     aes_cmac_bitShiftLeft(l, subkey1, BLOCK_SIZE);
     if(l[0] & 0x80) {
-        aes_cmac_xor(subkey1, Rb, subkey1, BLOCK_SIZE);
+        subkey1[BLOCK_SIZE - 1] ^= 0x87;
     }
 
     aes_cmac_bitShiftLeft(subkey1, subkey2, BLOCK_SIZE);
     if(subkey1[0] & 0x80) {
-        aes_cmac_xor(subkey2, Rb, subkey2, BLOCK_SIZE);
+        subkey2[BLOCK_SIZE - 1] ^= 0x87;
     }
 
     aes_cmac_wipe(l, sizeof(l));
@@ -66,14 +56,14 @@ bool aes_cmac_with_iv(
     size_t message_len,
     uint8_t* iv,
     uint8_t* cmac) {
-    AesCmacSegment segment = {.data = message, .length = message_len};
+    DfcCryptoSegment segment = {.data = message, .length = message_len};
     return aes_cmac_segments_with_iv(key, key_len, &segment, 1, iv, cmac);
 }
 
 bool aes_cmac_segments_with_iv(
     uint8_t* key,
     size_t key_len,
-    const AesCmacSegment* segments,
+    const DfcCryptoSegment* segments,
     size_t segment_count,
     uint8_t* iv,
     uint8_t* cmac) {
@@ -83,7 +73,6 @@ bool aes_cmac_segments_with_iv(
     size_t pending_len = 0;
     size_t total_len = 0;
     uint8_t x[BLOCK_SIZE] = {0};
-    uint8_t y[BLOCK_SIZE] = {0};
     DfcCryptoAesBlock cipher;
     bool success = false;
 
@@ -110,11 +99,17 @@ bool aes_cmac_segments_with_iv(
         const uint8_t* data = segments[segment_index].data;
         size_t remaining = segments[segment_index].length;
         while(remaining) {
+            if(pending_len == 0 && remaining > BLOCK_SIZE) {
+                dfc_cmac_xor_in_place(x, data, BLOCK_SIZE);
+                if(!dfc_crypto_aes_block_encrypt(&cipher, x, x)) goto cleanup;
+                data += BLOCK_SIZE;
+                remaining -= BLOCK_SIZE;
+                continue;
+            }
             if(pending_len == BLOCK_SIZE) {
-                aes_cmac_xor(x, pending, y, BLOCK_SIZE);
-                if(!dfc_crypto_aes_block_encrypt(&cipher, y, x)) goto cleanup;
+                dfc_cmac_xor_in_place(x, pending, BLOCK_SIZE);
+                if(!dfc_crypto_aes_block_encrypt(&cipher, x, x)) goto cleanup;
                 pending_len = 0;
-                memset(pending, 0, sizeof(pending));
             }
             size_t take = BLOCK_SIZE - pending_len;
             if(take > remaining) take = remaining;
@@ -125,20 +120,20 @@ bool aes_cmac_segments_with_iv(
         }
     }
     if(total_len && pending_len == BLOCK_SIZE) {
-        aes_cmac_xor(pending, subkey1, pending, BLOCK_SIZE);
+        dfc_cmac_xor_in_place(pending, subkey1, BLOCK_SIZE);
     } else {
+        memset(pending + pending_len, 0, BLOCK_SIZE - pending_len);
         aes_cmac_padBlock(pending, pending_len);
-        aes_cmac_xor(pending, subkey2, pending, BLOCK_SIZE);
+        dfc_cmac_xor_in_place(pending, subkey2, BLOCK_SIZE);
     }
-    aes_cmac_xor(x, pending, y, BLOCK_SIZE);
-    success = dfc_crypto_aes_block_encrypt(&cipher, y, cmac);
+    dfc_cmac_xor_in_place(x, pending, BLOCK_SIZE);
+    success = dfc_crypto_aes_block_encrypt(&cipher, x, cmac);
 cleanup:
     if(!success) memset(cmac, 0, BLOCK_SIZE);
     aes_cmac_wipe(subkey1, sizeof(subkey1));
     aes_cmac_wipe(subkey2, sizeof(subkey2));
     aes_cmac_wipe(pending, sizeof(pending));
     aes_cmac_wipe(x, sizeof(x));
-    aes_cmac_wipe(y, sizeof(y));
     dfc_crypto_aes_block_clear(&cipher);
     return success;
 }

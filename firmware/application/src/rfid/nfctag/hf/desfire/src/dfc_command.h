@@ -20,17 +20,17 @@
 #if DFC_ENABLE_READER
 
 // Largest data field a single native frame carries: the one-octet Lc bounds it.
-#define DFC_COMMAND_MAX_DATA 255
+#define DFC_COMMAND_MAX_DATA      255
 // CLA INS P1 P2 Lc data Le.
 #define DFC_COMMAND_APDU_OVERHEAD 6
 #define DFC_COMMAND_MAX_APDU      (DFC_COMMAND_MAX_DATA + DFC_COMMAND_APDU_OVERHEAD)
 
-#define DFC_COMMAND_AID_LENGTH             3
-#define DFC_COMMAND_DF_NAME_MAX_LENGTH     16
-#define DFC_COMMAND_READER_ID_LENGTH       16
-#define DFC_COMMAND_TMAC_KEY_LENGTH        16
-#define DFC_COMMAND_EV2_CAPABILITY_LENGTH  6
-#define DFC_COMMAND_UINT24_MAX             0xFFFFFFu
+#define DFC_COMMAND_AID_LENGTH            3
+#define DFC_COMMAND_DF_NAME_MAX_LENGTH    16
+#define DFC_COMMAND_READER_ID_LENGTH      16
+#define DFC_COMMAND_TMAC_KEY_LENGTH       16
+#define DFC_COMMAND_EV2_CAPABILITY_LENGTH 6
+#define DFC_COMMAND_UINT24_MAX            0xFFFFFFu
 
 typedef enum {
     DfcCommandOk = 0,
@@ -47,29 +47,31 @@ typedef struct {
     size_t data_len;
 } DfcCommand;
 
-const char *dfc_command_status_name(DfcCommandStatus status);
+const char* dfc_command_status_name(DfcCommandStatus status);
 
 // Any instruction with any data. The typed functions below are preferred; this
 // one exists for instructions they do not name and for frames a caller has
 // already secured.
 DfcCommandStatus
-dfc_command_encode_raw(DfcCommand* command, uint8_t ins, const uint8_t *data, size_t data_len);
+    dfc_command_encode_raw(DfcCommand* command, uint8_t ins, const uint8_t* data, size_t data_len);
 
 // ISO 7816 envelope: 90 INS 00 00 [Lc data] 00. A command with no data omits Lc.
 DfcCommandStatus
-dfc_command_to_apdu(const DfcCommand* command, uint8_t *out, size_t cap, size_t *len);
+    dfc_command_to_apdu(const DfcCommand* command, uint8_t* out, size_t cap, size_t* len);
 
 // Bare native frame: INS data.
 DfcCommandStatus
-dfc_command_to_frame(const DfcCommand* command, uint8_t *out, size_t cap, size_t *len);
+    dfc_command_to_frame(const DfcCommand* command, uint8_t* out, size_t cap, size_t* len);
 
 // ------------------------------------------------------------ discovery ---
 
+// AIDs use the human-readable order stored by the credential model. The
+// command boundary converts them to least-significant-octet-first wire order.
 // `secondary_aid` may be NULL. With one, the card selects two applications.
 DfcCommandStatus dfc_command_select_application(
     DfcCommand* command,
     const uint8_t aid[DFC_COMMAND_AID_LENGTH],
-    const uint8_t *secondary_aid);
+    const uint8_t* secondary_aid);
 DfcCommandStatus dfc_command_get_version(DfcCommand* command);
 DfcCommandStatus dfc_command_get_free_memory(DfcCommand* command);
 DfcCommandStatus dfc_command_format_picc(DfcCommand* command);
@@ -78,6 +80,7 @@ DfcCommandStatus dfc_command_get_application_ids(DfcCommand* command);
 DfcCommandStatus dfc_command_get_df_names(DfcCommand* command);
 DfcCommandStatus dfc_command_get_file_ids(DfcCommand* command);
 DfcCommandStatus dfc_command_get_iso_file_ids(DfcCommand* command);
+// The response is always encrypted and authenticated by the active session.
 DfcCommandStatus dfc_command_get_card_uid(DfcCommand* command);
 DfcCommandStatus dfc_command_read_signature(DfcCommand* command, uint8_t signature_id);
 DfcCommandStatus dfc_command_get_key_version(DfcCommand* command, uint8_t key_no);
@@ -95,7 +98,7 @@ typedef struct {
     bool has_iso_file_id;
     uint16_t iso_file_id;
     // Requires an ISO file identifier. May be NULL.
-    const uint8_t *df_name;
+    const uint8_t* df_name;
     size_t df_name_len;
     bool has_extended_settings;
     uint8_t extended_settings;
@@ -108,9 +111,9 @@ typedef struct {
 } DfcCommandCreateApplication;
 
 DfcCommandStatus
-dfc_command_create_application(DfcCommand* command, const DfcCommandCreateApplication* app);
+    dfc_command_create_application(DfcCommand* command, const DfcCommandCreateApplication* app);
 DfcCommandStatus
-dfc_command_delete_application(DfcCommand* command, const uint8_t aid[DFC_COMMAND_AID_LENGTH]);
+    dfc_command_delete_application(DfcCommand* command, const uint8_t aid[DFC_COMMAND_AID_LENGTH]);
 
 typedef struct {
     uint8_t aid[DFC_COMMAND_AID_LENGTH];
@@ -126,7 +129,7 @@ DfcCommandStatus dfc_command_create_delegated_application(
     DfcCommand* command,
     const DfcCommandCreateDelegatedApplication* app);
 DfcCommandStatus
-dfc_command_get_delegated_application_info(DfcCommand* command, uint16_t slot_number);
+    dfc_command_get_delegated_application_info(DfcCommand* command, uint16_t slot_number);
 
 // ---------------------------------------------------------------- files ---
 
@@ -164,19 +167,20 @@ typedef struct {
     uint8_t file_no;
     uint8_t comm_settings;
     uint16_t access_rights;
+    // TMKeyOption uses DFC_TRANSACTION_MAC_KEY_TYPE_* values.
     uint8_t key_type;
     uint8_t key[DFC_COMMAND_TMAC_KEY_LENGTH];
     uint8_t key_version;
 } DfcCommandTransactionMacFile;
 
 DfcCommandStatus
-dfc_command_create_standard_data_file(DfcCommand* command, const DfcCommandDataFile* file);
+    dfc_command_create_standard_data_file(DfcCommand* command, const DfcCommandDataFile* file);
 DfcCommandStatus
-dfc_command_create_backup_data_file(DfcCommand* command, const DfcCommandDataFile* file);
+    dfc_command_create_backup_data_file(DfcCommand* command, const DfcCommandDataFile* file);
 DfcCommandStatus
-dfc_command_create_record_file(DfcCommand* command, const DfcCommandRecordFile* file);
+    dfc_command_create_record_file(DfcCommand* command, const DfcCommandRecordFile* file);
 DfcCommandStatus
-dfc_command_create_value_file(DfcCommand* command, const DfcCommandValueFile* file);
+    dfc_command_create_value_file(DfcCommand* command, const DfcCommandValueFile* file);
 DfcCommandStatus dfc_command_create_transaction_mac_file(
     DfcCommand* command,
     const DfcCommandTransactionMacFile* file);
@@ -189,18 +193,18 @@ DfcCommandStatus dfc_command_change_file_settings(
     uint8_t file_no,
     uint8_t comm_settings,
     uint16_t access_rights,
-    const uint8_t *additional,
+    const uint8_t* additional,
     size_t additional_len);
 
 // ----------------------------------------------------------------- data ---
 
 DfcCommandStatus
-dfc_command_read_data(DfcCommand* command, uint8_t file_no, uint32_t offset, uint32_t length);
+    dfc_command_read_data(DfcCommand* command, uint8_t file_no, uint32_t offset, uint32_t length);
 DfcCommandStatus dfc_command_write_data(
     DfcCommand* command,
     uint8_t file_no,
     uint32_t offset,
-    const uint8_t *data,
+    const uint8_t* data,
     size_t data_len);
 // `iso_chaining` selects the ISO-chained instruction variant.
 DfcCommandStatus dfc_command_read_records(
@@ -213,7 +217,7 @@ DfcCommandStatus dfc_command_write_record(
     DfcCommand* command,
     uint8_t file_no,
     uint32_t offset,
-    const uint8_t *data,
+    const uint8_t* data,
     size_t data_len,
     bool iso_chaining);
 DfcCommandStatus dfc_command_update_record(
@@ -221,7 +225,7 @@ DfcCommandStatus dfc_command_update_record(
     uint8_t file_no,
     uint32_t record_no,
     uint32_t offset,
-    const uint8_t *data,
+    const uint8_t* data,
     size_t data_len,
     bool iso_chaining);
 DfcCommandStatus dfc_command_clear_record_file(DfcCommand* command, uint8_t file_no);
@@ -247,22 +251,22 @@ DfcCommandStatus dfc_command_abort_transaction(DfcCommand* command);
 DfcCommandStatus dfc_command_change_key(
     DfcCommand* command,
     uint8_t key_no,
-    const uint8_t *cryptogram,
+    const uint8_t* cryptogram,
     size_t cryptogram_len);
 DfcCommandStatus dfc_command_change_key_ev2(
     DfcCommand* command,
     uint8_t key_set_no,
     uint8_t key_no,
-    const uint8_t *cryptogram,
+    const uint8_t* cryptogram,
     size_t cryptogram_len);
 DfcCommandStatus dfc_command_change_key_settings(
     DfcCommand* command,
-    const uint8_t *encoded_settings,
+    const uint8_t* encoded_settings,
     size_t encoded_settings_len);
 DfcCommandStatus
-dfc_command_initialize_key_set(DfcCommand* command, uint8_t key_set_no, uint8_t key_type);
+    dfc_command_initialize_key_set(DfcCommand* command, uint8_t key_set_no, uint8_t key_type);
 DfcCommandStatus
-dfc_command_finalize_key_set(DfcCommand* command, uint8_t key_set_no, uint8_t key_set_version);
+    dfc_command_finalize_key_set(DfcCommand* command, uint8_t key_set_no, uint8_t key_set_version);
 DfcCommandStatus dfc_command_roll_key_set(DfcCommand* command, uint8_t key_set_no);
 
 // ---------------------------------------------------------- EV2 and EV3 ---
@@ -270,14 +274,14 @@ DfcCommandStatus dfc_command_roll_key_set(DfcCommand* command, uint8_t key_set_n
 DfcCommandStatus dfc_command_set_configuration(
     DfcCommand* command,
     uint8_t option,
-    const uint8_t *data,
+    const uint8_t* data,
     size_t data_len);
 DfcCommandStatus dfc_command_notify_transaction_success(DfcCommand* command);
 DfcCommandStatus dfc_command_prepare_proximity_check(DfcCommand* command);
 DfcCommandStatus
-dfc_command_proximity_check(DfcCommand* command, const uint8_t *data, size_t data_len);
+    dfc_command_proximity_check(DfcCommand* command, const uint8_t* data, size_t data_len);
 DfcCommandStatus
-dfc_command_verify_proximity_check(DfcCommand* command, const uint8_t *data, size_t data_len);
+    dfc_command_verify_proximity_check(DfcCommand* command, const uint8_t* data, size_t data_len);
 
 // -------------------------------------------------------- authentication ---
 
@@ -287,10 +291,10 @@ DfcCommandStatus dfc_command_authenticate(DfcCommand* command, uint8_t cipher, u
 DfcCommandStatus dfc_command_authenticate_ev2_first(
     DfcCommand* command,
     uint8_t key_no,
-    const uint8_t *capabilities,
+    const uint8_t* capabilities,
     size_t capabilities_len);
 DfcCommandStatus dfc_command_authenticate_ev2_non_first(DfcCommand* command, uint8_t key_no);
 DfcCommandStatus
-dfc_command_additional_frame(DfcCommand* command, const uint8_t *data, size_t data_len);
+    dfc_command_additional_frame(DfcCommand* command, const uint8_t* data, size_t data_len);
 
 #endif // DFC_ENABLE_READER

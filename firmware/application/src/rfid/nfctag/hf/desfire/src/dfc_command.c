@@ -4,11 +4,6 @@
 
 #if DFC_ENABLE_READER
 
-// Instructions dfc_common.h does not name because the emulator answers them
-// under their plain variants.
-#define CMD_READ_RECORDS_ISO_CHAINED 0xAB
-#define CMD_WRITE_RECORD_ISO_CHAINED 0x8B
-
 #define KEY_SET_VERSION_SELECTOR 0x40
 #define KEY_SET_VERSION_OPTION   0x80
 
@@ -149,8 +144,13 @@ DfcCommandStatus dfc_command_select_application(
     const uint8_t* secondary_aid) {
     if(!command || !aid) return DfcCommandInvalid;
     Builder b = builder_start(command, DFC_CMD_SELECT_APPLICATION);
-    put(&b, aid, DFC_COMMAND_AID_LENGTH);
-    if(secondary_aid) put(&b, secondary_aid, DFC_COMMAND_AID_LENGTH);
+    uint8_t wire_aid[DFC_COMMAND_AID_LENGTH] = {aid[2], aid[1], aid[0]};
+    put(&b, wire_aid, sizeof(wire_aid));
+    if(secondary_aid) {
+        const uint8_t wire_secondary_aid[DFC_COMMAND_AID_LENGTH] = {
+            secondary_aid[2], secondary_aid[1], secondary_aid[0]};
+        put(&b, wire_secondary_aid, sizeof(wire_secondary_aid));
+    }
     return builder_finish(&b);
 }
 
@@ -445,7 +445,7 @@ DfcCommandStatus dfc_command_read_records(
     bool iso_chaining) {
     return file_range(
         command,
-        iso_chaining ? CMD_READ_RECORDS_ISO_CHAINED : DFC_CMD_READ_RECORDS,
+        iso_chaining ? DFC_CMD_READ_RECORDS_ISO : DFC_CMD_READ_RECORDS,
         file_no,
         record_no,
         record_count,
@@ -463,7 +463,7 @@ DfcCommandStatus dfc_command_write_record(
     if(data_len > DFC_COMMAND_MAX_DATA - FILE_HEADER_LENGTH) return DfcCommandTooLong;
     return file_range(
         command,
-        iso_chaining ? CMD_WRITE_RECORD_ISO_CHAINED : DFC_CMD_WRITE_RECORD,
+        iso_chaining ? DFC_CMD_WRITE_RECORD_ISO : DFC_CMD_WRITE_RECORD,
         file_no,
         offset,
         (uint32_t)data_len,

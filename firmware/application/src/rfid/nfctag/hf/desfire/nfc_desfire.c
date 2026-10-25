@@ -371,7 +371,11 @@ static void build_defaults(nfc_tag_desfire_information_t *info) {
     info->file_pool_size = DFC_FILE_POOL_SIZE;
     info->key_pool_size = DFC_KEY_POOL_SIZE;
 
-    dfc_credential_init_blank(&info->credential);
+    if (!dfc_credential_init_blank(&info->credential)) {
+        /* Randomness unavailable at boot; info stays zeroed (no UID, no app,
+         * no key). The next load retries once the entropy reserve fills. */
+        NRF_LOG_ERROR("DESFire: blank credential init failed (no entropy)");
+    }
 
     /* Board defaults, used for whatever the loaded credential says nothing
      * about. A credential that carries its own SAK, ATQA, ATS or asks for a

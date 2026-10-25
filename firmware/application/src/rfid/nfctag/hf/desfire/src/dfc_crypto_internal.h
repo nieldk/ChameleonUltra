@@ -35,7 +35,9 @@ typedef struct {
 
 bool dfc_crypto_aes_block_init(DfcCryptoAesBlock* block, const uint8_t* key, size_t key_len);
 bool dfc_crypto_aes_block_encrypt(
-    DfcCryptoAesBlock* block, const uint8_t input[16], uint8_t output[16]);
+    DfcCryptoAesBlock* block,
+    const uint8_t input[16],
+    uint8_t output[16]);
 void dfc_crypto_aes_block_clear(DfcCryptoAesBlock* block);
 
 bool dfc_crypto_des_block_init(
@@ -44,5 +46,7 @@ bool dfc_crypto_des_block_init(
     const uint8_t* key,
     size_t key_len);
 bool dfc_crypto_des_block_crypt(
-    DfcCryptoDesBlock* block, const uint8_t input[8], uint8_t output[8]);
+    DfcCryptoDesBlock* block,
+    const uint8_t input[8],
+    uint8_t output[8]);
 void dfc_crypto_des_block_clear(DfcCryptoDesBlock* block);

@@ -20,7 +20,8 @@ void desfire_random_pump(void);
  * for diagnostics; the engine does not consult it. */
 bool desfire_random_ready(void);
 
-/* Count of times the engine asked for entropy the reserve could not supply and
- * the PRNG fallback was used. Should stay at zero; a non-zero value means the
- * main loop is not pumping often enough relative to reader traffic. */
+/* Count of times the engine asked for more entropy than the reserve held,
+ * failing that random-fill rather than padding it with weak bytes. Should
+ * stay at zero; a non-zero value means the main loop is not pumping often
+ * enough relative to reader traffic. */
 unsigned desfire_random_starvations(void);

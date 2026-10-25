@@ -41,5 +41,5 @@ void dfc_profile_default(DfcProfile* profile);
 DfcDerStatus dfc_profile_check(
     const DfcProfile* profile,
     const DfcCredential* credential,
-    char *reason,
+    char* reason,
     size_t reason_cap);

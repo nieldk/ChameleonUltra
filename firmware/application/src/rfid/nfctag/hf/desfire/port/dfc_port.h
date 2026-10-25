@@ -6,8 +6,8 @@
  * Assertions, logging and randomness. This is the whole platform surface the
  * engine depends on; everything else it needs is freestanding C.
  *
- * The firmware supplies the implementations in desfire_shim.c; the host test
- * harness supplies its own in tests/support/.
+ * Host implementations live in port/host/. Firmware consumers provide the
+ * same interface in their own port directory, for example dfc-flipper/port/.
  */
 #pragma once
 
@@ -27,9 +27,9 @@
 #endif
 
 #ifdef DFC_FIRMWARE_BUILD
-void dfc_assert_fail(const char *file, int line);
-#define DFC_ASSERT(expr)                          \
-    do {                                          \
+void dfc_assert_fail(const char* file, int line);
+#define DFC_ASSERT(expr)                                 \
+    do {                                                 \
         if(!(expr)) dfc_assert_fail(__FILE__, __LINE__); \
     } while(0)
 #else
@@ -52,8 +52,17 @@ void dfc_assert_fail(const char *file, int line);
  * RndB), so the implementation must not block and must not issue a SoftDevice
  * SVC from a high-priority context. The firmware satisfies this by draining a
  * ring that the main loop keeps topped up. Never returns predictable bytes:
- * DESFire authentication security rests on RndB being unguessable. */
-void dfc_random_fill(uint8_t *buf, size_t len);
+ * DESFire authentication security rests on RndB being unguessable. Return
+ * false without supplying predictable replacement bytes when the source cannot
+ * satisfy the whole request. */
+bool dfc_random_fill(uint8_t* buf, size_t len);
+// Starts one public PICC operation. Ports clear the previous operation's
+// failure classification here; the classification remains readable by every
+// layer handling the current operation.
+void dfc_random_operation_begin(void);
+// True only when the caller controls the source and can retry after adding
+// more bytes. Terminal entropy/backend failures return false.
+bool dfc_random_failure_is_retryable(void);
 
 /* Object allocation.
  *
@@ -72,8 +81,8 @@ typedef enum {
     DfcAllocSession,
 } DfcAllocTag;
 
-void *dfc_platform_alloc(size_t size, DfcAllocTag tag);
-void dfc_platform_free(void *ptr);
+void* dfc_platform_alloc(size_t size, DfcAllocTag tag);
+void dfc_platform_free(void* ptr);
 
 /* Points in the exchange a user interface may want to react to.
  *
@@ -87,4 +96,4 @@ typedef enum {
     DfcEventFileRequested,
 } DfcEvent;
 
-void dfc_port_notify(void *context, DfcEvent event);
+void dfc_port_notify(void* context, DfcEvent event);

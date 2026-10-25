@@ -9,6 +9,49 @@ bool dfc_iso_file_id_is_reserved(uint16_t value) {
     return value == 0x0000 || value == 0x3F00 || value == 0x3FFF || value == 0xFFFF;
 }
 
+bool dfc_communication_settings_is_valid(uint8_t value) {
+    uint8_t mode = value & DFC_COMM_MODE_MASK;
+    uint8_t flags = 0;
+#if DFC_ENABLE_SDM
+    // SDM shares the serialized octet with the communication mode.
+    flags = DFC_SDM_ENABLED_MASK;
+#endif
+    return (value & (uint8_t)~(flags | DFC_COMM_MODE_MASK)) == 0 &&
+           (mode == DFC_COMM_PLAIN || mode == DFC_COMM_MAC || mode == DFC_COMM_ENCIPHERED);
+}
+
+static bool access_nibble_is_valid(uint8_t value, size_t key_count) {
+    return value >= DFC_ACCESS_FREE || value < key_count;
+}
+
+bool dfc_access_rights_are_valid(uint16_t rights, size_t key_count) {
+    for(size_t shift = 0; shift < 16; shift += 4) {
+        if(!access_nibble_is_valid((uint8_t)(rights >> shift) & 0x0F, key_count)) return false;
+    }
+    return true;
+}
+
+bool dfc_transaction_mac_access_rights_are_valid(uint16_t rights, size_t key_count) {
+    // This file type reserves the write nibble and requires its disabled value.
+    return dfc_access_rights_are_valid(rights, key_count) &&
+           (((rights >> 8) & 0x0F) == DFC_ACCESS_DENY);
+}
+
+bool dfc_sdm_access_rights_are_valid(uint16_t rights, size_t key_count) {
+    uint8_t meta_read = (uint8_t)(rights >> 12);
+    uint8_t file_read = (uint8_t)(rights >> 8) & 0x0F;
+    uint8_t reserved = (uint8_t)(rights >> 4) & 0x0F;
+    uint8_t counter_read = (uint8_t)rights & 0x0F;
+    // The wire sends the low byte first, but the model keeps semantic nibble order.
+    return access_nibble_is_valid(meta_read, key_count) &&
+           access_nibble_is_valid(file_read, key_count) && reserved == DFC_ACCESS_DENY &&
+           access_nibble_is_valid(counter_read, key_count);
+}
+
+bool dfc_transaction_mac_key_type_is_valid(uint8_t value) {
+    return value == DFC_TRANSACTION_MAC_KEY_TYPE_AES;
+}
+
 size_t dfc_key_set_type_length(uint8_t type) {
     if(type == DFC_KEY_SET_TYPE_3K3DES) return DFC_KEY_SET_MAXIMUM_24_BYTE;
     if(type == DFC_KEY_SET_TYPE_2K3DES || type == DFC_KEY_SET_TYPE_AES) {
@@ -25,13 +68,50 @@ uint8_t dfc_key_type_for_set_type(uint8_t type) {
 
 bool dfc_ct_equal(const uint8_t* left, const uint8_t* right, size_t length) {
     uint8_t difference = 0;
-    for(size_t i = 0; i < length; i++) difference |= left[i] ^ right[i];
+    for(size_t i = 0; i < length; i++)
+        difference |= left[i] ^ right[i];
     return difference == 0;
+}
+
+void dfc_truncate_aes_wire_mac(
+    const uint8_t full[DFC_AES_CMAC_LENGTH],
+    uint8_t wire[DFC_WIRE_MAC_LENGTH]) {
+    for(size_t i = 0; i < DFC_WIRE_MAC_LENGTH; i++)
+        wire[i] = full[i * 2 + 1];
 }
 
 void dfc_secure_wipe(void* buffer, size_t length) {
     volatile uint8_t* bytes = buffer;
-    while(length--) *bytes++ = 0;
+    while(length--)
+        *bytes++ = 0;
+}
+
+uint16_t dfc_crc16_iso14443_extend(uint16_t crc, const uint8_t* data, size_t length) {
+    for(size_t i = 0; i < length; i++) {
+        uint8_t byte = data[i] ^ (crc & 0xFF);
+        byte ^= byte << 4;
+        crc = (crc >> 8) ^ ((uint16_t)byte << 8) ^ ((uint16_t)byte << 3) ^ ((uint16_t)byte >> 4);
+    }
+    return crc;
+}
+
+uint16_t dfc_crc16_iso14443(const uint8_t* data, size_t length) {
+    return dfc_crc16_iso14443_extend(0x6363, data, length);
+}
+
+uint32_t dfc_crc32_extend(uint32_t crc, const uint8_t* data, size_t length) {
+    for(size_t i = 0; i < length; i++) {
+        crc ^= data[i];
+        for(size_t bit = 0; bit < 8; bit++) {
+            uint32_t mask = 0u - (crc & 1u);
+            crc = (crc >> 1) ^ (0xEDB88320u & mask);
+        }
+    }
+    return crc;
+}
+
+uint32_t dfc_crc32(const uint8_t* data, size_t length) {
+    return dfc_crc32_extend(0xFFFFFFFFu, data, length);
 }
 
 #include <stdio.h>
@@ -160,12 +240,12 @@ bool dfc_wrap_native_response_as_iso7816(
 
     size_t offset = 0;
     if(prefix_len > 0) {
-        memcpy(output, native_response, prefix_len);
+        memmove(output, native_response, prefix_len);
         offset += prefix_len;
     }
 
     if(native_data_len > 0) {
-        memcpy(output + offset, native_response + prefix_len + 1, native_data_len);
+        memmove(output + offset, native_response + prefix_len + 1, native_data_len);
         offset += native_data_len;
     }
 
@@ -198,7 +278,7 @@ void dfc_rotate_left(uint8_t* buffer, size_t len) {
     buffer[len - 1] = first;
 }
 
-void dfc_worker_des_cbc_decrypt(
+bool dfc_worker_des_cbc_decrypt(
     const uint8_t* key,
     size_t key_len,
     uint8_t iv[8],
@@ -206,11 +286,10 @@ void dfc_worker_des_cbc_decrypt(
     const uint8_t* encrypted,
     uint8_t* clear) {
     bool ok = dfc_crypto_des_cbc(false, key, key_len, iv, encrypted, clear, length);
-    DFC_ASSERT(ok);
-    DFC_UNUSED(ok);
+    return ok;
 }
 
-void dfc_worker_des_cbc_encrypt(
+bool dfc_worker_des_cbc_encrypt(
     const uint8_t* key,
     size_t key_len,
     uint8_t iv[8],
@@ -218,11 +297,10 @@ void dfc_worker_des_cbc_encrypt(
     const uint8_t* clear,
     uint8_t* encrypted) {
     bool ok = dfc_crypto_des_cbc(true, key, key_len, iv, clear, encrypted, length);
-    DFC_ASSERT(ok);
-    DFC_UNUSED(ok);
+    return ok;
 }
 
-void dfc_worker_aes_cbc_decrypt(
+bool dfc_worker_aes_cbc_decrypt(
     const uint8_t* key,
     size_t key_len,
     uint8_t iv[16],
@@ -230,11 +308,10 @@ void dfc_worker_aes_cbc_decrypt(
     const uint8_t* encrypted,
     uint8_t* clear) {
     bool ok = dfc_crypto_aes_cbc(false, key, key_len, iv, encrypted, clear, length);
-    DFC_ASSERT(ok);
-    DFC_UNUSED(ok);
+    return ok;
 }
 
-void dfc_worker_aes_cbc_encrypt(
+bool dfc_worker_aes_cbc_encrypt(
     const uint8_t* key,
     size_t key_len,
     uint8_t iv[16],
@@ -242,8 +319,7 @@ void dfc_worker_aes_cbc_encrypt(
     const uint8_t* clear,
     uint8_t* encrypted) {
     bool ok = dfc_crypto_aes_cbc(true, key, key_len, iv, clear, encrypted, length);
-    DFC_ASSERT(ok);
-    DFC_UNUSED(ok);
+    return ok;
 }
 
 // True when a 16-octet key is the same 8-octet key twice, which makes it single

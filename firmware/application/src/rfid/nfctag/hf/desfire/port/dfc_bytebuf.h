@@ -25,11 +25,11 @@ typedef struct {
     size_t size_bytes;
 } DfcByteBuf;
 
-DfcByteBuf *dfc_bytebuf_alloc(size_t max_size);
+DfcByteBuf* dfc_bytebuf_alloc(size_t max_size);
 void dfc_bytebuf_free(DfcByteBuf* b);
 void dfc_bytebuf_reset(DfcByteBuf* b);
-void dfc_bytebuf_append_bytes(DfcByteBuf* b, const uint8_t *data, size_t len);
+void dfc_bytebuf_append_bytes(DfcByteBuf* b, const uint8_t* data, size_t len);
 void dfc_bytebuf_append_byte(DfcByteBuf* b, uint8_t byte);
 size_t dfc_bytebuf_get_size_bytes(const DfcByteBuf* b);
-const uint8_t *dfc_bytebuf_get_data(const DfcByteBuf* b);
+const uint8_t* dfc_bytebuf_get_data(const DfcByteBuf* b);
 uint8_t dfc_bytebuf_get_byte(const DfcByteBuf* b, size_t index);

@@ -16,9 +16,12 @@
 #include "nfc_14a.h"
 #include "tag_emulation.h"
 
-/* 'DFR1'. Bumped only when the persisted layout changes incompatibly. */
+/* 'DFR1'. Bumped only when the persisted layout changes incompatibly. dfc-core
+ * v2's DfcCredential reorders and resizes every member, so a v3 slot must not
+ * be reinterpreted as v4; info_is_valid() rejects it and build_defaults()
+ * replaces it, same as any other capacity mismatch. */
 #define NFC_DESFIRE_MAGIC   0x44465231u
-#define NFC_DESFIRE_VERSION 3u
+#define NFC_DESFIRE_VERSION 4u
 
 /**
  * Per-slot persisted data.

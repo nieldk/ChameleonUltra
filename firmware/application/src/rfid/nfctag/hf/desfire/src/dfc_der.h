@@ -51,7 +51,10 @@ DfcDerStatus
 
 #if DFC_ENABLE_DER_DECODER
 // Decode `in` into `credential`, which is cleared first. Enforces the section
-// 2.2.1 subset and every section 2.2.4 semantic rule.
+// 2.2.1 subset and every section 2.2.4 semantic rule. On any failure, including
+// invalid arguments, `credential` is left empty (see dfc_credential_clear) and
+// every octet decoded before the fault is wiped; it is never left partly
+// populated. A non-NULL `credential` is therefore always safe to reuse or free.
 DfcDerStatus dfc_der_decode(DfcCredential* credential, const uint8_t* in, size_t len);
 
 #endif

@@ -4,6 +4,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+typedef struct {
+    const uint8_t* data;
+    size_t length;
+} DfcCryptoSegment;
+
 /*
  * Crypto adapter for the small block-cipher surface that DFC uses.
  *
@@ -12,25 +17,25 @@
  */
 bool dfc_crypto_aes_cbc(
     bool encrypt,
-    const uint8_t *key,
+    const uint8_t* key,
     size_t key_len,
     uint8_t iv[16],
-    const uint8_t *input,
-    uint8_t *output,
+    const uint8_t* input,
+    uint8_t* output,
     size_t length);
 
 bool dfc_crypto_des_cbc(
     bool encrypt,
-    const uint8_t *key,
+    const uint8_t* key,
     size_t key_len,
     uint8_t iv[8],
-    const uint8_t *input,
-    uint8_t *output,
+    const uint8_t* input,
+    uint8_t* output,
     size_t length);
 
 bool dfc_crypto_des_ecb(
     bool encrypt,
-    const uint8_t *key,
+    const uint8_t* key,
     size_t key_len,
     const uint8_t input[8],
     uint8_t output[8]);

@@ -497,7 +497,16 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
     $(PROJ_DIR)/rfid/nfctag/hf/nfc_mfplus.c \
     $(DESFIRE_DIR)/src/dfc_virtual_picc.c \
     $(DESFIRE_DIR)/src/dfc_emulator.c \
+    $(DESFIRE_DIR)/src/dfc_emulator_access.c \
     $(DESFIRE_DIR)/src/dfc_emulator_commands.c \
+    $(DESFIRE_DIR)/src/dfc_emulator_commands_auth.c \
+    $(DESFIRE_DIR)/src/dfc_emulator_commands_data.c \
+    $(DESFIRE_DIR)/src/dfc_emulator_commands_keys.c \
+    $(DESFIRE_DIR)/src/dfc_emulator_commands_lifecycle.c \
+    $(DESFIRE_DIR)/src/dfc_emulator_commands_metadata.c \
+    $(DESFIRE_DIR)/src/dfc_emulator_commands_proximity.c \
+    $(DESFIRE_DIR)/src/dfc_emulator_commands_records.c \
+    $(DESFIRE_DIR)/src/dfc_emulator_commands_transactions.c \
     $(DESFIRE_DIR)/src/dfc_emulator_crypto.c \
     $(DESFIRE_DIR)/src/dfc_emulator_iso7816.c \
     $(DESFIRE_DIR)/src/dfc_credential.c \
@@ -540,8 +549,8 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
 # Ceiling is the _Static_assert in nfc_desfire.c: slot record must fit one
 # 8192B FDS page (8136B after record overhead). x86-64 host build at these
 # limits (size_t is 8B here, 4B on the real target, so this over-estimates):
-# EV3 credential 5016B, record 5320B, ~2800B spare. Re-check on an ARM build
-# once a toolchain is available.
+# EV3 credential 4488B (dfc-core v2), record 4792B, ~3344B spare. Re-check on
+# an ARM build once a toolchain is available.
 CFLAGS += -DDFC_KEY_POOL_SIZE=448
 CFLAGS += -DDFC_MAX_APPS=4 -DDFC_MAX_KEYS=14 -DDFC_MAX_FILES=8
 CFLAGS += -DDFC_FILE_POOL_SIZE=1024 -DDFC_MAX_FILE_DATA=1024

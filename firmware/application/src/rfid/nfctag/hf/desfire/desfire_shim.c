@@ -10,7 +10,6 @@
 
 #include "desfire_shim.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 #include "app_error.h"
@@ -44,20 +43,53 @@ void dfc_assert_fail(const char *file, int line) {
 /* One static slot per object kind. The engine never holds two of any kind at
  * once, and dfc_virtual_picc_field_off releases and reacquires the emulator
  * from the NFC interrupt on every field drop, which a heap could not serve
- * safely or in bounded time. */
+ * safely or in bounded time.
+ *
+ * DfcAllocEmulator is not one object, though: the engine also draws the
+ * inbound command-chain reassembly buffer and the transaction-MAC snapshot
+ * pool from this same tag (dfc_emulator_commands.c / _transactions.c), each
+ * independently alloc'd and freed while the emulator itself stays resident.
+ * A single slot keyed only on "in use" would hand out the live DfcEmulator's
+ * own storage to the second caller. Split the tag into its three concurrent
+ * lifetimes instead. */
 static DfcEmulator m_emulator;
+static uint8_t m_emulator_command_chain[DFC_EMULATOR_CHAIN_BUFFER_SIZE];
+static uint8_t m_emulator_transaction_snapshot[DFC_FILE_POOL_SIZE];
 static DfcSecureMessaging m_secure_messaging;
 static DfcVirtualPiccSession m_session;
 static bool m_emulator_used;
+static bool m_emulator_command_chain_used;
+static bool m_emulator_transaction_snapshot_used;
 static bool m_secure_messaging_used;
 static bool m_session_used;
 
 void *dfc_platform_alloc(size_t size, DfcAllocTag tag) {
     switch (tag) {
         case DfcAllocEmulator:
-            if (m_emulator_used || size > sizeof(m_emulator)) return NULL;
-            m_emulator_used = true;
-            return &m_emulator;
+            /* dfc_emulator_alloc() always requests exactly sizeof(DfcEmulator)
+             * for the object itself; the chain and snapshot buffers are always
+             * requested well under that. The exact-size match is what tells
+             * the three apart. */
+            if (size == sizeof(m_emulator)) {
+                if (m_emulator_used) return NULL;
+                m_emulator_used = true;
+                return &m_emulator;
+            }
+            if (size <= sizeof(m_emulator_command_chain) &&
+                    !m_emulator_command_chain_used) {
+                m_emulator_command_chain_used = true;
+                return m_emulator_command_chain;
+            }
+            if (size <= sizeof(m_emulator_transaction_snapshot) &&
+                    !m_emulator_transaction_snapshot_used) {
+                m_emulator_transaction_snapshot_used = true;
+                return m_emulator_transaction_snapshot;
+            }
+            /* CreateFile during an open MAC-protected transaction grows the
+             * snapshot by allocating the bigger copy before freeing the
+             * smaller one, needing both at once. One slot can't serve that;
+             * it fails the create cleanly instead of aliasing a live buffer. */
+            return NULL;
         case DfcAllocSecureMessaging:
             if (m_secure_messaging_used || size > sizeof(m_secure_messaging)) return NULL;
             m_secure_messaging_used = true;
@@ -73,6 +105,10 @@ void *dfc_platform_alloc(size_t size, DfcAllocTag tag) {
 void dfc_platform_free(void *ptr) {
     if (ptr == &m_emulator) {
         m_emulator_used = false;
+    } else if (ptr == m_emulator_command_chain) {
+        m_emulator_command_chain_used = false;
+    } else if (ptr == m_emulator_transaction_snapshot) {
+        m_emulator_transaction_snapshot_used = false;
     } else if (ptr == &m_secure_messaging) {
         m_secure_messaging_used = false;
     } else if (ptr == &m_session) {
@@ -188,7 +224,18 @@ unsigned desfire_random_starvations(void) {
     return m_starvations;
 }
 
-void dfc_random_fill(uint8_t *buf, size_t len) {
+/* The reserve only ever runs dry, never permanently fails -- the next
+ * desfire_random_pump() may refill it from the hardware TRNG. There is no
+ * terminal backend failure to classify, so every shortfall is retryable and
+ * there is no sticky state for begin() to clear. */
+void dfc_random_operation_begin(void) {
+}
+
+bool dfc_random_failure_is_retryable(void) {
+    return true;
+}
+
+bool dfc_random_fill(uint8_t *buf, size_t len) {
     size_t taken = 0;
 
     CRITICAL_REGION_ENTER();
@@ -200,17 +247,14 @@ void dfc_random_fill(uint8_t *buf, size_t len) {
     }
     CRITICAL_REGION_EXIT();
 
-    if (taken == len) return;
+    if (taken == len) return true;
 
-    /* Reserve ran dry mid-authentication. Fall back to the C PRNG, which
-     * app_main seeds from the hardware RNG at boot: weaker than the reserve but
-     * never constant or all-zero, which is what matters -- DESFire mutual
-     * authentication rests on RndB being unpredictable to the reader. The
+    /* Reserve ran dry mid-authentication. dfc-core's contract is to fail
+     * rather than pad with predictable bytes -- DESFire mutual authentication
+     * rests on RndB being unguessable to the reader, which rand() is not. The
      * counter makes the shortfall visible rather than silent. */
     m_starvations++;
-    for (size_t i = taken; i < len; i++) {
-        buf[i] = (uint8_t)(rand() & 0xFF);
-    }
+    return false;
 }
 
 /* ------------------------------------------------- configuration guards ---- */
@@ -219,6 +263,12 @@ void dfc_random_fill(uint8_t *buf, size_t len) {
  * capacity change that outgrew them would otherwise fail at runtime by
  * returning NULL from an interrupt handler. */
 _Static_assert(sizeof(m_emulator) == sizeof(DfcEmulator), "emulator slot size drift");
+_Static_assert(
+    sizeof(m_emulator_command_chain) == DFC_EMULATOR_CHAIN_BUFFER_SIZE,
+    "command chain slot size drift");
+_Static_assert(
+    sizeof(m_emulator_transaction_snapshot) == DFC_FILE_POOL_SIZE,
+    "transaction snapshot slot size drift");
 _Static_assert(
     sizeof(m_secure_messaging) == sizeof(DfcSecureMessaging),
     "secure messaging slot size drift");
