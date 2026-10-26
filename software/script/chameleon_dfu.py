@@ -464,13 +464,22 @@ def find_dfu_port():
     return None
 
 
-def wait_for_dfu_port(timeout: float = 30.0, poll: float = 0.25):
-    """Block until the DFU USB device enumerates; return its port path."""
+def wait_for_dfu_port(timeout: float = 30.0, poll: float = 0.25, settle: float = 1.5):
+    """Block until the DFU USB device enumerates; return its port path.
+
+    `settle` matters more than it looks: Windows can list the port (VID/PID
+    visible to list_ports) before usbser.sys has finished binding the CDC
+    pipes underneath it. Opening right away sometimes "succeeds" and even
+    transfers a while before dying mid-stream with a ClearCommError/
+    PermissionError(13) -- not a clean open failure, so it looks like a
+    hardware flake rather than the enumeration race it is. 0.3s was too
+    short to reliably clear that race on at least one real machine.
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         port = find_dfu_port()
         if port:
-            time.sleep(0.3)  # let the CDC endpoint settle after enumeration
+            time.sleep(settle)
             return port
         time.sleep(poll)
     return None

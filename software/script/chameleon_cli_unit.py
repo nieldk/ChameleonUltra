@@ -1796,9 +1796,35 @@ class HWFlash(BaseCLIUnit):
             else:
                 chameleon_dfu.flash_package(images, transport, progress=progress)
         except chameleon_dfu.DFUError as e:
-            print()
-            print(color_string((CR, f"Flash failed: {e}")))
-            return
+            # Raw flashing over the serial DFU port can hit a Windows
+            # enumeration race: the port opens and transfers for a while
+            # before usbser.sys drops it ("serial port lost: ... ClearCommError
+            # ... PermissionError(13)"), because the CDC pipes underneath
+            # weren't fully bound yet when we opened. The device is still
+            # sitting in DFU with nothing committed (RAW_OP_COMMIT never ran),
+            # so restarting the whole raw write on a freshly re-discovered
+            # port is safe -- it's exactly what manually rerunning with
+            # --no-enter does, just automatic and without the half-upload
+            # scare in between.
+            if raw and not use_ble and serial_port is None and "serial port lost" in str(e):
+                print()
+                print(color_string((CY, f"Serial port dropped mid-upload ({e}); retrying once...")))
+                transport.close()
+                retry_port = chameleon_dfu.wait_for_dfu_port(timeout=args.wait)
+                if retry_port is None:
+                    print(color_string((CR, "DFU device (1915:521f) not found on retry.")))
+                    return
+                try:
+                    transport = chameleon_dfu.serial_transport(retry_port)
+                    chameleon_dfu.raw_flash_app(transport, raw_data, progress=progress)
+                except chameleon_dfu.DFUError as e2:
+                    print()
+                    print(color_string((CR, f"Flash failed: {e2}")))
+                    return
+            else:
+                print()
+                print(color_string((CR, f"Flash failed: {e}")))
+                return
         finally:
             transport.close()
         print()
