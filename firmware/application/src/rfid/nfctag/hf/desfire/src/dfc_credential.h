@@ -5,17 +5,52 @@
 #include "dfc.h"
 #include "dfc_common.h"
 
-// Sentinel: file has no bytes reserved in the shared pool.
-#define DFC_FILE_POOL_NONE ((size_t)0xFFFFFFFFu)
+// Pool slices use the smallest integer that still represents every configured
+// byte. Keeping the sentinel outside the usable offset range preserves custom
+// host profiles without making target records pay for host-sized indices.
+#if DFC_FILE_POOL_SIZE <= UINT16_MAX
+typedef uint16_t DfcFilePoolSize;
+#define DFC_FILE_POOL_NONE UINT16_MAX
+#else
+typedef uint32_t DfcFilePoolSize;
+#define DFC_FILE_POOL_NONE UINT32_MAX
+#endif
 
-// Sentinel: application or PICC record has no key material reserved in the
-// shared key pool.
-#define DFC_KEY_POOL_NONE ((size_t)0xFFFFFFFFu)
+#if DFC_KEY_POOL_SIZE <= UINT16_MAX
+typedef uint16_t DfcKeyPoolSize;
+#define DFC_KEY_POOL_NONE UINT16_MAX
+#else
+typedef uint32_t DfcKeyPoolSize;
+#define DFC_KEY_POOL_NONE UINT32_MAX
+#endif
+
+#if DFC_MAX_FILES <= UINT8_MAX
+typedef uint8_t DfcFileCount;
+#elif DFC_MAX_FILES <= UINT16_MAX
+typedef uint16_t DfcFileCount;
+#else
+typedef uint32_t DfcFileCount;
+#endif
+
+_Static_assert(DFC_FILE_POOL_SIZE <= UINT32_MAX, "file pool offsets must fit uint32_t");
+_Static_assert(DFC_KEY_POOL_SIZE <= UINT32_MAX, "key pool offsets must fit uint32_t");
+_Static_assert(DFC_MAX_APPS < UINT8_MAX, "file owner index must leave room for the PICC");
+_Static_assert(DFC_MAX_FILES <= UINT32_MAX, "file count must fit uint32_t");
+_Static_assert(DFC_MAX_KEYS <= UINT8_MAX, "application key counts must fit uint8_t");
+_Static_assert(DFC_MAX_KEY_LEN <= UINT8_MAX, "application key lengths must fit uint8_t");
+_Static_assert(DFC_DESFIRE_UID_MAX_LENGTH <= UINT8_MAX, "UID length must fit uint8_t");
+_Static_assert(DFC_PICC_ATS_MAX <= UINT8_MAX, "ATS length must fit uint8_t");
+#if DFC_ENABLE_VIRTUAL_CARD
+_Static_assert(
+    DFC_VIRTUAL_CARD_MAX_INSTALLATION_ID_LENGTH <= UINT8_MAX,
+    "installation identifier length must fit uint8_t");
+_Static_assert(DFC_VIRTUAL_CARD_UID_MAX_LENGTH <= UINT8_MAX, "virtual UID length must fit uint8_t");
+#endif
 
 // Owning container of a file. Applications are 0..num_apps-1; the PICC record
 // uses this sentinel, so a PICC-level file is not mistaken for one in the first
 // application.
-#define DFC_FILE_OWNER_PICC ((size_t)0xFFFFFFFEu)
+#define DFC_FILE_OWNER_PICC UINT8_MAX
 
 #define DFC_LIMITED_CREDIT_TRANSACTION_CONSUMED (-1)
 
@@ -28,41 +63,91 @@ typedef enum {
 } DfcModelStatus;
 
 #if DFC_ENABLE_SDM
-#define DFC_SDM_RESETTABLE_FIELDS(X)       \
-    X(bool, sdm_enabled)                   \
-    X(uint8_t, sdm_options)                \
-    X(uint16_t, sdm_access_rights)         \
-    X(bool, sdm_has_uid_offset)            \
-    X(bool, sdm_has_counter_offset)        \
-    X(bool, sdm_has_picc_data_offset)      \
-    X(bool, sdm_has_mac_input_offset)      \
-    X(bool, sdm_has_encrypted_file_offset) \
-    X(bool, sdm_has_mac_offset)            \
-    X(bool, sdm_has_counter_limit)         \
-    X(uint32_t, sdm_uid_offset)            \
-    X(uint32_t, sdm_counter_offset)        \
-    X(uint32_t, sdm_picc_data_offset)      \
-    X(uint32_t, sdm_mac_input_offset)      \
-    X(uint32_t, sdm_encrypted_file_offset) \
-    X(uint32_t, sdm_encrypted_file_length) \
-    X(uint32_t, sdm_mac_offset)            \
-    X(uint32_t, sdm_counter_limit)
+typedef enum {
+    DfcSdmFlagEnabled = 1u << 0,
+    DfcSdmFlagUidOffset = 1u << 1,
+    DfcSdmFlagCounterOffset = 1u << 2,
+    DfcSdmFlagPiccDataOffset = 1u << 3,
+    DfcSdmFlagMacInputOffset = 1u << 4,
+    DfcSdmFlagEncryptedFile = 1u << 5,
+    DfcSdmFlagMacOffset = 1u << 6,
+    DfcSdmFlagCounterLimit = 1u << 7,
+} DfcSdmFlag;
 
 typedef struct {
-#define DFC_SDM_FIELD(type, name) type name;
-    DFC_SDM_RESETTABLE_FIELDS(DFC_SDM_FIELD)
-#undef DFC_SDM_FIELD
-} DfcSdmResettable;
+    uint8_t flags;
+    uint8_t options;
+    uint16_t access_rights;
+    uint32_t uid_offset;
+    uint32_t counter_offset;
+    uint32_t picc_data_offset;
+    uint32_t mac_input_offset;
+    uint32_t encrypted_file_offset;
+    uint32_t encrypted_file_length;
+    uint32_t mac_offset;
+    uint32_t counter_limit;
+} DfcSdmSettings;
+
+_Static_assert(sizeof(DfcSdmSettings) == 36, "SDM settings layout must stay compact");
+_Static_assert(
+    (DfcSdmFlagEnabled | DfcSdmFlagUidOffset | DfcSdmFlagCounterOffset | DfcSdmFlagPiccDataOffset |
+     DfcSdmFlagMacInputOffset | DfcSdmFlagEncryptedFile | DfcSdmFlagMacOffset |
+     DfcSdmFlagCounterLimit) == UINT8_MAX,
+    "SDM flags must cover one byte");
 #endif
 
 typedef struct {
-    size_t app_index;
-    // Slice into DfcCredential.file_pool holding the known contents.
-    size_t data_offset;
-    size_t data_len;
-    // Declared allocation, which is what a read returns. Distinct from the
-    // contents actually known, which may be shorter.
+    int32_t lower_limit;
+    int32_t upper_limit;
+    int32_t current;
+    int32_t pending_delta;
+    int32_t pending_value;
+    int32_t limited_credit_value;
+    int32_t limited_credit_pending;
+    uint8_t limited_credit;
+    bool pending;
+    bool pending_absolute;
+} DfcValueFileState;
+
+typedef struct {
+    uint32_t size;
+    uint32_t max_records;
+    uint32_t count;
+} DfcRecordFileState;
+
+#if DFC_ENABLE_TRANSACTION_MAC
+typedef struct {
+    uint32_t counter;
+    uint8_t key[DFC_AES_KEY_LENGTH];
+    uint8_t mac[DFC_WIRE_MAC_LENGTH];
+    uint8_t previous_reader_id[DFC_TRANSACTION_READER_ID_LENGTH];
+    uint8_t key_type;
+    uint8_t key_version;
+} DfcTransactionMacFileState;
+#endif
+
+typedef struct {
     uint32_t declared_size;
+#if DFC_ENABLE_SDM
+    DfcSdmSettings sdm;
+    uint32_t sdm_read_counter;
+#endif
+} DfcDataFileState;
+
+typedef union {
+    DfcDataFileState data;
+    DfcValueFileState value;
+    DfcRecordFileState record;
+#if DFC_ENABLE_TRANSACTION_MAC
+    DfcTransactionMacFileState transaction_mac;
+#endif
+} DfcFileState;
+
+typedef struct {
+    uint8_t app_index;
+    // Slice into DfcCredential.file_pool holding the known contents.
+    DfcFilePoolSize data_offset;
+    DfcFilePoolSize data_len;
     uint16_t access_rights;
     uint16_t iso_file_id;
     uint8_t number;
@@ -73,92 +158,75 @@ typedef struct {
     bool contents_complete;
     bool transaction_pending;
 
-    union {
-        struct {
-            int32_t value_lower_limit;
-            int32_t value_upper_limit;
-            int32_t value;
-            // The public delta remains 32-bit for ABI compatibility. The exact
-            // pending value handles transactions spanning the full value range
-            // without adding an aligned 64-bit member on embedded targets.
-            int32_t value_pending_delta;
-            int32_t value_pending_value;
-            // The committed one-use limit survives field loss. During a
-            // transaction, non-negative values accumulate debits and the
-            // named sentinel marks a successfully staged LimitedCredit.
-            int32_t limited_credit_value;
-            int32_t limited_credit_pending;
-            uint8_t limited_credit;
-            bool value_pending;
-            bool value_pending_absolute;
-        };
-        // Record files. The pool slice holds the leading known records in card
-        // order, so data_len is a whole multiple of record_size.
-        struct {
-            uint32_t record_size;
-            uint32_t max_records;
-            uint32_t record_count;
-        };
-#if DFC_ENABLE_TRANSACTION_MAC
-        struct {
-            uint32_t transaction_counter;
-            uint8_t transaction_mac_key[DFC_AES_KEY_LENGTH];
-            uint8_t transaction_mac[DFC_WIRE_MAC_LENGTH];
-            uint8_t previous_reader_id[DFC_TRANSACTION_READER_ID_LENGTH];
-            uint8_t transaction_mac_key_type;
-            uint8_t transaction_mac_key_version;
-        };
-#endif
-    };
-#if DFC_ENABLE_SDM
-    union {
-        DfcSdmResettable sdm_resettable;
-        struct {
-#define DFC_SDM_FIELD(type, name) type name;
-            DFC_SDM_RESETTABLE_FIELDS(DFC_SDM_FIELD)
-#undef DFC_SDM_FIELD
-        };
-    };
-    uint32_t sdm_read_counter;
-#endif
+    DfcFileState state;
 } DfcFile;
 
+static inline bool dfc_file_type_is_data(uint8_t type) {
+    return type == DFC_FILE_TYPE_STANDARD_DATA || type == DFC_FILE_TYPE_BACKUP_DATA;
+}
+
+// Keep the union tag check at the write boundary so callers cannot corrupt another file state.
+static inline bool dfc_file_set_declared_size(DfcFile* file, uint32_t size) {
+    if(!file || !dfc_file_type_is_data(file->type)) return false;
+    file->state.data.declared_size = size;
+    return true;
+}
+
+static inline bool dfc_file_get_declared_size(const DfcFile* file, uint32_t* size) {
+    if(!file || !size || !dfc_file_type_is_data(file->type)) return false;
+    *size = file->state.data.declared_size;
+    return true;
+}
+
 #if DFC_ENABLE_SDM
-#define DFC_ASSERT_SDM_ALIAS(type, name)                                          \
-    _Static_assert(                                                               \
-        offsetof(DfcFile, name) ==                                                \
-            offsetof(DfcFile, sdm_resettable) + offsetof(DfcSdmResettable, name), \
-        #name " must alias the named SDM reset storage");
-DFC_SDM_RESETTABLE_FIELDS(DFC_ASSERT_SDM_ALIAS)
-#undef DFC_ASSERT_SDM_ALIAS
-_Static_assert(
-    offsetof(DfcSdmResettable, sdm_enabled) == 0,
-    "SDM reset storage must start with sdm_enabled");
-_Static_assert(
-    offsetof(DfcSdmResettable, sdm_counter_limit) +
-            sizeof(((DfcSdmResettable*)0)->sdm_counter_limit) ==
-        sizeof(DfcSdmResettable),
-    "SDM reset storage must end with sdm_counter_limit");
-_Static_assert(
-    offsetof(DfcFile, sdm_read_counter) ==
-        offsetof(DfcFile, sdm_resettable) + sizeof(DfcSdmResettable),
-    "SDM read counter must follow the resettable settings");
-#undef DFC_SDM_RESETTABLE_FIELDS
+_Static_assert(sizeof(DfcDataFileState) <= sizeof(DfcFileState), "data state must fit file state");
+#endif
+#if DFC_ENABLE_TRANSACTION_MAC
+_Static_assert(sizeof(DfcFileState) == 48, "transaction MAC state must bound file state");
+#endif
+#if DFC_BUILD_ROLE == DFC_ROLE_TARGET && SIZE_MAX == UINT32_MAX && DFC_ENABLE_TRANSACTION_MAC
+_Static_assert(sizeof(DfcFile) == 64, "target file layout must stay compact");
+#endif
+
+#if DFC_ENABLE_SDM
+static inline bool dfc_sdm_flag_is_set(const DfcSdmSettings* settings, DfcSdmFlag flag) {
+    return settings && (settings->flags & (uint8_t)flag) != 0;
+}
+
+static inline void dfc_sdm_flag_set(DfcSdmSettings* settings, DfcSdmFlag flag, bool value) {
+    if(!settings) return;
+    if(value)
+        settings->flags |= (uint8_t)flag;
+    else
+        settings->flags &= (uint8_t)~flag;
+}
+
+static inline bool dfc_file_sdm_flag_is_set(const DfcFile* file, DfcSdmFlag flag) {
+    return file && file->type == DFC_FILE_TYPE_STANDARD_DATA &&
+           dfc_sdm_flag_is_set(&file->state.data.sdm, flag);
+}
+
+static inline void dfc_file_sdm_flag_set(DfcFile* file, DfcSdmFlag flag, bool value) {
+    if(!file || file->type != DFC_FILE_TYPE_STANDARD_DATA) return;
+    dfc_sdm_flag_set(&file->state.data.sdm, flag, value);
+}
 #endif
 
 typedef struct {
-    size_t iso_aid_len;
+    DfcKeyPoolSize key_offset;
+    DfcKeyPoolSize key_pool_len;
+    uint8_t iso_aid_len;
     // Slice into DfcCredential.key_pool holding num_keys keys, each one stored
     // key length wide. DFC_KEY_POOL_NONE when nothing is reserved. The slice
     // length is held rather than recomputed, so a caller that edits key_len in
     // place cannot make the bookkeeping disagree with the pool. Versions stay
     // inline: one octet per slot is not worth pooling.
-    size_t key_offset;
-    size_t key_pool_len;
-    size_t num_keys;
-    size_t key_len;
+    uint8_t num_keys;
+    uint8_t key_len;
 #if DFC_ENABLE_KEY_SETS
-    size_t key_storage_len;
+    uint8_t key_storage_len;
+    uint16_t key_set_metadata_offset;
+    uint16_t key_set_metadata_len;
 #endif
     uint16_t iso_file_id;
 #if DFC_ENABLE_DELEGATED_APPLICATIONS
@@ -188,10 +256,6 @@ typedef struct {
     uint8_t num_key_sets;
     uint8_t max_key_size;
     uint8_t key_set_settings;
-    uint8_t key_set_versions[DFC_MAX_KEY_SETS];
-    uint8_t key_set_types[DFC_MAX_KEY_SETS];
-    bool key_set_initialized[DFC_MAX_KEY_SETS];
-    uint8_t additional_key_versions[DFC_ADDITIONAL_KEY_SET_COUNT][DFC_MAX_KEYS];
 #endif
 #if DFC_ENABLE_APPLICATION_CAPABILITY_DATA
     bool has_capability_data;
@@ -227,23 +291,23 @@ typedef struct {
 } DfcCard;
 
 typedef struct {
-    size_t uid_len;
+    uint8_t uid_len;
     // PICC keys, slot 0 first. Slot 0 is the master key; later generations
     // define further slots, so this is a list rather than one key. The material
     // lives in key_pool, addressed the same way an application's does.
-    size_t picc_key_offset;
-    size_t picc_key_pool_len;
-    size_t picc_num_keys;
-    size_t picc_key_len;
-    size_t picc_ats_len;
+    DfcKeyPoolSize picc_key_offset;
+    DfcKeyPoolSize picc_key_pool_len;
+    uint8_t picc_num_keys;
+    uint8_t picc_key_len;
+    uint8_t picc_ats_len;
 #if DFC_ENABLE_VIRTUAL_CARD
-    size_t virtual_card_installation_id_len;
-    size_t virtual_card_uid_len;
+    uint8_t virtual_card_installation_id_len;
+    uint8_t virtual_card_uid_len;
 #endif
-    size_t num_apps;
-    size_t num_files;
-    size_t file_pool_used;
-    size_t key_pool_used;
+    uint8_t num_apps;
+    DfcFileCount num_files;
+    DfcFilePoolSize file_pool_used;
+    DfcKeyPoolSize key_pool_used;
 
     DfcApplication apps[DFC_MAX_APPS];
     DfcFile files[DFC_MAX_FILES];
@@ -315,10 +379,14 @@ typedef struct {
 
     // Variable key storage, shared by every application and the PICC record.
     uint8_t key_pool[DFC_KEY_POOL_SIZE];
+#if DFC_ENABLE_KEY_SETS
+    // Sparse metadata for applications that actually use multiple key sets.
+    // Each application owns one compact slice addressed by the fields above.
+    uint8_t key_set_metadata_pool[DFC_KEY_SET_METADATA_POOL_SIZE];
+    uint16_t key_set_metadata_pool_used;
+#endif
 
     bool dirty;
-
-    char name[DFC_FILE_NAME_MAX_LENGTH + 1];
 } DfcCredential;
 
 // This model owns only inline storage and offsets into its own pools. Do not
@@ -429,10 +497,43 @@ const uint8_t* dfc_credential_key_in_set_const(
     const DfcApplication* application,
     size_t key_set_number,
     size_t slot);
+// Metadata pointers are invalidated when an application's key sets are resized
+// or released, or when another application's metadata is compacted.
 uint8_t* dfc_credential_key_version_in_set(
+    DfcCredential* credential,
     DfcApplication* application,
     size_t key_set_number,
     size_t slot);
+const uint8_t* dfc_credential_key_version_in_set_const(
+    const DfcCredential* credential,
+    const DfcApplication* application,
+    size_t key_set_number,
+    size_t slot);
+uint8_t* dfc_credential_key_set_version(
+    DfcCredential* credential,
+    DfcApplication* application,
+    size_t key_set_number);
+const uint8_t* dfc_credential_key_set_version_const(
+    const DfcCredential* credential,
+    const DfcApplication* application,
+    size_t key_set_number);
+uint8_t* dfc_credential_key_set_type(
+    DfcCredential* credential,
+    DfcApplication* application,
+    size_t key_set_number);
+const uint8_t* dfc_credential_key_set_type_const(
+    const DfcCredential* credential,
+    const DfcApplication* application,
+    size_t key_set_number);
+bool dfc_credential_key_set_is_initialized(
+    const DfcCredential* credential,
+    const DfcApplication* application,
+    size_t key_set_number);
+bool dfc_credential_key_set_set_initialized(
+    DfcCredential* credential,
+    DfcApplication* application,
+    size_t key_set_number,
+    bool initialized);
 bool dfc_credential_roll_key_set(
     DfcCredential* credential,
     DfcApplication* application,

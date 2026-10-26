@@ -84,15 +84,26 @@ typedef struct {
     uint8_t key_no;
     // SelectApplication updates the scope even though it retires authentication.
     bool selected_application_is_picc;
-    // Legacy and EV1 session key and chaining IV. `pcd` is always set.
-    DfcSecureMessaging sm;
+    // Legacy/EV1 and EV2 keys are alternative session families. Keep their
+    // secret material in the same storage; the EV2 transaction context below
+    // survives key retirement for a following NonFirst authentication.
+    union {
+        // Legacy and EV1 session key and chaining IV. `pcd` is always set.
+        DfcSecureMessaging sm;
+        struct {
+            uint8_t ev2_encryption_key[DFC_AES_KEY_LENGTH];
+            uint8_t ev2_mac_key[DFC_AES_KEY_LENGTH];
+        };
+    };
     uint8_t ev2_transaction_identifier[DFC_EV2_TRANSACTION_IDENTIFIER_LENGTH];
     uint16_t ev2_command_counter;
-    uint8_t ev2_encryption_key[DFC_AES_KEY_LENGTH];
-    uint8_t ev2_mac_key[DFC_AES_KEY_LENGTH];
     uint8_t ev2_card_capabilities[DFC_EV2_CAPABILITY_LENGTH];
     uint8_t ev2_reader_capabilities[DFC_EV2_CAPABILITY_LENGTH];
 } DfcReaderSession;
+
+_Static_assert(
+    offsetof(DfcReaderSession, sm) == offsetof(DfcReaderSession, ev2_encryption_key),
+    "reader session key families must share storage");
 
 // Most octets after the instruction that may stay clear when a file write's
 // data field is encrypted: the head of UpdateRecord, the longest the reader
@@ -148,7 +159,6 @@ typedef struct {
             // When set, every continuation carries at most this many octets.
             size_t command_frame_len;
             DfcReaderStream stream;
-            uint8_t frame[DFC_READER_MAX_COMMAND];
         };
         struct {
             // Authentication in progress.
@@ -170,8 +180,22 @@ typedef struct {
         };
     };
 
-    uint8_t data[DFC_READER_MAX_RESPONSE];
+    union {
+        // Command storage ends when the last frame is emitted. The response
+        // then reuses these bytes. Authentication scratch stays outside this
+        // union because it remains live while authentication replies arrive.
+        uint8_t frame[DFC_READER_MAX_COMMAND];
+        uint8_t data[DFC_READER_MAX_RESPONSE];
+    };
 } DfcReaderExchange;
+
+_Static_assert(
+    offsetof(DfcReaderExchange, frame) == offsetof(DfcReaderExchange, data),
+    "reader command and response buffers must share storage");
+_Static_assert(
+    offsetof(DfcReaderExchange, data) >=
+        offsetof(DfcReaderExchange, auth_first) + sizeof(((DfcReaderExchange*)0)->auth_first),
+    "authentication scratch must remain live beside response storage");
 
 const char* dfc_reader_status_name(DfcReaderStatus status);
 

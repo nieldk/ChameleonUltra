@@ -6,14 +6,66 @@
 
 #include "dfc_credential.h"
 #include "dfc_secure_messaging.h"
+#include "dfc_transaction_mac_i.h"
 
-#define DFC_SDM_READ_CACHE_SIZE 192
+#define DFC_SDM_READ_CACHE_SIZE          192
+#define DFC_TRANSACTION_FILE_BITMAP_SIZE ((DFC_MAX_FILES + 7u) / 8u)
+
+#if DFC_FILE_POOL_SIZE <= UINT16_MAX
+typedef uint16_t DfcTransactionSnapshotOffset;
+typedef uint16_t DfcTransactionSnapshotRecordCount;
+#else
+typedef uint32_t DfcTransactionSnapshotOffset;
+typedef uint32_t DfcTransactionSnapshotRecordCount;
+#endif
+_Static_assert(
+    sizeof(DfcTransactionSnapshotOffset) == (DFC_FILE_POOL_SIZE <= UINT16_MAX ? 2u : 4u),
+    "transaction journal offset width must follow file-pool capacity");
+_Static_assert(
+    sizeof(DfcTransactionSnapshotRecordCount) == (DFC_FILE_POOL_SIZE <= UINT16_MAX ? 2u : 4u),
+    "transaction journal record-count width must follow file-pool capacity");
 
 typedef enum {
     DfcEmulatorSelectedApplicationNone,
     DfcEmulatorSelectedApplicationPicc,
     DfcEmulatorSelectedApplicationApp,
 } DfcEmulatorSelectedApplication;
+
+typedef struct {
+    uint8_t random_b[16];
+    // Ciphertext sent in step one supplies the continuation IV.
+    uint8_t encrypted_random_b[16];
+} DfcPendingNativeAuthentication;
+
+#if DFC_ENABLE_EV2_SECURE_MESSAGING
+typedef struct {
+    uint8_t static_key[DFC_AES_KEY_LENGTH];
+    uint8_t random_b[DFC_EV2_RANDOM_LENGTH];
+    uint8_t transaction_identifier[DFC_EV2_TRANSACTION_IDENTIFIER_LENGTH];
+    uint8_t card_capabilities[DFC_EV2_CAPABILITY_LENGTH];
+    uint8_t reader_capabilities[DFC_EV2_CAPABILITY_LENGTH];
+} DfcPendingEv2Authentication;
+#endif
+
+// Only one authentication handshake can await its continuation. Keeping every
+// protocol's secrets in named arms gives cleanup one complete storage extent.
+typedef union {
+    DfcPendingNativeAuthentication native;
+#if DFC_ENABLE_EV2_SECURE_MESSAGING
+    DfcPendingEv2Authentication ev2;
+#endif
+#if DFC_ENABLE_ISO7816_AUTH
+    struct {
+        uint8_t iso_auth_card_first[DFC_ISO7816_AUTH_CHALLENGE_LONG];
+        uint8_t iso_auth_host_first[DFC_ISO7816_AUTH_CHALLENGE_LONG];
+        uint8_t iso_auth_external_iv[DFC_AES_KEY_LENGTH];
+        uint8_t iso_auth_key[DFC_MAX_KEY_LEN];
+    };
+#endif
+} DfcPendingAuthenticationStorage;
+_Static_assert(
+    sizeof(DfcPendingAuthenticationStorage) >= sizeof(DfcPendingNativeAuthentication),
+    "pending authentication storage must hold native authentication");
 
 typedef struct {
     DfcByteBuf* tx_buffer;
@@ -55,7 +107,8 @@ typedef struct {
     size_t sdm_read_cache_len;
 #endif
 #if DFC_ENABLE_TRANSACTION_MAC
-    size_t transaction_input_len;
+    bool transaction_reader_id_pending;
+    bool transaction_reader_id_persist;
 #endif
 #if DFC_ENABLE_DELEGATED_APPLICATIONS
     size_t delegated_creation_header_length;
@@ -66,13 +119,18 @@ typedef struct {
     uint32_t transaction_timer_elapsed_milliseconds;
 #endif
 #if DFC_ENABLE_TRANSACTIONAL_DATA_FILES
-    uint32_t transaction_snapshot_record_counts[DFC_MAX_FILES];
+    DfcTransactionSnapshotRecordCount transaction_snapshot_record_counts[DFC_MAX_FILES];
+    // Offsets into transaction_snapshot_pool for lazily captured preimages.
+    DfcTransactionSnapshotOffset transaction_snapshot_offsets[DFC_MAX_FILES];
     uint32_t transaction_record_numbers[DFC_MAX_FILES];
     // 0 none, 1 WriteRecord, 2 UpdateRecord, 3 ClearRecordFile.
     uint8_t transaction_record_operations[DFC_MAX_FILES];
+    uint8_t transaction_snapshot_captured[DFC_TRANSACTION_FILE_BITMAP_SIZE];
+    uint8_t transaction_snapshot_created[DFC_TRANSACTION_FILE_BITMAP_SIZE];
     bool transaction_snapshot_active;
     bool transaction_snapshot_dirty;
 #endif
+    bool pending_chain_zero;
 #if DFC_ENABLE_EV2_SECURE_MESSAGING
     uint16_t ev2_command_counter;
     bool ev2_response_plain;
@@ -81,14 +139,9 @@ typedef struct {
     bool ev2_session_active;
     uint8_t ev2_authenticated_key_no;
     uint8_t ev2_pending_authenticated_key_no;
-    uint8_t ev2_static_key[DFC_AES_KEY_LENGTH];
-    uint8_t ev2_random_b[DFC_EV2_RANDOM_LENGTH];
     uint8_t ev2_transaction_identifier[DFC_EV2_TRANSACTION_IDENTIFIER_LENGTH];
-    uint8_t ev2_pending_transaction_identifier[DFC_EV2_TRANSACTION_IDENTIFIER_LENGTH];
     uint8_t ev2_card_capabilities[DFC_EV2_CAPABILITY_LENGTH];
     uint8_t ev2_reader_capabilities[DFC_EV2_CAPABILITY_LENGTH];
-    uint8_t ev2_pending_card_capabilities[DFC_EV2_CAPABILITY_LENGTH];
-    uint8_t ev2_pending_reader_capabilities[DFC_EV2_CAPABILITY_LENGTH];
     uint8_t ev2_session_encryption_key[DFC_AES_KEY_LENGTH];
     uint8_t ev2_session_mac_key[DFC_AES_KEY_LENGTH];
 #endif
@@ -97,9 +150,11 @@ typedef struct {
     uint8_t auth_key_no;
     uint8_t pending_auth_cipher;
     uint8_t pending_auth_key_no;
-    uint8_t rnd_a[16];
-    uint8_t rnd_b[16];
-    uint8_t enc_rnd_b[16]; // ciphertext PICC sent in step 1, needed to chain the IV in step 2
+    // Native and ISO authentication continuations cannot be live together:
+    // either family rejects and retires the other before accepting its next
+    // step. Control fields remain outside so wiping secrets cannot change the
+    // state machine that owns them.
+    DfcPendingAuthenticationStorage pending_authentication;
     bool awaiting_step2;
 #if DFC_ENABLE_ISO7816_AUTH
     // 0 idle, 1 challenge issued, 2 external authentication succeeded.
@@ -108,10 +163,6 @@ typedef struct {
     uint8_t iso_auth_key_no;
     uint8_t iso_auth_cipher;
     uint8_t iso_auth_reference;
-    uint8_t iso_auth_card_first[DFC_ISO7816_AUTH_CHALLENGE_LONG];
-    uint8_t iso_auth_host_first[DFC_ISO7816_AUTH_CHALLENGE_LONG];
-    uint8_t iso_auth_external_iv[DFC_AES_KEY_LENGTH];
-    uint8_t iso_auth_key[DFC_MAX_KEY_LEN];
 #endif
     uint8_t get_version_frame;
     // Chained native response residual (after the first frame).
@@ -158,7 +209,9 @@ typedef struct {
     uint8_t sdm_read_cache[DFC_SDM_READ_CACHE_SIZE];
 #endif
 #if DFC_ENABLE_TRANSACTION_MAC
-    uint8_t transaction_input[DFC_TRANSACTION_INPUT_MAX_LENGTH];
+    DfcTransactionMacAccumulator transaction_mac;
+    bool transaction_mac_retryable_failure;
+    uint8_t transaction_pending_reader_id[DFC_TRANSACTION_READER_ID_LENGTH];
 #endif
 
 #if DFC_ENABLE_DELEGATED_APPLICATIONS
@@ -166,6 +219,13 @@ typedef struct {
     uint8_t delegated_creation_header[DFC_DELEGATED_CREATE_MAX_HEADER_LENGTH];
 #endif
 } DfcEmulator;
+
+#if DFC_ENABLE_ISO7816_AUTH
+_Static_assert(
+    offsetof(DfcPendingAuthenticationStorage, native) ==
+        offsetof(DfcPendingAuthenticationStorage, iso_auth_card_first),
+    "native and ISO pending authentication must share storage");
+#endif
 
 #if DFC_ENABLE_EMULATOR
 

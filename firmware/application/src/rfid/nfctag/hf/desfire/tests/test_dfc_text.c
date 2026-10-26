@@ -110,10 +110,10 @@ static MunitResult test_transaction_mac_round_trip(const MunitParameter params[]
 
     const DfcFile* f = &c.files[0];
     munit_assert_uint8(f->type, ==, 0x05);
-    munit_assert_uint32(f->transaction_counter, ==, 9);
-    munit_assert_uint8(f->transaction_mac_key_type, ==, DFC_TRANSACTION_MAC_KEY_TYPE_AES);
-    munit_assert_uint8(f->transaction_mac_key_version, ==, 3);
-    munit_assert_memory_equal(8, f->transaction_mac, "\x01\x23\x45\x67\x89\xAB\xCD\xEF");
+    munit_assert_uint32(f->state.transaction_mac.counter, ==, 9);
+    munit_assert_uint8(f->state.transaction_mac.key_type, ==, DFC_TRANSACTION_MAC_KEY_TYPE_AES);
+    munit_assert_uint8(f->state.transaction_mac.key_version, ==, 3);
+    munit_assert_memory_equal(8, f->state.transaction_mac.mac, "\x01\x23\x45\x67\x89\xAB\xCD\xEF");
 
     // The text is canonical, so writing the model reproduces it exactly.
     static char out[DFC_TEXT_MAX_SIZE];
@@ -234,11 +234,11 @@ static MunitResult
     value->type = DFC_FILE_TYPE_VALUE;
     value->comm_settings = DFC_COMM_PLAIN;
     value->access_rights = 0xEEEE;
-    value->value_lower_limit = 0;
-    value->value_upper_limit = 100;
-    value->value = 40;
-    value->limited_credit = 1;
-    value->limited_credit_value = 7;
+    value->state.value.lower_limit = 0;
+    value->state.value.upper_limit = 100;
+    value->state.value.current = 40;
+    value->state.value.limited_credit = 1;
+    value->state.value.limited_credit_value = 7;
 
     size_t output_len = 0;
     munit_assert_int(
@@ -247,7 +247,7 @@ static MunitResult
     munit_assert_int(dfc_text_parse(&decoded, output, output_len, &detail), ==, DfcTextOk);
     const DfcFile* restored = dfc_credential_find_file_in_app(&decoded, 0, 2);
     munit_assert_not_null(restored);
-    munit_assert_int32(restored->limited_credit_value, ==, 7);
+    munit_assert_int32(restored->state.value.limited_credit_value, ==, 7);
     return MUNIT_OK;
 }
 
@@ -384,6 +384,31 @@ static MunitResult test_rejections(const MunitParameter params[], void* data) {
     return MUNIT_OK;
 }
 
+static MunitResult test_unclaimed_line_diagnostics(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    static char text[sizeof(MINIMAL) + (4096 * 2) + 64];
+
+    size_t at = 0;
+    for(size_t i = 0; i < 4096; i++) {
+        text[at++] = '#';
+        text[at++] = '\n';
+    }
+    size_t document_len = strlen(MINIMAL);
+    memcpy(text + at, MINIMAL, document_len);
+    at += document_len;
+    memcpy(text + at, "Card Storage: 2048\n", strlen("Card Storage: 2048\n"));
+    at += strlen("Card Storage: 2048\n");
+
+    static DfcCredential credential;
+    DfcTextError detail = {0};
+    munit_assert_int(dfc_text_parse(&credential, text, at, &detail), ==, DfcTextMalformed);
+    log_detail(&detail);
+    munit_assert_not_null(strstr(detail.message, "duplicate key Card Storage"));
+    munit_assert_size(detail.line, >, 4096);
+    return MUNIT_OK;
+}
+
 static MunitResult test_v5_version_overrides(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
@@ -478,11 +503,11 @@ static MunitResult test_mixed_key_set_round_trip(const MunitParameter params[], 
     src.card.generation = DfcGenerationEv2;
     DfcApplication* app = &src.apps[0];
     munit_assert_true(dfc_credential_key_sets_resize(&src, app, 3, 1, 16, 24));
-    app->key_set_types[0] = DFC_KEY_SET_TYPE_AES;
-    app->key_set_types[1] = DFC_KEY_SET_TYPE_3K3DES;
-    app->key_set_types[2] = DFC_KEY_SET_TYPE_AES;
+    *dfc_credential_key_set_type(&src, app, 0) = DFC_KEY_SET_TYPE_AES;
+    *dfc_credential_key_set_type(&src, app, 1) = DFC_KEY_SET_TYPE_3K3DES;
+    *dfc_credential_key_set_type(&src, app, 2) = DFC_KEY_SET_TYPE_AES;
     for(size_t set = 0; set < 3; set++) {
-        app->key_set_initialized[set] = true;
+        munit_assert_true(dfc_credential_key_set_set_initialized(&src, app, set, true));
         uint8_t* key = dfc_credential_key_in_set(&src, app, set, 0);
         munit_assert_not_null(key);
         memset(key, (int)(0x40 + set), set == 1 ? 24 : 16);
@@ -493,7 +518,8 @@ static MunitResult test_mixed_key_set_round_trip(const MunitParameter params[], 
     munit_assert_int(dfc_text_write(&src, text, sizeof(text), &len), ==, DfcTextOk);
     static DfcCredential dst;
     munit_assert_int(dfc_text_parse(&dst, text, len, &detail), ==, DfcTextOk);
-    munit_assert_uint8(dst.apps[0].key_set_types[1], ==, DFC_KEY_SET_TYPE_3K3DES);
+    munit_assert_uint8(
+        *dfc_credential_key_set_type(&dst, &dst.apps[0], 1), ==, DFC_KEY_SET_TYPE_3K3DES);
     munit_assert_memory_equal(
         24,
         dfc_credential_key_in_set_const(&dst, &dst.apps[0], 1, 0),
@@ -511,6 +537,12 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE,
      NULL},
     {"/rejections", test_rejections, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/unclaimed-line-diagnostics",
+     test_unclaimed_line_diagnostics,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
     {"/v5-version-overrides", test_v5_version_overrides, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/v5-short-version-override",
      test_v5_rejects_short_version_override,

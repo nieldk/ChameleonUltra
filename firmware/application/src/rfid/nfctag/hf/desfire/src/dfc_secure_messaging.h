@@ -16,7 +16,7 @@
 typedef struct {
     uint8_t cipher; // DFC_CMD_AUTHENTICATE_LEGACY / _ISO / _AES
     uint8_t session_key[DFC_MAX_KEY_LEN];
-    size_t session_key_len;
+    uint8_t session_key_len;
     // Shared CBC IV, chained across every enciphered-mode operation regardless of
     // direction, for ISO(0x1A)/AES(0xAA) sessions. The IV for each new CBC operation is
     // the last ciphertext block of the preceding operation. Legacy (0x0A) sessions use

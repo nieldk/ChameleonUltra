@@ -40,18 +40,21 @@ void dfc_assert_fail(const char *file, int line) {
 
 /* ---------------------------------------------------------- allocation ---- */
 
-/* One static slot per object kind. The engine never holds two of any kind at
- * once, and dfc_virtual_picc_field_off releases and reacquires the emulator
- * from the NFC interrupt on every field drop, which a heap could not serve
- * safely or in bounded time.
+/* One static slot per tag. The engine never holds two of any kind at once,
+ * and dfc_virtual_picc_field_off releases and reacquires the emulator from
+ * the NFC interrupt on every field drop, which a heap could not serve safely
+ * or in bounded time.
  *
- * DfcAllocEmulator is not one object, though: the engine also draws the
- * inbound command-chain reassembly buffer and the transaction-MAC snapshot
- * pool from this same tag (dfc_emulator_commands.c / _transactions.c), each
- * independently alloc'd and freed while the emulator itself stays resident.
- * A single slot keyed only on "in use" would hand out the live DfcEmulator's
- * own storage to the second caller. Split the tag into its three concurrent
- * lifetimes instead. */
+ * dfc-core 2.0 split what used to be one DfcAllocEmulator tag into three --
+ * DfcAllocEmulator (the object itself), DfcAllocCommandChain (inbound
+ * command-chain reassembly buffer) and DfcAllocTransactionSnapshot
+ * (transaction-MAC snapshot pool) -- because their lifetimes can overlap
+ * the emulator's own. Before that split this firmware disambiguated the
+ * three by requested size within a single tag/slot, which aliased the
+ * emulator object's storage onto the same slot as the chain buffer and
+ * snapshot pool: any multi-frame native command, or any MAC-protected
+ * transaction, silently corrupted the live DfcEmulator. Each tag now gets
+ * its own dedicated static slot, matching upstream. */
 static DfcEmulator m_emulator;
 static uint8_t m_emulator_command_chain[DFC_EMULATOR_CHAIN_BUFFER_SIZE];
 static uint8_t m_emulator_transaction_snapshot[DFC_FILE_POOL_SIZE];
@@ -66,30 +69,26 @@ static bool m_session_used;
 void *dfc_platform_alloc(size_t size, DfcAllocTag tag) {
     switch (tag) {
         case DfcAllocEmulator:
-            /* dfc_emulator_alloc() always requests exactly sizeof(DfcEmulator)
-             * for the object itself; the chain and snapshot buffers are always
-             * requested well under that. The exact-size match is what tells
-             * the three apart. */
-            if (size == sizeof(m_emulator)) {
-                if (m_emulator_used) return NULL;
-                m_emulator_used = true;
-                return &m_emulator;
+            if (m_emulator_used || size > sizeof(m_emulator)) return NULL;
+            m_emulator_used = true;
+            return &m_emulator;
+        case DfcAllocCommandChain:
+            if (m_emulator_command_chain_used || size > sizeof(m_emulator_command_chain)) {
+                return NULL;
             }
-            if (size <= sizeof(m_emulator_command_chain) &&
-                    !m_emulator_command_chain_used) {
-                m_emulator_command_chain_used = true;
-                return m_emulator_command_chain;
-            }
-            if (size <= sizeof(m_emulator_transaction_snapshot) &&
-                    !m_emulator_transaction_snapshot_used) {
-                m_emulator_transaction_snapshot_used = true;
-                return m_emulator_transaction_snapshot;
-            }
+            m_emulator_command_chain_used = true;
+            return m_emulator_command_chain;
+        case DfcAllocTransactionSnapshot:
             /* CreateFile during an open MAC-protected transaction grows the
              * snapshot by allocating the bigger copy before freeing the
              * smaller one, needing both at once. One slot can't serve that;
              * it fails the create cleanly instead of aliasing a live buffer. */
-            return NULL;
+            if (m_emulator_transaction_snapshot_used ||
+                    size > sizeof(m_emulator_transaction_snapshot)) {
+                return NULL;
+            }
+            m_emulator_transaction_snapshot_used = true;
+            return m_emulator_transaction_snapshot;
         case DfcAllocSecureMessaging:
             if (m_secure_messaging_used || size > sizeof(m_secure_messaging)) return NULL;
             m_secure_messaging_used = true;
@@ -98,6 +97,12 @@ void *dfc_platform_alloc(size_t size, DfcAllocTag tag) {
             if (m_session_used || size > sizeof(m_session)) return NULL;
             m_session_used = true;
             return &m_session;
+        case DfcAllocByteBuf:
+        case DfcAllocCount:
+            /* Never requested here: this port's dfc_bytebuf_alloc() (below)
+             * serves DfcByteBuf from its own fixed pool instead of routing
+             * through dfc_platform_alloc. */
+            return NULL;
     }
     return NULL;
 }

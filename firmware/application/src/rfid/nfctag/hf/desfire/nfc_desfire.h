@@ -17,11 +17,13 @@
 #include "tag_emulation.h"
 
 /* 'DFR1'. Bumped only when the persisted layout changes incompatibly. dfc-core
- * v2's DfcCredential reorders and resizes every member, so a v3 slot must not
- * be reinterpreted as v4; info_is_valid() rejects it and build_defaults()
- * replaces it, same as any other capacity mismatch. */
+ * 2.0.0's DfcCredential again reorders and resizes every member relative to
+ * the v2 Unreleased snapshot v4 was built against (tagged unions for
+ * file-type state, pooled key-set metadata, compacted DER field indexing),
+ * so a v4 slot must not be reinterpreted as v5; info_is_valid() rejects it
+ * and build_defaults() replaces it, same as any other capacity mismatch. */
 #define NFC_DESFIRE_MAGIC   0x44465231u
-#define NFC_DESFIRE_VERSION 4u
+#define NFC_DESFIRE_VERSION 5u
 
 /**
  * Per-slot persisted data.

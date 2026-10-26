@@ -332,13 +332,13 @@ static MunitResult
     DfcApplication* app = add_app(&c, 0x01, DFC_KEY_TYPE_AES | 1);
     munit_assert_not_null(app);
     munit_assert_true(dfc_credential_key_sets_resize(&c, app, 2, 1, 16, 16));
-    app->key_set_versions[0] = 0x31;
-    app->key_set_versions[1] = 0x42;
-    app->key_set_types[0] = DFC_KEY_SET_TYPE_AES;
-    app->key_set_types[1] = DFC_KEY_SET_TYPE_AES;
-    app->key_set_initialized[0] = true;
-    app->key_set_initialized[1] = false;
-    app->additional_key_versions[0][0] = 0x53;
+    *dfc_credential_key_set_version(&c, app, 0) = 0x31;
+    *dfc_credential_key_set_version(&c, app, 1) = 0x42;
+    *dfc_credential_key_set_type(&c, app, 0) = DFC_KEY_SET_TYPE_AES;
+    *dfc_credential_key_set_type(&c, app, 1) = DFC_KEY_SET_TYPE_AES;
+    munit_assert_true(dfc_credential_key_set_set_initialized(&c, app, 0, true));
+    munit_assert_true(dfc_credential_key_set_set_initialized(&c, app, 1, false));
+    *dfc_credential_key_version_in_set(&c, app, 1, 0) = 0x53;
     memset(dfc_credential_key(&c, app, 0), 0xA5, 16);
 
     for(size_t i = 1; i < DFC_MAX_APPS; i++) {
@@ -359,14 +359,10 @@ static MunitResult
     size_t pool_len = app->key_pool_len;
     uint8_t key[16];
     memcpy(key, dfc_credential_key_const(&c, app, 0), sizeof(key));
-    uint8_t versions[DFC_MAX_KEY_SETS];
-    uint8_t types[DFC_MAX_KEY_SETS];
-    bool initialized[DFC_MAX_KEY_SETS];
-    uint8_t additional[DFC_ADDITIONAL_KEY_SET_COUNT][DFC_MAX_KEYS];
-    memcpy(versions, app->key_set_versions, sizeof(versions));
-    memcpy(types, app->key_set_types, sizeof(types));
-    memcpy(initialized, app->key_set_initialized, sizeof(initialized));
-    memcpy(additional, app->additional_key_versions, sizeof(additional));
+    uint8_t metadata[32];
+    size_t metadata_len = app->key_set_metadata_len;
+    munit_assert_size(metadata_len, <=, sizeof(metadata));
+    memcpy(metadata, c.key_set_metadata_pool + app->key_set_metadata_offset, metadata_len);
 
     munit_assert_false(dfc_credential_keys_resize(&c, app, DFC_MAX_KEYS, DFC_MAX_KEY_LEN));
     munit_assert_size(c.key_pool_used, ==, used);
@@ -375,11 +371,179 @@ static MunitResult
     munit_assert_size(app->num_key_sets, ==, 2);
     munit_assert_size(app->max_key_size, ==, 16);
     munit_assert_memory_equal(sizeof(key), key, dfc_credential_key_const(&c, app, 0));
-    munit_assert_memory_equal(sizeof(versions), versions, app->key_set_versions);
-    munit_assert_memory_equal(sizeof(types), types, app->key_set_types);
-    munit_assert_memory_equal(sizeof(initialized), initialized, app->key_set_initialized);
-    munit_assert_memory_equal(sizeof(additional), additional, app->additional_key_versions);
+    munit_assert_size(app->key_set_metadata_len, ==, metadata_len);
+    munit_assert_memory_equal(
+        metadata_len, metadata, c.key_set_metadata_pool + app->key_set_metadata_offset);
 
+    return MUNIT_OK;
+}
+
+static MunitResult
+    test_full_key_pool_metadata_capacity(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    DfcCredential c;
+    memset(&c, 0, sizeof(c));
+    dfc_credential_clear(&c);
+    munit_assert_true(dfc_credential_keys_resize(&c, NULL, 0, 0));
+
+    size_t expected_key_bytes = 0;
+    size_t remaining = DFC_KEY_POOL_SIZE;
+    for(size_t i = 0; i < DFC_MAX_APPS && remaining >= 2u * DFC_AES_KEY_LENGTH; i++) {
+        size_t sets = remaining / DFC_AES_KEY_LENGTH;
+        if(sets > DFC_MAX_KEY_SETS) sets = DFC_MAX_KEY_SETS;
+        DfcApplication* app = add_app(&c, (uint8_t)(0x40 + i), DFC_KEY_TYPE_AES | 1);
+        munit_assert_not_null(app);
+        munit_assert_true(dfc_credential_key_sets_resize(
+            &c, app, sets, 1, DFC_AES_KEY_LENGTH, DFC_AES_KEY_LENGTH));
+        for(size_t set = 0; set < sets; set++) {
+            *dfc_credential_key_set_type(&c, app, set) = DFC_KEY_SET_TYPE_AES;
+            *dfc_credential_key_set_version(&c, app, set) = (uint8_t)(i + set);
+        }
+        size_t consumed = sets * DFC_AES_KEY_LENGTH;
+        expected_key_bytes += consumed;
+        remaining -= consumed;
+    }
+    munit_assert_size(c.key_pool_used, ==, expected_key_bytes);
+    munit_assert_true(
+        DFC_KEY_POOL_SIZE - c.key_pool_used < 2u * DFC_AES_KEY_LENGTH ||
+        c.num_apps == DFC_MAX_APPS);
+    munit_assert_size(c.key_set_metadata_pool_used, <=, DFC_KEY_SET_METADATA_POOL_SIZE);
+    for(size_t keys = 1; keys <= DFC_MAX_KEYS; keys++) {
+        for(size_t sets = DFC_KEY_SET_MINIMUM_COUNT; sets <= DFC_MAX_KEY_SETS; sets++) {
+            size_t metadata = 2u * sets + sizeof(uint16_t) + keys * (sets - 1u);
+            size_t key_bytes = keys * sets * DFC_AES_KEY_LENGTH;
+            munit_assert_size(metadata * 32u, <=, key_bytes * 7u);
+        }
+    }
+    return MUNIT_OK;
+}
+
+static MunitResult
+    test_corrupt_metadata_bounds_are_rejected(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    DfcCredential c;
+    memset(&c, 0, sizeof(c));
+    dfc_credential_clear(&c);
+    DfcApplication* app = add_app(&c, 0x01, DFC_KEY_TYPE_AES | 1);
+    munit_assert_not_null(app);
+    munit_assert_true(dfc_credential_key_sets_resize(&c, app, 2, 1, 16, 16));
+    uint8_t before[DFC_KEY_SET_METADATA_POOL_SIZE];
+    memcpy(before, c.key_set_metadata_pool, sizeof(before));
+
+    c.key_set_metadata_pool_used = DFC_KEY_SET_METADATA_POOL_SIZE + 1u;
+    munit_assert_null(dfc_credential_key_set_version(&c, app, 0));
+    munit_assert_null(dfc_credential_key_set_type(&c, app, 0));
+    munit_assert_null(dfc_credential_key_version_in_set(&c, app, 1, 0));
+    munit_assert_false(dfc_credential_key_set_is_initialized(&c, app, 0));
+    munit_assert_false(dfc_credential_key_set_set_initialized(&c, app, 0, false));
+    munit_assert_memory_equal(sizeof(before), before, c.key_set_metadata_pool);
+
+    c.key_set_metadata_pool_used = DFC_KEY_SET_METADATA_POOL_SIZE;
+    app->key_set_metadata_offset = (uint16_t)DFC_KEY_SET_METADATA_POOL_SIZE;
+    munit_assert_null(dfc_credential_key_set_version(&c, app, 0));
+    munit_assert_false(dfc_credential_key_set_set_initialized(&c, app, 0, false));
+    munit_assert_memory_equal(sizeof(before), before, c.key_set_metadata_pool);
+    return MUNIT_OK;
+}
+
+static MunitResult test_metadata_boundary_layouts(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    DfcCredential c;
+    memset(&c, 0, sizeof(c));
+    dfc_credential_clear(&c);
+    munit_assert_true(dfc_credential_keys_resize(&c, NULL, 0, 0));
+    DfcApplication* app = add_app(&c, 0x01, DFC_KEY_TYPE_AES | 1);
+    munit_assert_not_null(app);
+
+    // One key and two sets has the highest metadata-to-key-storage ratio.
+    munit_assert_true(dfc_credential_key_sets_resize(&c, app, 2, 1, 16, 16));
+    munit_assert_uint16(app->key_set_metadata_len, ==, 7);
+    munit_assert_size(c.key_set_metadata_pool_used, ==, 7);
+
+    // Exercise the maximum key count with as many complete sets as the
+    // configured pool can represent.
+    size_t max_key_sets = DFC_KEY_POOL_SIZE / (DFC_MAX_KEYS * DFC_AES_KEY_LENGTH);
+    if(max_key_sets > DFC_MAX_KEY_SETS) max_key_sets = DFC_MAX_KEY_SETS;
+    if(max_key_sets >= DFC_KEY_SET_MINIMUM_COUNT) {
+        munit_assert_true(dfc_credential_key_sets_resize(
+            &c, app, max_key_sets, DFC_MAX_KEYS, DFC_AES_KEY_LENGTH, DFC_AES_KEY_LENGTH));
+        size_t expected_metadata =
+            2u * max_key_sets + sizeof(uint16_t) + DFC_MAX_KEYS * (max_key_sets - 1u);
+        munit_assert_uint16(app->key_set_metadata_len, ==, expected_metadata);
+        munit_assert_size(c.key_pool_used, ==, max_key_sets * DFC_MAX_KEYS * DFC_AES_KEY_LENGTH);
+    }
+    return MUNIT_OK;
+}
+
+static MunitResult test_metadata_exhaustion_is_atomic(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    static DfcCredential before;
+    DfcCredential c;
+    memset(&c, 0, sizeof(c));
+    dfc_credential_clear(&c);
+    DfcApplication* app = add_app(&c, 0x01, DFC_KEY_TYPE_AES | 1);
+    munit_assert_not_null(app);
+    c.key_set_metadata_pool_used = DFC_KEY_SET_METADATA_POOL_SIZE;
+    memset(c.key_set_metadata_pool, 0xA5, sizeof(c.key_set_metadata_pool));
+    dfc_credential_copy_model(&before, &c);
+
+    munit_assert_false(dfc_credential_key_sets_resize(&c, app, 2, 1, 16, 16));
+    munit_assert_memory_equal(sizeof(c), &before, &c);
+    return MUNIT_OK;
+}
+
+static MunitResult test_metadata_compacts_on_delete(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    DfcCredential c;
+    memset(&c, 0, sizeof(c));
+    dfc_credential_clear(&c);
+    for(size_t i = 0; i < 3; i++) {
+        DfcApplication* app = add_app(&c, (uint8_t)(0x10 + i), DFC_KEY_TYPE_AES | 1);
+        munit_assert_not_null(app);
+        munit_assert_true(dfc_credential_key_sets_resize(&c, app, 2, 1, 16, 16));
+        *dfc_credential_key_set_version(&c, app, 1) = (uint8_t)(0xA0 + i);
+    }
+    size_t used = c.key_set_metadata_pool_used;
+    size_t removed = c.apps[1].key_set_metadata_len;
+    munit_assert_true(dfc_credential_delete_application_at(&c, 1));
+    munit_assert_size(c.key_set_metadata_pool_used, ==, used - removed);
+    munit_assert_uint8(*dfc_credential_key_set_version(&c, &c.apps[1], 1), ==, 0xA2);
+    return MUNIT_OK;
+}
+
+static MunitResult test_copy_and_clear_metadata_pool(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    static DfcCredential copy;
+    DfcCredential c;
+    memset(&c, 0, sizeof(c));
+    dfc_credential_clear(&c);
+    DfcApplication* app = add_app(&c, 0x01, DFC_KEY_TYPE_AES | 2);
+    munit_assert_not_null(app);
+    munit_assert_true(dfc_credential_key_sets_resize(&c, app, 3, 2, 16, 24));
+    *dfc_credential_key_set_version(&c, app, 2) = 0x5A;
+    *dfc_credential_key_set_type(&c, app, 2) = DFC_KEY_SET_TYPE_3K3DES;
+    *dfc_credential_key_version_in_set(&c, app, 2, 1) = 0xC3;
+
+    dfc_credential_copy_model(&copy, &c);
+    munit_assert_uint8(*dfc_credential_key_set_version(&copy, &copy.apps[0], 2), ==, 0x5A);
+    munit_assert_uint8(
+        *dfc_credential_key_set_type(&copy, &copy.apps[0], 2), ==, DFC_KEY_SET_TYPE_3K3DES);
+    munit_assert_uint8(*dfc_credential_key_version_in_set(&copy, &copy.apps[0], 2, 1), ==, 0xC3);
+
+    dfc_credential_clear(&c);
+    munit_assert_size(c.key_set_metadata_pool_used, ==, 0);
+    for(size_t i = 0; i < sizeof(c.key_set_metadata_pool); i++)
+        munit_assert_uint8(c.key_set_metadata_pool[i], ==, 0);
+    for(size_t i = 0; i < DFC_MAX_APPS; i++) {
+        munit_assert_uint16(c.apps[i].key_set_metadata_offset, ==, DFC_KEY_SET_METADATA_POOL_NONE);
+        munit_assert_uint16(c.apps[i].key_set_metadata_len, ==, 0);
+    }
     return MUNIT_OK;
 }
 #endif
@@ -426,6 +590,42 @@ static MunitTest tests[] = {
 #if DFC_ENABLE_KEY_SETS
     {"/failed-resize-preserves-key-set-metadata",
      test_failed_resize_preserves_key_set_metadata,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/full-key-pool-metadata-capacity",
+     test_full_key_pool_metadata_capacity,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/corrupt-metadata-bounds-are-rejected",
+     test_corrupt_metadata_bounds_are_rejected,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/metadata-boundary-layouts",
+     test_metadata_boundary_layouts,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/metadata-exhaustion-is-atomic",
+     test_metadata_exhaustion_is_atomic,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/metadata-compacts-on-delete",
+     test_metadata_compacts_on_delete,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/copy-and-clear-metadata-pool",
+     test_copy_and_clear_metadata_pool,
      NULL,
      NULL,
      MUNIT_TEST_OPTION_NONE,

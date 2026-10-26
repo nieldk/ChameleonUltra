@@ -13,6 +13,7 @@
 #include <mbedtls/aes.h>
 #include <mbedtls/des.h>
 
+#if DFC_ENABLE_AES_CRYPTO
 bool dfc_crypto_aes_block_init(DfcCryptoAesBlock* block, const uint8_t* key, size_t key_len) {
     if(!block || !key || key_len != 16) return false;
     memset(block, 0, sizeof(*block));
@@ -39,7 +40,9 @@ void dfc_crypto_aes_block_clear(DfcCryptoAesBlock* block) {
     if(block->initialized) mbedtls_aes_free(&block->context);
     memset(block, 0, sizeof(*block));
 }
+#endif
 
+#if DFC_ENABLE_DES_CRYPTO
 bool dfc_crypto_des_block_init(
     DfcCryptoDesBlock* block,
     bool encrypt,
@@ -95,7 +98,9 @@ void dfc_crypto_des_block_clear(DfcCryptoDesBlock* block) {
     }
     memset(block, 0, sizeof(*block));
 }
+#endif
 
+#if DFC_ENABLE_AES_CRYPTO
 bool dfc_crypto_aes_cbc(
     bool encrypt,
     const uint8_t* key,
@@ -118,7 +123,9 @@ bool dfc_crypto_aes_cbc(
     mbedtls_aes_free(&ctx);
     return result == 0;
 }
+#endif
 
+#if DFC_ENABLE_DES_CRYPTO
 bool dfc_crypto_des_cbc(
     bool encrypt,
     const uint8_t* key,
@@ -163,12 +170,14 @@ bool dfc_crypto_des_ecb(
     dfc_crypto_des_block_clear(&block);
     return success;
 }
+#endif
 
 #else
 
 #include <tiny_crypto/aes.h>
 #include <tiny_crypto/des.h>
 
+#if DFC_ENABLE_AES_CRYPTO
 bool dfc_crypto_aes_block_init(DfcCryptoAesBlock* block, const uint8_t* key, size_t key_len) {
     if(!block || !key || key_len != 16) return false;
     memset(block, 0, sizeof(*block));
@@ -196,7 +205,9 @@ void dfc_crypto_aes_block_clear(DfcCryptoAesBlock* block) {
     TC_AES_ctx_clear(&block->context);
     memset(block, 0, sizeof(*block));
 }
+#endif
 
+#if DFC_ENABLE_DES_CRYPTO
 bool dfc_crypto_des_block_init(
     DfcCryptoDesBlock* block,
     bool encrypt,
@@ -232,7 +243,9 @@ void dfc_crypto_des_block_clear(DfcCryptoDesBlock* block) {
     TC_DES_ctx_clear(&block->context);
     memset(block, 0, sizeof(*block));
 }
+#endif
 
+#if DFC_ENABLE_AES_CRYPTO
 bool dfc_crypto_aes_cbc(
     bool encrypt,
     const uint8_t* key,
@@ -258,7 +271,9 @@ bool dfc_crypto_aes_cbc(
     TC_AES_ctx_clear(&ctx);
     return result == TC_OK;
 }
+#endif
 
+#if DFC_ENABLE_DES_CRYPTO
 bool dfc_crypto_des_cbc(
     bool encrypt,
     const uint8_t* key,
@@ -297,5 +312,6 @@ bool dfc_crypto_des_ecb(
     dfc_crypto_des_block_clear(&block);
     return success;
 }
+#endif
 
 #endif

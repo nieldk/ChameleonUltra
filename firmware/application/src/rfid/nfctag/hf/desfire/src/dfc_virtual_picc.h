@@ -54,9 +54,9 @@ typedef struct {
     uint8_t picc_sequence;
     // Native command capacity plus wrapped APDU header and Le.
     uint8_t pending_command[DFC_WORKER_MAX_BUFFER_SIZE + 6];
-    uint8_t pending_response[DFC_WORKER_MAX_BUFFER_SIZE];
     uint8_t pending_response_prefix[3];
-    // The pending payload is lent by the emulator rather than owned inline.
+    // The pending payload is lent by the emulator's chain buffer rather than
+    // its ordinary transmit buffer.
     bool pending_response_staged;
     uint8_t last_picc_block[DFC_VIRTUAL_PICC_MAX_BLOCK_SIZE];
     bool iso_file_selected;

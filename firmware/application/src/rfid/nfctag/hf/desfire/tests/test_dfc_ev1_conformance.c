@@ -2,8 +2,11 @@
 // DesfirePiccSimulatorTests (EV1-native command subset).
 
 #include "dfc_virtual_picc_test_helpers.h"
+#include "aes_cmac.h"
 #include "dfc_der.h"
 #include "dfc_emulator_i.h"
+#include "dfc_emulator_commands_i.h"
+#include "dfc_sdm_i.h"
 
 #include <string.h>
 
@@ -409,6 +412,36 @@ static MunitResult test_write_past_file_end(const MunitParameter params[], void*
     return MUNIT_OK;
 }
 
+static MunitResult
+    test_plain_write_data_borrows_apdu_payload(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    DfcCredential credential;
+    uint8_t zeros[4] = {0};
+    DfcVirtualPiccSession* session =
+        open_file_policy(&credential, 0x0F, 0xEEEE, DFC_COMM_PLAIN, zeros, sizeof(zeros));
+    session->emulator->selected_application = DfcEmulatorSelectedApplicationApp;
+    session->emulator->selected_app_index = 0;
+    memset(session->emulator->pending_chain, 0xA5, sizeof(session->emulator->pending_chain));
+
+    const uint8_t write[] = {
+        DFC_CMD_WRITE_DATA, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x11, 0x22};
+    dfc_bytebuf_reset(session->emulator->tx_buffer);
+    dfc_emulator_command_write_data(
+        session->emulator, write, sizeof(write), session->emulator->tx_buffer);
+
+    munit_assert_size(dfc_bytebuf_get_size_bytes(session->emulator->tx_buffer), ==, 1);
+    munit_assert_uint8(dfc_bytebuf_get_byte(session->emulator->tx_buffer, 0), ==, DFC_STATUS_OK);
+    for(size_t i = 0; i < sizeof(session->emulator->pending_chain); i++) {
+        munit_assert_uint8(session->emulator->pending_chain[i], ==, 0xA5);
+    }
+    munit_assert_memory_equal(
+        2, dfc_file_data(&credential, &credential.files[0]), ((uint8_t[]){0x11, 0x22}));
+
+    dfc_virtual_picc_session_free(session);
+    return MUNIT_OK;
+}
+
 static MunitResult test_read_past_file_end(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
@@ -443,7 +476,9 @@ static MunitResult test_create_duplicate_file(const MunitParameter params[], voi
     const uint8_t create_file[] = {
         0x90, 0xCD, 0x00, 0x00, 0x07, 0x01, 0x00, 0xEE, 0xEE, 0x04, 0x00, 0x00, 0x00};
     assert_status(session, create_file, sizeof(create_file), DFC_STATUS_OK);
-    munit_assert_uint32(credential.files[0].declared_size, ==, 4);
+    uint32_t declared_size;
+    munit_assert_true(dfc_file_get_declared_size(&credential.files[0], &declared_size));
+    munit_assert_uint32(declared_size, ==, 4);
     munit_assert_true(credential.files[0].contents_complete);
     size_t encoded_size = 0;
     munit_assert_int(dfc_der_encoded_size(&credential, &encoded_size), ==, DfcDerOk);
@@ -1057,7 +1092,9 @@ static MunitResult
     session->emulator->secure_messaging = dfc_secure_messaging_alloc(
         DFC_CMD_AUTHENTICATE_AES, session_key, sizeof(session_key), NULL);
     session->emulator->selected_application = DfcEmulatorSelectedApplicationApp;
+    session->emulator->auth_cipher = DFC_CMD_AUTHENTICATE_AES;
     session->emulator->auth_key_no = 0x00;
+    munit_assert_true(dfc_emulator_native_authentication_active(session->emulator));
 
     uint8_t response[64];
     size_t response_len = 0;
@@ -1092,7 +1129,9 @@ static MunitResult
     session->emulator->secure_messaging = dfc_secure_messaging_alloc(
         DFC_CMD_AUTHENTICATE_AES, session_key, sizeof(session_key), NULL);
     session->emulator->selected_application = DfcEmulatorSelectedApplicationApp;
+    session->emulator->auth_cipher = DFC_CMD_AUTHENTICATE_AES;
     session->emulator->auth_key_no = 0x00;
+    munit_assert_true(dfc_emulator_native_authentication_active(session->emulator));
 
     uint8_t response[64];
     size_t response_len = 0;
@@ -1111,7 +1150,10 @@ static MunitResult
     dfc_secure_messaging_free(session->emulator->secure_messaging);
     session->emulator->secure_messaging = dfc_secure_messaging_alloc(
         DFC_CMD_AUTHENTICATE_AES, session_key, sizeof(session_key), NULL);
+    munit_assert_not_null(session->emulator->secure_messaging);
+    session->emulator->auth_cipher = DFC_CMD_AUTHENTICATE_AES;
     session->emulator->auth_key_no = 0x00;
+    munit_assert_true(dfc_emulator_native_authentication_active(session->emulator));
 
     uint8_t body[] = {0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x11, 0x22};
     // MACt = first 8 bytes of EV1 command CMAC (stored as IV after update).
@@ -1216,7 +1258,9 @@ static MunitResult
     session->emulator->secure_messaging = dfc_secure_messaging_alloc(
         DFC_CMD_AUTHENTICATE_AES, session_key, sizeof(session_key), NULL);
     session->emulator->selected_application = DfcEmulatorSelectedApplicationApp;
+    session->emulator->auth_cipher = DFC_CMD_AUTHENTICATE_AES;
     session->emulator->auth_key_no = 0x00;
+    munit_assert_true(dfc_emulator_native_authentication_active(session->emulator));
 
     uint8_t response[64];
     size_t response_len = 0;
@@ -1729,7 +1773,9 @@ static DfcVirtualPiccSession*
     session->emulator->secure_messaging =
         dfc_secure_messaging_alloc(cipher, session_key, sizeof(session_key), NULL);
     munit_assert_not_null(session->emulator->secure_messaging);
+    session->emulator->auth_cipher = cipher;
     session->emulator->auth_key_no = 0;
+    munit_assert_true(dfc_emulator_native_authentication_active(session->emulator));
     return session;
 }
 
@@ -1848,7 +1894,9 @@ static MunitResult
     free_session->emulator->secure_messaging = dfc_secure_messaging_alloc(
         DFC_CMD_AUTHENTICATE_AES, session_key, sizeof(session_key), NULL);
     munit_assert_not_null(free_session->emulator->secure_messaging);
+    free_session->emulator->auth_cipher = DFC_CMD_AUTHENTICATE_AES;
     free_session->emulator->auth_key_no = 0;
+    munit_assert_true(dfc_emulator_native_authentication_active(free_session->emulator));
     const uint8_t free_change[] = {
         0x90, DFC_CMD_CHANGE_FILE_SETTINGS, 0, 0, 4, 1, DFC_COMM_MAC, 0xEE, 0xEE, 0};
     assert_trailing_status(free_session, free_change, sizeof(free_change), DFC_STATUS_OK);
@@ -1909,30 +1957,127 @@ static MunitResult
 }
 
 #if DFC_ENABLE_SDM
+static void encode_upper_hex(const uint8_t* input, size_t input_len, uint8_t* output) {
+    static const uint8_t digits[] = "0123456789ABCDEF";
+    for(size_t i = 0; i < input_len; i++) {
+        output[i * 2] = digits[input[i] >> 4];
+        output[i * 2 + 1] = digits[input[i] & 0x0F];
+    }
+}
+
+static void assert_sdm_mac_covers_final_rendered_bytes(bool encrypted_range_overlaps_mac_input) {
+    DfcCredential credential;
+    uint8_t contents[96];
+    memset(contents, '0', sizeof(contents));
+    DfcVirtualPiccSession* session =
+        open_file_policy(&credential, 0x0F, 0xEEEE, DFC_COMM_PLAIN, contents, sizeof(contents));
+    credential.card.generation = DfcGenerationEv3;
+    DfcApplication* app = &credential.apps[0];
+    app->key_settings_2 = DFC_KEY_TYPE_AES | 1;
+    munit_assert_true(dfc_credential_keys_resize(&credential, app, 1, DFC_AES_KEY_LENGTH));
+    uint8_t* file_read_key = dfc_credential_key(&credential, app, 0);
+    munit_assert_not_null(file_read_key);
+    for(size_t i = 0; i < DFC_AES_KEY_LENGTH; i++)
+        file_read_key[i] = (uint8_t)(0x10 + i);
+
+    DfcFile* file = dfc_credential_find_file_in_app(&credential, 0, 1);
+    munit_assert_not_null(file);
+    uint8_t* file_data = dfc_file_data(&credential, file);
+    munit_assert_not_null(file_data);
+    for(size_t i = 32; i < 64; i++)
+        file_data[i] = (uint8_t)('A' + (i % 26));
+    dfc_file_sdm_flag_set(file, DfcSdmFlagEnabled, true);
+    file->state.data.sdm.options = DFC_SDM_UID_MIRROR_MASK | DFC_SDM_COUNTER_MIRROR_MASK |
+                                   DFC_SDM_ENCRYPTED_FILE_MASK | DFC_SDM_ASCII_ENCODING_MASK;
+    file->state.data.sdm.access_rights = 0;
+    dfc_file_sdm_flag_set(file, DfcSdmFlagPiccDataOffset, true);
+    file->state.data.sdm.picc_data_offset = 0;
+    dfc_file_sdm_flag_set(file, DfcSdmFlagEncryptedFile, true);
+    file->state.data.sdm.encrypted_file_offset = 32;
+    file->state.data.sdm.encrypted_file_length = 32;
+    dfc_file_sdm_flag_set(file, DfcSdmFlagMacInputOffset, true);
+    file->state.data.sdm.mac_input_offset = encrypted_range_overlaps_mac_input ? 32 : 64;
+    dfc_file_sdm_flag_set(file, DfcSdmFlagMacOffset, true);
+    file->state.data.sdm.mac_offset = 80;
+    file->state.data.sdm_read_counter = 0;
+
+    session->emulator->selected_application = DfcEmulatorSelectedApplicationApp;
+    session->emulator->selected_app_index = 0;
+    munit_assert_true(dfc_emulator_render_sdm_read(session->emulator, file));
+
+    uint8_t session_mac_key[DFC_AES_KEY_LENGTH];
+    uint8_t full_mac[DFC_AES_CMAC_LENGTH];
+    uint8_t wire_mac[DFC_WIRE_MAC_LENGTH];
+    uint8_t expected_ascii[DFC_WIRE_MAC_LENGTH * DFC_SDM_HEX_EXPANSION];
+    munit_assert_true(dfc_sdm_derive_session_key(
+        file_read_key,
+        DFC_SDM_MAC_LABEL_HIGH,
+        DFC_SDM_MAC_LABEL_LOW,
+        credential.uid,
+        credential.uid_len,
+        true,
+        file->state.data.sdm_read_counter,
+        true,
+        session_mac_key));
+    munit_assert_true(aes_cmac(
+        session_mac_key,
+        sizeof(session_mac_key),
+        session->emulator->sdm_read_cache + file->state.data.sdm.mac_input_offset,
+        file->state.data.sdm.mac_offset - file->state.data.sdm.mac_input_offset,
+        full_mac));
+    dfc_truncate_aes_wire_mac(full_mac, wire_mac);
+    encode_upper_hex(wire_mac, sizeof(wire_mac), expected_ascii);
+    munit_assert_memory_equal(
+        sizeof(expected_ascii),
+        expected_ascii,
+        session->emulator->sdm_read_cache + file->state.data.sdm.mac_offset);
+
+    dfc_secure_wipe(session_mac_key, sizeof(session_mac_key));
+    dfc_secure_wipe(full_mac, sizeof(full_mac));
+    dfc_secure_wipe(wire_mac, sizeof(wire_mac));
+    dfc_virtual_picc_session_free(session);
+}
+
+static MunitResult
+    test_sdm_mac_covers_overlapping_encrypted_file(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    assert_sdm_mac_covers_final_rendered_bytes(true);
+    return MUNIT_OK;
+}
+
+static MunitResult
+    test_sdm_mac_non_overlapping_encrypted_file_control(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    assert_sdm_mac_covers_final_rendered_bytes(false);
+    return MUNIT_OK;
+}
+
 static void set_sdm_settings_sentinels(DfcVirtualPiccSession* session, DfcFile* file) {
     file->comm_settings = DFC_SDM_ENABLED_MASK | DFC_COMM_PLAIN;
     file->access_rights = 0xEEEE;
-    file->sdm_enabled = true;
-    file->sdm_options = DFC_SDM_UID_MIRROR_MASK | DFC_SDM_COUNTER_MIRROR_MASK |
-                        DFC_SDM_COUNTER_LIMIT_MASK | DFC_SDM_ENCRYPTED_FILE_MASK |
-                        DFC_SDM_ASCII_ENCODING_MASK;
-    file->sdm_access_rights = 0xE0FE;
-    file->sdm_has_uid_offset = true;
-    file->sdm_uid_offset = 3;
-    file->sdm_has_counter_offset = true;
-    file->sdm_counter_offset = 17;
-    file->sdm_has_picc_data_offset = true;
-    file->sdm_picc_data_offset = 29;
-    file->sdm_has_mac_input_offset = true;
-    file->sdm_mac_input_offset = 41;
-    file->sdm_has_mac_offset = true;
-    file->sdm_mac_offset = 97;
-    file->sdm_has_encrypted_file_offset = true;
-    file->sdm_encrypted_file_offset = 53;
-    file->sdm_encrypted_file_length = 32;
-    file->sdm_has_counter_limit = true;
-    file->sdm_counter_limit = 0x654321;
-    file->sdm_read_counter = 0x123456;
+    dfc_file_sdm_flag_set(file, DfcSdmFlagEnabled, true);
+    file->state.data.sdm.options = DFC_SDM_UID_MIRROR_MASK | DFC_SDM_COUNTER_MIRROR_MASK |
+                                   DFC_SDM_COUNTER_LIMIT_MASK | DFC_SDM_ENCRYPTED_FILE_MASK |
+                                   DFC_SDM_ASCII_ENCODING_MASK;
+    file->state.data.sdm.access_rights = 0xE0FE;
+    dfc_file_sdm_flag_set(file, DfcSdmFlagUidOffset, true);
+    file->state.data.sdm.uid_offset = 3;
+    dfc_file_sdm_flag_set(file, DfcSdmFlagCounterOffset, true);
+    file->state.data.sdm.counter_offset = 17;
+    dfc_file_sdm_flag_set(file, DfcSdmFlagPiccDataOffset, true);
+    file->state.data.sdm.picc_data_offset = 29;
+    dfc_file_sdm_flag_set(file, DfcSdmFlagMacInputOffset, true);
+    file->state.data.sdm.mac_input_offset = 41;
+    dfc_file_sdm_flag_set(file, DfcSdmFlagMacOffset, true);
+    file->state.data.sdm.mac_offset = 97;
+    dfc_file_sdm_flag_set(file, DfcSdmFlagEncryptedFile, true);
+    file->state.data.sdm.encrypted_file_offset = 53;
+    file->state.data.sdm.encrypted_file_length = 32;
+    dfc_file_sdm_flag_set(file, DfcSdmFlagCounterLimit, true);
+    file->state.data.sdm.counter_limit = 0x654321;
+    file->state.data.sdm_read_counter = 0x123456;
 
     session->emulator->sdm_read_cache_valid = true;
     session->emulator->sdm_read_cache_file_number = file->number;
@@ -1950,7 +2095,7 @@ static void assert_rejected_change_is_atomic(
     uint8_t before[sizeof(*file)];
     uint8_t cache_before[DFC_SDM_READ_CACHE_SIZE];
     memcpy(before, file, sizeof(before));
-    uint32_t counter_before = file->sdm_read_counter;
+    uint32_t counter_before = file->state.data.sdm_read_counter;
     memcpy(cache_before, session->emulator->sdm_read_cache, sizeof(cache_before));
     bool cache_valid_before = session->emulator->sdm_read_cache_valid;
     uint8_t cache_file_before = session->emulator->sdm_read_cache_file_number;
@@ -1966,7 +2111,7 @@ static void assert_rejected_change_is_atomic(
 
     assert_status(session, apdu, apdu_len, expected_status);
     munit_assert_memory_equal(sizeof(before), before, file);
-    munit_assert_uint32(file->sdm_read_counter, ==, counter_before);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, counter_before);
     munit_assert_false(session->credential->dirty);
     munit_assert_int(session->emulator->sdm_read_cache_valid, ==, cache_valid_before);
     munit_assert_uint8(session->emulator->sdm_read_cache_file_number, ==, cache_file_before);
@@ -2070,8 +2215,8 @@ static MunitResult test_change_file_settings_validates_sdm_reserved_access(
         0x90, 0x5F, 0, 0, 0x0A, 0x01, 0x40, 0xEE, 0xEE, 0x81, 0xFF, 0xEF, 0, 0, 0, 0};
     set_sdm_settings_sentinels(session, file);
     assert_status(session, valid, sizeof(valid), DFC_STATUS_OK);
-    munit_assert_uint16(file->sdm_access_rights, ==, 0xEFFF);
-    munit_assert_true(file->sdm_has_uid_offset);
+    munit_assert_uint16(file->state.data.sdm.access_rights, ==, 0xEFFF);
+    munit_assert_true(dfc_file_sdm_flag_is_set(file, DfcSdmFlagUidOffset));
     munit_assert_true(credential.dirty);
     munit_assert_false(session->emulator->sdm_read_cache_valid);
 
@@ -2125,9 +2270,10 @@ static MunitResult test_change_file_settings_validates_sdm_meta_mirroring(
             apdu[4] = (uint8_t)(length - 1);
             memcpy(apdu + 5, native + 1, length - 1);
             assert_status(session, apdu, length + 5, DFC_STATUS_OK);
-            munit_assert_uint16(file->sdm_access_rights, ==, (uint16_t)((meta << 12) | 0x0FFF));
+            munit_assert_uint16(
+                file->state.data.sdm.access_rights, ==, (uint16_t)((meta << 12) | 0x0FFF));
             munit_assert_true(credential.dirty);
-            munit_assert_uint32(file->sdm_read_counter, ==, 0);
+            munit_assert_uint32(file->state.data.sdm_read_counter, ==, 0);
             munit_assert_false(session->emulator->sdm_read_cache_valid);
         }
     }
@@ -2197,10 +2343,10 @@ static MunitResult test_change_file_settings_validates_sdm_counter_access(
             0x00};
         set_sdm_settings_sentinels(session, file);
         assert_status(session, command, sizeof(command), DFC_STATUS_OK);
-        munit_assert_uint16(file->sdm_access_rights, ==, accepted[i].stored_rights);
-        munit_assert_true(file->sdm_has_counter_offset);
-        munit_assert_uint32(file->sdm_counter_offset, ==, 0);
-        munit_assert_uint32(file->sdm_read_counter, ==, 0);
+        munit_assert_uint16(file->state.data.sdm.access_rights, ==, accepted[i].stored_rights);
+        munit_assert_true(dfc_file_sdm_flag_is_set(file, DfcSdmFlagCounterOffset));
+        munit_assert_uint32(file->state.data.sdm.counter_offset, ==, 0);
+        munit_assert_uint32(file->state.data.sdm_read_counter, ==, 0);
         munit_assert_true(credential.dirty);
         munit_assert_false(session->emulator->sdm_read_cache_valid);
     }
@@ -2232,25 +2378,25 @@ static MunitResult test_change_file_settings_success_replaces_sdm_settings(
 
     munit_assert_uint8(file->comm_settings, ==, DFC_SDM_ENABLED_MASK | DFC_COMM_PLAIN);
     munit_assert_uint16(file->access_rights, ==, 0xEEEE);
-    munit_assert_true(file->sdm_enabled);
-    munit_assert_uint8(file->sdm_options, ==, DFC_SDM_ASCII_ENCODING_MASK);
-    munit_assert_uint16(file->sdm_access_rights, ==, 0xFFFF);
-    munit_assert_false(file->sdm_has_uid_offset);
-    munit_assert_uint32(file->sdm_uid_offset, ==, 0);
-    munit_assert_false(file->sdm_has_counter_offset);
-    munit_assert_uint32(file->sdm_counter_offset, ==, 0);
-    munit_assert_false(file->sdm_has_picc_data_offset);
-    munit_assert_uint32(file->sdm_picc_data_offset, ==, 0);
-    munit_assert_false(file->sdm_has_mac_input_offset);
-    munit_assert_uint32(file->sdm_mac_input_offset, ==, 0);
-    munit_assert_false(file->sdm_has_mac_offset);
-    munit_assert_uint32(file->sdm_mac_offset, ==, 0);
-    munit_assert_false(file->sdm_has_encrypted_file_offset);
-    munit_assert_uint32(file->sdm_encrypted_file_offset, ==, 0);
-    munit_assert_uint32(file->sdm_encrypted_file_length, ==, 0);
-    munit_assert_false(file->sdm_has_counter_limit);
-    munit_assert_uint32(file->sdm_counter_limit, ==, 0);
-    munit_assert_uint32(file->sdm_read_counter, ==, 0);
+    munit_assert_true(dfc_file_sdm_flag_is_set(file, DfcSdmFlagEnabled));
+    munit_assert_uint8(file->state.data.sdm.options, ==, DFC_SDM_ASCII_ENCODING_MASK);
+    munit_assert_uint16(file->state.data.sdm.access_rights, ==, 0xFFFF);
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagUidOffset));
+    munit_assert_uint32(file->state.data.sdm.uid_offset, ==, 0);
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagCounterOffset));
+    munit_assert_uint32(file->state.data.sdm.counter_offset, ==, 0);
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagPiccDataOffset));
+    munit_assert_uint32(file->state.data.sdm.picc_data_offset, ==, 0);
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagMacInputOffset));
+    munit_assert_uint32(file->state.data.sdm.mac_input_offset, ==, 0);
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagMacOffset));
+    munit_assert_uint32(file->state.data.sdm.mac_offset, ==, 0);
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagEncryptedFile));
+    munit_assert_uint32(file->state.data.sdm.encrypted_file_offset, ==, 0);
+    munit_assert_uint32(file->state.data.sdm.encrypted_file_length, ==, 0);
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagCounterLimit));
+    munit_assert_uint32(file->state.data.sdm.counter_limit, ==, 0);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 0);
     munit_assert_true(credential.dirty);
     munit_assert_false(session->emulator->sdm_read_cache_valid);
 
@@ -2261,21 +2407,21 @@ static MunitResult test_change_file_settings_success_replaces_sdm_settings(
         0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x00,
     };
     assert_status(session, all_sdm_fields, sizeof(all_sdm_fields), DFC_STATUS_OK);
-    munit_assert_true(file->sdm_has_uid_offset);
-    munit_assert_uint32(file->sdm_uid_offset, ==, 0x030201);
-    munit_assert_true(file->sdm_has_counter_offset);
-    munit_assert_uint32(file->sdm_counter_offset, ==, 0x060504);
-    munit_assert_false(file->sdm_has_picc_data_offset);
-    munit_assert_true(file->sdm_has_mac_input_offset);
-    munit_assert_uint32(file->sdm_mac_input_offset, ==, 0x090807);
-    munit_assert_true(file->sdm_has_encrypted_file_offset);
-    munit_assert_uint32(file->sdm_encrypted_file_offset, ==, 0x0C0B0A);
-    munit_assert_uint32(file->sdm_encrypted_file_length, ==, 0x0F0E0D);
-    munit_assert_true(file->sdm_has_mac_offset);
-    munit_assert_uint32(file->sdm_mac_offset, ==, 0x121110);
-    munit_assert_true(file->sdm_has_counter_limit);
-    munit_assert_uint32(file->sdm_counter_limit, ==, 0x151413);
-    munit_assert_uint32(file->sdm_read_counter, ==, 0);
+    munit_assert_true(dfc_file_sdm_flag_is_set(file, DfcSdmFlagUidOffset));
+    munit_assert_uint32(file->state.data.sdm.uid_offset, ==, 0x030201);
+    munit_assert_true(dfc_file_sdm_flag_is_set(file, DfcSdmFlagCounterOffset));
+    munit_assert_uint32(file->state.data.sdm.counter_offset, ==, 0x060504);
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagPiccDataOffset));
+    munit_assert_true(dfc_file_sdm_flag_is_set(file, DfcSdmFlagMacInputOffset));
+    munit_assert_uint32(file->state.data.sdm.mac_input_offset, ==, 0x090807);
+    munit_assert_true(dfc_file_sdm_flag_is_set(file, DfcSdmFlagEncryptedFile));
+    munit_assert_uint32(file->state.data.sdm.encrypted_file_offset, ==, 0x0C0B0A);
+    munit_assert_uint32(file->state.data.sdm.encrypted_file_length, ==, 0x0F0E0D);
+    munit_assert_true(dfc_file_sdm_flag_is_set(file, DfcSdmFlagMacOffset));
+    munit_assert_uint32(file->state.data.sdm.mac_offset, ==, 0x121110);
+    munit_assert_true(dfc_file_sdm_flag_is_set(file, DfcSdmFlagCounterLimit));
+    munit_assert_uint32(file->state.data.sdm.counter_limit, ==, 0x151413);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 0);
 
     set_sdm_settings_sentinels(session, file);
     const uint8_t hidden_counter[] = {
@@ -2283,13 +2429,13 @@ static MunitResult test_change_file_settings_success_replaces_sdm_settings(
         0xEF, 0x01, 0x02, 0x03, 0xFF, 0xFF, 0xFF, 0x07, 0x08, 0x09, 0x00,
     };
     assert_status(session, hidden_counter, sizeof(hidden_counter), DFC_STATUS_OK);
-    munit_assert_true(file->sdm_has_uid_offset);
-    munit_assert_uint32(file->sdm_uid_offset, ==, 0x030201);
-    munit_assert_false(file->sdm_has_counter_offset);
-    munit_assert_uint32(file->sdm_counter_offset, ==, DFC_SDM_HIDDEN_COUNTER_OFFSET);
-    munit_assert_true(file->sdm_has_counter_limit);
-    munit_assert_uint32(file->sdm_counter_limit, ==, 0x090807);
-    munit_assert_uint32(file->sdm_read_counter, ==, 0);
+    munit_assert_true(dfc_file_sdm_flag_is_set(file, DfcSdmFlagUidOffset));
+    munit_assert_uint32(file->state.data.sdm.uid_offset, ==, 0x030201);
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagCounterOffset));
+    munit_assert_uint32(file->state.data.sdm.counter_offset, ==, DFC_SDM_HIDDEN_COUNTER_OFFSET);
+    munit_assert_true(dfc_file_sdm_flag_is_set(file, DfcSdmFlagCounterLimit));
+    munit_assert_uint32(file->state.data.sdm.counter_limit, ==, 0x090807);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 0);
 
     set_sdm_settings_sentinels(session, file);
     const uint8_t keyed_picc_data[] = {
@@ -2311,15 +2457,15 @@ static MunitResult test_change_file_settings_success_replaces_sdm_settings(
         0x00,
     };
     assert_status(session, keyed_picc_data, sizeof(keyed_picc_data), DFC_STATUS_OK);
-    munit_assert_false(file->sdm_has_uid_offset);
-    munit_assert_false(file->sdm_has_counter_offset);
-    munit_assert_true(file->sdm_has_picc_data_offset);
-    munit_assert_uint32(file->sdm_picc_data_offset, ==, 0x232221);
-    munit_assert_false(file->sdm_has_mac_input_offset);
-    munit_assert_false(file->sdm_has_encrypted_file_offset);
-    munit_assert_false(file->sdm_has_mac_offset);
-    munit_assert_false(file->sdm_has_counter_limit);
-    munit_assert_uint32(file->sdm_read_counter, ==, 0);
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagUidOffset));
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagCounterOffset));
+    munit_assert_true(dfc_file_sdm_flag_is_set(file, DfcSdmFlagPiccDataOffset));
+    munit_assert_uint32(file->state.data.sdm.picc_data_offset, ==, 0x232221);
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagMacInputOffset));
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagEncryptedFile));
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagMacOffset));
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagCounterLimit));
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 0);
 
     dfc_virtual_picc_session_free(session);
     return MUNIT_OK;
@@ -2339,16 +2485,16 @@ static MunitResult
     assert_status(session, select, sizeof(select), DFC_STATUS_OK);
     DfcFile* file = dfc_credential_find_file_in_app(&credential, 0, 1);
     munit_assert_not_null(file);
-    munit_assert_false(file->sdm_enabled);
+    munit_assert_false(dfc_file_sdm_flag_is_set(file, DfcSdmFlagEnabled));
 
     const uint8_t change[] = {
         0x90, 0x5F, 0x00, 0x00, 0x07, 0x01, 0x40, 0xEE, 0xEE, 0x01, 0xFF, 0xFF, 0x00};
     const uint32_t counters[] = {1, 0x123456, 0xFFFFFF};
     for(size_t i = 0; i < sizeof(counters) / sizeof(counters[0]); i++) {
-        file->sdm_read_counter = counters[i];
+        file->state.data.sdm_read_counter = counters[i];
         assert_status(session, change, sizeof(change), DFC_STATUS_OK);
-        munit_assert_true(file->sdm_enabled);
-        munit_assert_uint32(file->sdm_read_counter, ==, 0);
+        munit_assert_true(dfc_file_sdm_flag_is_set(file, DfcSdmFlagEnabled));
+        munit_assert_uint32(file->state.data.sdm_read_counter, ==, 0);
     }
 
     dfc_virtual_picc_session_free(session);
@@ -2459,8 +2605,8 @@ static MunitResult test_single_record_cyclic_is_safe(const MunitParameter params
     file->type = DFC_FILE_TYPE_CYCLIC_RECORD;
     file->comm_settings = DFC_COMM_PLAIN;
     file->access_rights = 0xEEEE;
-    file->record_size = 2;
-    file->max_records = 1;
+    file->state.record.size = 2;
+    file->state.record.max_records = 1;
     munit_assert_true(dfc_file_resize(&credential, file, 2));
     const uint8_t write[] = {
         0x90, 0x3B, 0x00, 0x00, 0x08, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0xA1, 0x00};
@@ -2470,7 +2616,7 @@ static MunitResult test_single_record_cyclic_is_safe(const MunitParameter params
     assert_status(session, write, sizeof(write), DFC_STATUS_OK);
     assert_status(session, commit, sizeof(commit), DFC_STATUS_OK);
     assert_status(session, read_all, sizeof(read_all), DFC_STATUS_BOUNDARY_ERROR);
-    munit_assert_uint32(credential.files[0].record_count, ==, 0);
+    munit_assert_uint32(credential.files[0].state.record.count, ==, 0);
     dfc_virtual_picc_session_free(session);
     return MUNIT_OK;
 }
@@ -2578,6 +2724,18 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE,
      NULL},
 #if DFC_ENABLE_SDM
+    {"/sdm-mac-covers-overlapping-encrypted-file",
+     test_sdm_mac_covers_overlapping_encrypted_file,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/sdm-mac-non-overlapping-encrypted-file-control",
+     test_sdm_mac_non_overlapping_encrypted_file_control,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
     {"/change-file-settings-rejections-are-atomic",
      test_change_file_settings_rejections_are_atomic,
      NULL,
@@ -2655,6 +2813,12 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE,
      NULL},
     {"/write-past-file-end", test_write_past_file_end, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/plain-write-data-borrows-apdu-payload",
+     test_plain_write_data_borrows_apdu_payload,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
     {"/read-past-file-end", test_read_past_file_end, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/create-duplicate-file", test_create_duplicate_file, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/restricted-app-directory",

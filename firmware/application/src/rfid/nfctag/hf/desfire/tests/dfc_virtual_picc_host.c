@@ -65,13 +65,16 @@ static bool
     HostPayloadReader reader = {.data = payload, .length = payload_len, .offset = 0};
     dfc_credential_clear(credential);
 
-    if(!reader_bytes(&reader, credential->uid, sizeof(credential->uid), &credential->uid_len))
-        return false;
+    size_t uid_len = 0;
+    if(!reader_bytes(&reader, credential->uid, sizeof(credential->uid), &uid_len)) return false;
+    credential->uid_len = (uint8_t)uid_len;
     if(credential->num_apps >= DFC_MAX_APPS) return false;
     DfcApplication* app = &credential->apps[credential->num_apps++];
     dfc_credential_reset_application(app);
     if(!reader_fixed(&reader, app->aid, sizeof(app->aid))) return false;
-    if(!reader_bytes(&reader, app->iso_aid, sizeof(app->iso_aid), &app->iso_aid_len)) return false;
+    size_t iso_aid_len = 0;
+    if(!reader_bytes(&reader, app->iso_aid, sizeof(app->iso_aid), &iso_aid_len)) return false;
+    app->iso_aid_len = (uint8_t)iso_aid_len;
     if(!reader_byte(&reader, &app->key_settings_1)) return false;
     if(!reader_byte(&reader, &app->key_settings_2)) return false;
     if(!reader_byte(&reader, &app->auth_command)) return false;

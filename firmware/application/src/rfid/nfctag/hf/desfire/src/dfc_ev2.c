@@ -1,4 +1,5 @@
 #include "dfc_ev2.h"
+#include "dfc_ev2_command.h"
 #include "dfc_ev2_crypto.h"
 #include "dfc_emulator_i.h"
 
@@ -8,39 +9,13 @@
 
 #if DFC_ENABLE_EV2_SECURE_MESSAGING
 
-enum {
-    DfcEv2FileCommandHeaderLength = 7,
-    DfcEv2UpdateRecordHeaderLength = DFC_UPDATE_RECORD_HEADER_SIZE - 1,
-    DfcEv2ValueCommandHeaderLength = 1,
-    DfcEv2ChangeFileSettingsHeaderLength = 1,
-    DfcEv2SetConfigurationHeaderLength = 1,
-    DfcEv2CreateTransactionMacHeaderLength = 5,
-    DfcEv2CommitReaderIdHeaderLength = 0,
-    DfcEv2ChangeKeyHeaderLength = DFC_CHANGE_KEY_EV2_HEADER_LENGTH - 1,
-    DfcEv2ChangeKeySettingsHeaderLength = 0,
-};
-
 static DfcFile* target_file(DfcEmulator* emulator, const uint8_t* command, size_t command_len) {
     if(command_len < 2 || emulator->selected_application != DfcEmulatorSelectedApplicationApp)
         return NULL;
-    switch(dfc_record_command_base(command[0])) {
-    case DFC_CMD_READ_DATA:
-    case DFC_CMD_WRITE_DATA:
-    case DFC_CMD_READ_RECORDS:
-    case DFC_CMD_WRITE_RECORD:
-    case DFC_CMD_UPDATE_RECORD:
-    case DFC_CMD_UPDATE_RECORD_ISO:
-    case DFC_CMD_GET_VALUE:
-    case DFC_CMD_GET_FILE_COUNTERS:
-    case DFC_CMD_CREDIT:
-    case DFC_CMD_DEBIT:
-    case DFC_CMD_LIMITED_CREDIT:
-    case DFC_CMD_CHANGE_FILE_SETTINGS:
-        return dfc_credential_find_file_in_app(
-            emulator->credential, emulator->selected_app_index, command[1]);
-    default:
-        return NULL;
-    }
+    DfcEv2CommandMetadata metadata = dfc_ev2_command_metadata(command[0]);
+    if(!dfc_ev2_command_has(&metadata, DfcEv2CommandTargetsFile)) return NULL;
+    return dfc_credential_find_file_in_app(
+        emulator->credential, emulator->selected_app_index, command[1]);
 }
 
 static bool command_file_access(uint8_t command, DfcFileAccess* access) {
@@ -82,24 +57,6 @@ static uint8_t command_file_comm(
     uint8_t configured = command[0] == DFC_CMD_CHANGE_FILE_SETTINGS ? DFC_COMM_ENCIPHERED :
                                                                       file->comm_settings;
     return dfc_emulator_file_effective_comm_settings(emulator, file, access, configured);
-}
-
-static bool bypass_secure_messaging(uint8_t command) {
-    switch(command) {
-    case DFC_CMD_ADDITIONAL_FRAME:
-    case DFC_CMD_AUTHENTICATE_LEGACY:
-    case DFC_CMD_AUTHENTICATE_ISO:
-    case DFC_CMD_AUTHENTICATE_AES:
-    case DFC_CMD_AUTHENTICATE_EV2_FIRST:
-    case DFC_CMD_AUTHENTICATE_EV2_NON_FIRST:
-#if DFC_ENABLE_DELEGATED_APPLICATIONS
-    case DFC_CMD_CREATE_DELEGATED_APPLICATION:
-#endif
-        return true;
-    default:
-        break;
-    }
-    return false;
 }
 
 static bool plain_file_command(DfcEmulator* emulator, const uint8_t* command, size_t command_len) {
@@ -224,7 +181,8 @@ DfcEv2CommandSecurity dfc_ev2_prepare_command(
         *clear_len = command_len;
         return DfcEv2CommandPlainCounted;
     }
-    if(bypass_secure_messaging(command[0])) {
+    DfcEv2CommandMetadata metadata = dfc_ev2_command_metadata(command[0]);
+    if(dfc_ev2_command_has(&metadata, DfcEv2CommandEmulatorBypass)) {
         if(command_len > clear_capacity) return DfcEv2CommandInvalid;
         memmove(clear_command, command, command_len);
         *clear_len = command_len;
@@ -248,31 +206,13 @@ DfcEv2CommandSecurity dfc_ev2_prepare_command(
     if(1 + secured_data_len > clear_capacity) return DfcEv2CommandInvalid;
     DfcFile* file = NULL;
     uint8_t comm = command_file_comm(emulator, command, command_len, &file);
-    uint8_t base_command = dfc_record_command_base(command[0]);
     bool full_command = file && comm == DFC_COMM_ENCIPHERED;
-    size_t encrypted_header_len = 0;
+    size_t encrypted_header_len = metadata.encrypted_header_length;
     bool decrypt_data = false;
-    if(file && comm == DFC_COMM_ENCIPHERED) {
-        if(base_command == DFC_CMD_WRITE_DATA || base_command == DFC_CMD_WRITE_RECORD)
-            encrypted_header_len = DfcEv2FileCommandHeaderLength, decrypt_data = true;
-        if(command[0] == DFC_CMD_UPDATE_RECORD || command[0] == DFC_CMD_UPDATE_RECORD_ISO)
-            encrypted_header_len = DfcEv2UpdateRecordHeaderLength, decrypt_data = true;
-        if(command[0] == DFC_CMD_CREDIT || command[0] == DFC_CMD_DEBIT ||
-           command[0] == DFC_CMD_LIMITED_CREDIT)
-            encrypted_header_len = DfcEv2ValueCommandHeaderLength, decrypt_data = true;
+    if(metadata.encrypted_header_length != DfcEv2NoEncryptedHeader) {
+        decrypt_data = !dfc_ev2_command_has(&metadata, DfcEv2CommandTargetsFile) ||
+                       (file && comm == DFC_COMM_ENCIPHERED);
     }
-    if(command[0] == DFC_CMD_SET_CONFIGURATION)
-        encrypted_header_len = DfcEv2SetConfigurationHeaderLength, decrypt_data = true;
-    if(command[0] == DFC_CMD_CREATE_TRANSACTION_MAC_FILE)
-        encrypted_header_len = DfcEv2CreateTransactionMacHeaderLength, decrypt_data = true;
-    if(command[0] == DFC_CMD_COMMIT_READER_ID)
-        encrypted_header_len = DfcEv2CommitReaderIdHeaderLength, decrypt_data = true;
-    if(command[0] == DFC_CMD_CHANGE_KEY_EV2)
-        encrypted_header_len = DfcEv2ChangeKeyHeaderLength, decrypt_data = true;
-    if(command[0] == DFC_CMD_CHANGE_KEY_SETTINGS)
-        encrypted_header_len = DfcEv2ChangeKeySettingsHeaderLength, decrypt_data = true;
-    if(command[0] == DFC_CMD_CHANGE_FILE_SETTINGS && comm == DFC_COMM_ENCIPHERED)
-        encrypted_header_len = DfcEv2ChangeFileSettingsHeaderLength, decrypt_data = true;
     if(decrypt_data) {
         if(secured_data_len <= encrypted_header_len) return DfcEv2CommandInvalid;
         size_t decrypted_len = 0;

@@ -32,7 +32,7 @@ static MunitResult test_default_profile_accepts(const MunitParameter params[], v
         dfc_credential_create_application_desfire_order(&c, aid, 0x0F, DFC_KEY_TYPE_AES | 1));
     DfcFile* f = dfc_credential_create_file(&c, 0, 0x01);
     munit_assert_not_null(f);
-    f->declared_size = 32;
+    munit_assert_true(dfc_file_set_declared_size(f, 32));
 
     DfcProfile p;
     dfc_profile_default(&p);
@@ -52,7 +52,7 @@ static MunitResult test_picc_files_unsupported(const MunitParameter params[], vo
     memset(f, 0, sizeof(*f));
     f->app_index = DFC_FILE_OWNER_PICC;
     f->number = 0x07;
-    f->declared_size = 16;
+    munit_assert_true(dfc_file_set_declared_size(f, 16));
     f->data_offset = DFC_FILE_POOL_NONE;
 
     DfcProfile p;
@@ -128,8 +128,8 @@ static MunitResult test_declared_space_capacity(const MunitParameter params[], v
     DfcFile* b = dfc_credential_create_file(&c, 0, 0x02);
     munit_assert_not_null(a);
     munit_assert_not_null(b);
-    a->declared_size = 600;
-    b->declared_size = 600;
+    munit_assert_true(dfc_file_set_declared_size(a, 600));
+    munit_assert_true(dfc_file_set_declared_size(b, 600));
 
     // Keep the advertised card size inside the profile, so the failure isolates
     // the declared-allocation sum rather than tripping the storage check first.
@@ -159,9 +159,9 @@ static MunitResult test_record_capacity_uses_max(const MunitParameter params[], 
     DfcFile* r = dfc_credential_create_file(&c, 0, 0x04);
     munit_assert_not_null(r);
     r->type = 0x03;
-    r->record_size = 64;
-    r->max_records = 32; // 2048 octets reserved, regardless of how many are used
-    r->record_count = 1;
+    r->state.record.size = 64;
+    r->state.record.max_records = 32; // 2048 octets reserved, regardless of how many are used
+    r->state.record.count = 1;
 
     DfcProfile p;
     dfc_profile_default(&p);
@@ -263,13 +263,13 @@ static MunitResult
     // One file in the second application, one at PICC level.
     DfcFile* in_app = dfc_credential_create_file(&c, 1, 0x01);
     munit_assert_not_null(in_app);
-    in_app->declared_size = 8;
+    munit_assert_true(dfc_file_set_declared_size(in_app, 8));
 
     DfcFile* at_picc = &c.files[c.num_files++];
     memset(at_picc, 0, sizeof(*at_picc));
     at_picc->app_index = DFC_FILE_OWNER_PICC;
     at_picc->number = 0x02;
-    at_picc->declared_size = 8;
+    munit_assert_true(dfc_file_set_declared_size(at_picc, 8));
     at_picc->data_offset = DFC_FILE_POOL_NONE;
 
     munit_assert_true(dfc_credential_delete_application_at(&c, 0));

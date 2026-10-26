@@ -4,7 +4,9 @@
 #include "dfc_ffi.h"
 #include "dfc_credential.h"
 #include "dfc_der.h"
+#include "dfc_emulator_i.h"
 #include "dfc_reader.h"
+#include "dfc_virtual_picc.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -15,6 +17,13 @@ static int failures;
 
 struct DfcFfiCredential {
     DfcCredential model;
+};
+
+struct DfcFfiPicc {
+    DfcFfiCredential* credential;
+    DfcVirtualPiccSession* session;
+    DfcFfiRandomCallback random;
+    void* random_context;
 };
 
 // Credential builders return the stable model-status family described by the
@@ -44,7 +53,7 @@ static const char CREDENTIAL[] =
     "PICC Key 00 Version: 00\n"
     "PICC File Count: 0\n"
     "Application Count: 1\n"
-    "Application 00 AID: 00 00 01\n"
+    "Application 00 AID: 01 23 45\n"
     "Application 00 Key Settings 1: 0F\n"
     "Application 00 Key Settings 2: 82\n"
     "Application 00 Authentication Mode: AES\n"
@@ -72,6 +81,8 @@ static const char CREDENTIAL[] =
 
 static const uint8_t APP_KEY[16] =
     {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
+static const uint8_t APPLICATION_AID[3] = {0x01, 0x23, 0x45};
+static const uint8_t APPLICATION_WIRE_AID[3] = {0x45, 0x23, 0x01};
 
 static size_t random_calls;
 
@@ -387,6 +398,41 @@ static DfcFfiFile plain_file(int32_t owner, uint8_t number) {
     return file;
 }
 
+static void check_non_data_declared_size_is_canonical(void) {
+    DfcFfiCredential* credential = parse_test_credential();
+    if(!credential) return;
+    DfcFfiFile value = plain_file(0, DFC_EV1_MAX_FILE_NUMBER);
+    value.type = DFC_FILE_TYPE_VALUE;
+    value.declared_size = 123;
+    value.value_lower_limit = 0;
+    value.value_upper_limit = 100;
+    value.value = 50;
+    uint32_t index = UINT32_MAX;
+    CHECK(dfc_ffi_credential_add_file(credential, &value, &index) == DFC_FFI_OK);
+    DfcFfiFile round_trip;
+    CHECK(dfc_ffi_credential_get_file(credential, index, &round_trip) == DFC_FFI_OK);
+    CHECK(round_trip.declared_size == 0);
+
+#if DFC_ENABLE_TRANSACTION_MAC
+    DfcFfiFile transaction_mac = plain_file(0, DFC_EV1_MAX_FILE_NUMBER - 1);
+    transaction_mac.type = DFC_FILE_TYPE_TRANSACTION_MAC;
+    transaction_mac.access_rights = 0xEFEE;
+    transaction_mac.declared_size = 123;
+    transaction_mac.contents_complete = 1;
+    transaction_mac.transaction_mac_key_type = DFC_TRANSACTION_MAC_KEY_TYPE_AES;
+    transaction_mac.transaction_counter = 7;
+    CHECK(dfc_ffi_credential_add_file(credential, &transaction_mac, &index) == DFC_FFI_OK);
+    const uint8_t transaction_mac_data[DFC_TRANSACTION_MAC_FILE_LENGTH] = {0};
+    CHECK(
+        dfc_ffi_credential_set_file_data(
+            credential, index, transaction_mac_data, sizeof(transaction_mac_data)) == DFC_FFI_OK);
+    CHECK(dfc_ffi_credential_get_file(credential, index, &round_trip) == DFC_FFI_OK);
+    CHECK(round_trip.declared_size == DFC_TRANSACTION_MAC_FILE_LENGTH);
+    CHECK(round_trip.transaction_counter == 7);
+#endif
+    dfc_ffi_credential_free(credential);
+}
+
 static void check_rejected_file_creation_is_atomic(void) {
     DfcFfiCredential* credential = parse_test_credential();
     if(!credential) return;
@@ -695,8 +741,8 @@ static void check_limited_credit_value_ffi_round_trip(void) {
     DfcFfiCredential* source = parse_test_credential();
     if(!source) return;
     DfcFile* native = &source->model.files[1];
-    native->limited_credit = 1;
-    native->limited_credit_value = 37;
+    native->state.value.limited_credit = 1;
+    native->state.value.limited_credit_value = 37;
 
     DfcFfiFile exported;
     CHECK(dfc_ffi_credential_get_file(source, 1, &exported) == DFC_FFI_OK);
@@ -725,6 +771,70 @@ static int32_t run(DfcFfiPicc* picc, DfcFfiReaderExchange* exchange) {
         answer = rx;
     }
     return st;
+}
+
+// Exercise the complete public AID contract with one asymmetric identifier.
+// The model and snapshots use printed order. Native requests and responses use
+// least-significant-octet-first order, and the typed boundaries convert once.
+static void check_aid_order_contract(
+    DfcFfiPicc* picc,
+    DfcFfiReaderSession* session,
+    DfcFfiReaderExchange* exchange) {
+    DfcCommand get_applications;
+    CHECK(dfc_command_get_application_ids(&get_applications) == DfcCommandOk);
+    CHECK(
+        dfc_ffi_reader_exchange_begin(
+            exchange,
+            session,
+            DfcReaderFramingNative,
+            get_applications.ins,
+            get_applications.data,
+            get_applications.data_len,
+            DFC_COMM_PLAIN,
+            -1) == DfcReaderOk);
+    CHECK(run(picc, exchange) == DfcReaderOk);
+
+    uint8_t wire_aid[sizeof(APPLICATION_WIRE_AID)] = {0};
+    size_t wire_aid_len = 0;
+    CHECK(
+        dfc_ffi_reader_result_data(exchange, wire_aid, sizeof(wire_aid), &wire_aid_len) ==
+        DFC_FFI_OK);
+    CHECK(wire_aid_len == sizeof(APPLICATION_WIRE_AID));
+    CHECK(memcmp(wire_aid, APPLICATION_WIRE_AID, sizeof(APPLICATION_WIRE_AID)) == 0);
+
+    uint8_t model_aid[sizeof(APPLICATION_AID)] = {0};
+    size_t model_aid_len = 0;
+    CHECK(
+        dfc_ffi_response_decode_application_ids(
+            wire_aid, wire_aid_len, model_aid, sizeof(model_aid), &model_aid_len) ==
+        DFC_FFI_RESPONSE_OK);
+    CHECK(model_aid_len == sizeof(APPLICATION_AID));
+    CHECK(memcmp(model_aid, APPLICATION_AID, sizeof(APPLICATION_AID)) == 0);
+
+    DfcCommand select_application;
+    CHECK(
+        dfc_command_select_application(&select_application, APPLICATION_AID, NULL) ==
+        DfcCommandOk);
+    CHECK(select_application.ins == DFC_CMD_SELECT_APPLICATION);
+    CHECK(select_application.data_len == sizeof(APPLICATION_WIRE_AID));
+    CHECK(
+        memcmp(select_application.data, APPLICATION_WIRE_AID, sizeof(APPLICATION_WIRE_AID)) == 0);
+    CHECK(
+        dfc_ffi_reader_exchange_begin(
+            exchange,
+            session,
+            DfcReaderFramingNative,
+            select_application.ins,
+            select_application.data,
+            select_application.data_len,
+            DFC_COMM_PLAIN,
+            -1) == DfcReaderOk);
+    CHECK(run(picc, exchange) == DfcReaderOk);
+
+    DfcFfiSnapshot snapshot;
+    CHECK(dfc_ffi_picc_snapshot(picc, &snapshot) == DFC_FFI_OK);
+    CHECK(snapshot.selected == 2);
+    CHECK(memcmp(snapshot.selected_aid, APPLICATION_AID, sizeof(APPLICATION_AID)) == 0);
 }
 
 // The clear head of an encrypted write is an int32 here and one octet in the
@@ -801,12 +911,313 @@ cleanup:
     dfc_ffi_reader_session_free(session);
 }
 
+static void check_standalone_api_failure_outputs(void) {
+    uint8_t result[DFC_FFI_SDM_RESULT_SIZE];
+    uint8_t decrypted[16];
+    size_t required = SIZE_MAX;
+    memset(result, 0xA5, sizeof(result));
+    memset(decrypted, 0xA5, sizeof(decrypted));
+    CHECK(
+        dfc_ffi_sdm_verify_ascii(
+            (const uint8_t*)"bad",
+            3,
+            DFC_FFI_SDM_ENCRYPTED_FILE_DATA,
+            0,
+            0,
+            0,
+            0,
+            0,
+            SIZE_MAX,
+            SIZE_MAX,
+            0,
+            0,
+            NULL,
+            (const uint8_t[16]){0},
+            decrypted,
+            sizeof(decrypted),
+            &required,
+            result,
+            sizeof(result)) == DFC_FFI_SDM_MALFORMED);
+    CHECK(memcmp(result, (uint8_t[sizeof(result)]){0}, sizeof(result)) == 0);
+    CHECK(memcmp(decrypted, (uint8_t[sizeof(decrypted)]){0}, sizeof(decrypted)) == 0);
+
+    uint8_t version[DFC_FFI_RESPONSE_VERSION_SIZE];
+    memset(version, 0xA5, sizeof(version));
+    CHECK(
+        dfc_ffi_response_decode_version((const uint8_t*)"bad", 3, version, sizeof(version)) ==
+        DFC_FFI_RESPONSE_MALFORMED);
+    CHECK(memcmp(version, (uint8_t[sizeof(version)]){0}, sizeof(version)) == 0);
+}
+
+typedef struct {
+    size_t plain_uid_offset;
+    size_t plain_uid_len;
+    size_t encrypted_picc_data_offset;
+    size_t encrypted_picc_data_len;
+    size_t encrypted_file_data_offset;
+    size_t encrypted_file_data_len;
+} SdmOptionalFields;
+
+static int32_t verify_sdm_optional_fields(const SdmOptionalFields* fields) {
+    static const uint8_t message[] =
+        "0483B4F2CF1890000001163F0AC4319102F37F4B61FE6BFDE1469CF53E287D682A2E";
+    static const uint8_t key[16] = {0};
+    uint8_t result[DFC_FFI_SDM_RESULT_SIZE];
+    size_t required = SIZE_MAX;
+    return dfc_ffi_sdm_verify_ascii(
+        message,
+        sizeof(message) - 1,
+        0,
+        fields->plain_uid_offset,
+        fields->plain_uid_len,
+        SIZE_MAX,
+        fields->encrypted_picc_data_offset,
+        fields->encrypted_picc_data_len,
+        fields->encrypted_file_data_offset,
+        fields->encrypted_file_data_len,
+        20,
+        52,
+        NULL,
+        key,
+        NULL,
+        0,
+        &required,
+        result,
+        sizeof(result));
+}
+
+static void check_sdm_absent_field_contract(void) {
+    SdmOptionalFields fields = {
+        .plain_uid_offset = SIZE_MAX,
+        .encrypted_picc_data_offset = SIZE_MAX,
+        .encrypted_file_data_offset = SIZE_MAX,
+    };
+    CHECK(verify_sdm_optional_fields(&fields) != DFC_FFI_SDM_MALFORMED);
+
+    fields.plain_uid_len = 7;
+    CHECK(verify_sdm_optional_fields(&fields) == DFC_FFI_SDM_MALFORMED);
+    fields.plain_uid_len = 0;
+    fields.encrypted_picc_data_len = 32;
+    CHECK(verify_sdm_optional_fields(&fields) == DFC_FFI_SDM_MALFORMED);
+    fields.encrypted_picc_data_len = 0;
+    fields.encrypted_file_data_len = 32;
+    CHECK(verify_sdm_optional_fields(&fields) == DFC_FFI_SDM_MALFORMED);
+}
+
+static void check_standalone_api_success_and_boundaries(void) {
+    const uint8_t master[16] = {
+        0x00,
+        0x11,
+        0x22,
+        0x33,
+        0x44,
+        0x55,
+        0x66,
+        0x77,
+        0x88,
+        0x99,
+        0xAA,
+        0xBB,
+        0xCC,
+        0xDD,
+        0xEE,
+        0xFF};
+    const uint8_t diversification_input[17] = {
+        0x04,
+        0x78,
+        0x2E,
+        0x21,
+        0x80,
+        0x1D,
+        0x80,
+        0x30,
+        0x42,
+        0xF5,
+        0x4E,
+        0x58,
+        0x50,
+        0x20,
+        0x41,
+        0x62,
+        0x75};
+    const uint8_t diversified_expected[16] = {
+        0xA8,
+        0xDD,
+        0x63,
+        0xA3,
+        0xB8,
+        0x9D,
+        0x54,
+        0xB3,
+        0x7C,
+        0xA8,
+        0x02,
+        0x47,
+        0x3F,
+        0xDA,
+        0x91,
+        0x75};
+    uint8_t diversified[16] = {0};
+    size_t diversified_len = 0;
+    CHECK(
+        dfc_ffi_an10922_diversify(
+            DFC_FFI_AN10922_AES128,
+            master,
+            sizeof(master),
+            diversification_input,
+            sizeof(diversification_input),
+            diversified,
+            sizeof(diversified),
+            &diversified_len) == DFC_FFI_OK);
+    CHECK(diversified_len == sizeof(diversified_expected));
+    CHECK(memcmp(diversified, diversified_expected, sizeof(diversified)) == 0);
+    memset(diversified, 0xA5, sizeof(diversified));
+    CHECK(
+        dfc_ffi_an10922_diversify(
+            DFC_FFI_AN10922_AES128,
+            master,
+            sizeof(master) - 1,
+            diversification_input,
+            sizeof(diversification_input),
+            diversified,
+            sizeof(diversified),
+            &diversified_len) == DFC_FFI_INVALID_ARGUMENT);
+    CHECK(memcmp(diversified, (uint8_t[sizeof(diversified)]){0}, sizeof(diversified)) == 0);
+    CHECK(
+        dfc_ffi_an10922_diversify(
+            DFC_FFI_AN10922_AES128,
+            master,
+            sizeof(master),
+            diversification_input,
+            sizeof(diversification_input),
+            diversified,
+            sizeof(diversified) - 1,
+            &diversified_len) == DFC_FFI_BUFFER_TOO_SMALL);
+    CHECK(
+        dfc_ffi_an10922_diversify(
+            0, master, 16, diversification_input, 17, diversified, 16, NULL) ==
+        DFC_FFI_INVALID_ARGUMENT);
+
+    uint8_t version_input[DFC_FFI_RESPONSE_VERSION_SIZE];
+    uint8_t version_output[DFC_FFI_RESPONSE_VERSION_SIZE];
+    for(size_t i = 0; i < sizeof(version_input); i++)
+        version_input[i] = (uint8_t)i;
+    CHECK(
+        dfc_ffi_response_decode_version(
+            version_input, sizeof(version_input), version_output, sizeof(version_output)) ==
+        DFC_FFI_RESPONSE_OK);
+    CHECK(memcmp(version_input, version_output, sizeof(version_input)) == 0);
+
+    const uint8_t wire_aids[] = {3, 2, 1, 0xCC, 0xBB, 0xAA};
+    uint8_t aids[sizeof(wire_aids)] = {0};
+    size_t aids_len = 0;
+    CHECK(
+        dfc_ffi_response_decode_application_ids(wire_aids, sizeof(wire_aids), aids, 3, &aids_len) ==
+        DFC_FFI_RESPONSE_BUFFER_TOO_SMALL);
+    CHECK(aids_len == sizeof(aids));
+    CHECK(memcmp(aids, (uint8_t[sizeof(aids)]){0}, sizeof(aids)) == 0);
+    CHECK(
+        dfc_ffi_response_decode_application_ids(
+            wire_aids, sizeof(wire_aids), aids, sizeof(aids), &aids_len) == DFC_FFI_RESPONSE_OK);
+    CHECK(memcmp(aids, (uint8_t[]){1, 2, 3, 0xAA, 0xBB, 0xCC}, sizeof(aids)) == 0);
+    CHECK(dfc_ffi_response_decode_file_ids(NULL, 0, NULL, 0, &aids_len) == DFC_FFI_RESPONSE_OK);
+    CHECK(aids_len == 0);
+    CHECK(
+        dfc_ffi_response_decode_file_ids(wire_aids, 1, NULL, 1, &aids_len) ==
+        DFC_FFI_INVALID_ARGUMENT);
+
+    const uint8_t settings_response[] = {0, 3, 0x12, 0xEF, 0x80, 0, 0};
+    uint8_t settings[DFC_FFI_RESPONSE_FILE_SETTINGS_SIZE] = {0};
+    CHECK(
+        dfc_ffi_response_decode_file_settings(
+            settings_response, sizeof(settings_response), settings, sizeof(settings)) ==
+        DFC_FFI_RESPONSE_OK);
+    CHECK(settings[0] == 0 && settings[1] == 3 && settings[14] == 0x80);
+
+    const uint8_t key[16] = {0};
+    const uint8_t uid[7] = {0x04, 0x83, 0xB4, 0xF2, 0xCF, 0x18, 0x90};
+    const uint8_t captured_mac[8] = {0x35, 0x2E, 0x57, 0xAD, 0xDA, 0x91, 0x1E, 0xDC};
+    DfcFfiTransactionMacVerifier* verifier = (DfcFfiTransactionMacVerifier*)(uintptr_t)1;
+    CHECK(
+        dfc_ffi_transaction_mac_verifier_new(16, NULL, uid, sizeof(uid), 1, &verifier) ==
+        DFC_FFI_INVALID_ARGUMENT);
+    CHECK(verifier == NULL);
+    CHECK(
+        dfc_ffi_transaction_mac_verifier_new(16, key, uid, sizeof(uid), 1, &verifier) ==
+        DFC_FFI_TRANSACTION_MAC_OK);
+    const uint8_t too_large[] = {1, 2, 3};
+    CHECK(
+        dfc_ffi_transaction_mac_add_data(verifier, 0x3D, 2, 0, 3, too_large, 3) ==
+        DFC_FFI_TRANSACTION_MAC_CAPACITY);
+    CHECK(dfc_ffi_transaction_mac_add_value(verifier, 0x0C, 5, 1) == DFC_FFI_TRANSACTION_MAC_OK);
+    uint8_t verified = 0;
+    CHECK(
+        dfc_ffi_transaction_mac_verify(verifier, captured_mac, &verified) ==
+        DFC_FFI_TRANSACTION_MAC_OK);
+    CHECK(verified == 1);
+    dfc_ffi_transaction_mac_verifier_free(verifier);
+    dfc_ffi_transaction_mac_verifier_free(NULL);
+
+    CHECK(
+        dfc_ffi_transaction_mac_verifier_new(160, key, uid, sizeof(uid), 1, &verifier) ==
+        DFC_FFI_TRANSACTION_MAC_OK);
+    CHECK(
+        dfc_ffi_transaction_mac_add_data(verifier, 0x3D, 2, 0x030201, 3, too_large, 3) ==
+        DFC_FFI_TRANSACTION_MAC_OK);
+    const uint8_t update[] = {0x44, 0x55};
+    CHECK(
+        dfc_ffi_transaction_mac_add_record_update(verifier, 0xDB, 3, 4, 5, 2, update, 2) ==
+        DFC_FFI_TRANSACTION_MAC_OK);
+    CHECK(dfc_ffi_transaction_mac_add_clear_record(verifier, 4) == DFC_FFI_TRANSACTION_MAC_OK);
+    CHECK(
+        dfc_ffi_transaction_mac_add_reader_id(
+            verifier, (const uint8_t[16]){0}, (const uint8_t[16]){0}) ==
+        DFC_FFI_TRANSACTION_MAC_OK);
+    CHECK(
+        dfc_ffi_transaction_mac_verify(verifier, captured_mac, NULL) ==
+        DFC_FFI_TRANSACTION_MAC_INVALID);
+    dfc_ffi_transaction_mac_verifier_free(verifier);
+    CHECK(dfc_ffi_transaction_mac_add_value(NULL, 0x0C, 5, 1) == DFC_FFI_TRANSACTION_MAC_INVALID);
+
+    uint8_t overlap_message[] =
+        "0483B4F2CF1890000001163F0AC4319102F37F4B61FE6BFDE1469CF53E287D682A2E";
+    uint8_t overlap_before[sizeof(overlap_message)];
+    memcpy(overlap_before, overlap_message, sizeof(overlap_message));
+    size_t required = 0;
+    CHECK(
+        dfc_ffi_sdm_verify_ascii(
+            overlap_message,
+            sizeof(overlap_message) - 1,
+            DFC_FFI_SDM_PLAIN_UID | DFC_FFI_SDM_PLAIN_READ_COUNTER,
+            0,
+            7,
+            14,
+            0,
+            0,
+            0,
+            0,
+            20,
+            52,
+            NULL,
+            key,
+            NULL,
+            0,
+            &required,
+            overlap_message,
+            DFC_FFI_SDM_RESULT_SIZE) == DFC_FFI_INVALID_ARGUMENT);
+    CHECK(memcmp(overlap_message, overlap_before, sizeof(overlap_message)) == 0);
+}
+
 int main(void) {
+    check_standalone_api_failure_outputs();
+    check_sdm_absent_field_contract();
+    check_standalone_api_success_and_boundaries();
     check_rejected_card_and_picc_updates();
     check_application_creation_rollback();
     check_reader_header_length_bound();
     check_failed_reader_result_is_retired();
     check_rejected_file_creation_is_atomic();
+    check_non_data_declared_size_is_canonical();
     check_pool_resize_boundaries();
     check_delegated_format_ffi_round_trip();
     check_limited_credit_value_ffi_round_trip();
@@ -1265,15 +1676,7 @@ int main(void) {
     DfcFfiReaderExchange* exchange = NULL;
     CHECK(dfc_ffi_reader_session_new(&session) == 0);
     CHECK(dfc_ffi_reader_exchange_new(&exchange) == 0);
-    // The wire carries an AID least significant octet first; the model stores
-    // it the way the text writes it.
-    const uint8_t wire_aid[3] = {0x01, 0x00, 0x00};
-    const uint8_t aid[3] = {0x00, 0x00, 0x01};
-    CHECK(dfc_ffi_reader_exchange_begin(exchange, session, 0, 0x5A, wire_aid, 3, 0, -1) == 0);
-    st = run(picc, exchange);
-    if(st != 0)
-        fprintf(stderr, "select: %d status %02X\n", st, dfc_ffi_reader_result_status(exchange));
-    CHECK(st == 0);
+    check_aid_order_contract(picc, session, exchange);
 
     uint8_t random_a[16];
     for(size_t i = 0; i < sizeof(random_a); i++)
@@ -1307,7 +1710,35 @@ int main(void) {
     CHECK(dfc_ffi_picc_snapshot(picc, &snapshot) == 0);
     CHECK(snapshot.auth_mode == 0xAA);
     CHECK(snapshot.selected == 2);
-    CHECK(memcmp(snapshot.selected_aid, aid, 3) == 0);
+    CHECK(memcmp(snapshot.selected_aid, APPLICATION_AID, sizeof(APPLICATION_AID)) == 0);
+
+    dfc_emulator_retire_authentication(picc->session->emulator);
+    memset(&snapshot, 0xA5, sizeof(snapshot));
+    CHECK(dfc_ffi_picc_snapshot(picc, &snapshot) == 0);
+    CHECK(snapshot.auth_mode == 0);
+    CHECK(snapshot.auth_key_no == 0);
+    CHECK(snapshot.ev2_active == 0);
+
+#if DFC_ENABLE_EV2_SECURE_MESSAGING
+    DfcEmulator* emulator = picc->session->emulator;
+    emulator->secure_messaging->cipher = DFC_CMD_AUTHENTICATE_AES;
+    emulator->ev2_session_active = true;
+    emulator->ev2_authenticated_key_no = 3;
+    CHECK(dfc_ffi_picc_snapshot(picc, &snapshot) == 0);
+    CHECK(snapshot.auth_mode == DFC_CMD_AUTHENTICATE_AES);
+    CHECK(snapshot.auth_key_no == 3);
+    CHECK(snapshot.ev2_active == 1);
+    CHECK(snapshot.ev2_key_no == 3);
+
+    // A terminal EV2 protection failure retires the session but can leave the
+    // allocated secure-messaging object configured for AES.
+    emulator->ev2_session_active = false;
+    memset(&snapshot, 0xA5, sizeof(snapshot));
+    CHECK(dfc_ffi_picc_snapshot(picc, &snapshot) == 0);
+    CHECK(snapshot.auth_mode == 0);
+    CHECK(snapshot.auth_key_no == 0);
+    CHECK(snapshot.ev2_active == 0);
+#endif
 
     DfcFfiDiagnosticSnapshot diagnostic;
     memset(&diagnostic, 0xA5, sizeof(diagnostic));

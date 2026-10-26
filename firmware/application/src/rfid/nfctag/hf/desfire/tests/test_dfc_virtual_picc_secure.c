@@ -1,6 +1,19 @@
 #include "dfc_virtual_picc_test_helpers.h"
 #include "dfc_emulator_i.h"
 
+static void install_test_authentication(
+    DfcEmulator* emulator,
+    uint8_t cipher,
+    const uint8_t* key,
+    size_t key_len,
+    uint8_t key_no) {
+    emulator->secure_messaging = dfc_secure_messaging_alloc(cipher, key, key_len, NULL);
+    munit_assert_not_null(emulator->secure_messaging);
+    emulator->auth_cipher = cipher;
+    emulator->auth_key_no = key_no;
+    munit_assert_true(dfc_emulator_native_authentication_active(emulator));
+}
+
 static MunitResult test_iso_authentication_resets_ev1_secure_messaging_iv(
     const MunitParameter params[],
     void* user_data) {
@@ -222,11 +235,9 @@ static MunitResult
         dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
 
     uint8_t session_key[8] = {0};
-    session->emulator->secure_messaging = dfc_secure_messaging_alloc(
-        DFC_CMD_AUTHENTICATE_LEGACY, session_key, sizeof(session_key), NULL);
+    install_test_authentication(
+        session->emulator, DFC_CMD_AUTHENTICATE_LEGACY, session_key, sizeof(session_key), 0x01);
     session->emulator->selected_application = DfcEmulatorSelectedApplicationApp;
-    // Access rights 0x1230 require read key 0x01.
-    session->emulator->auth_key_no = 0x01;
 
     uint8_t response[128];
     size_t response_len = 0;
@@ -288,11 +299,9 @@ static MunitResult test_read_data_mac_file_uses_single_ev1_response_mac(
         dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
 
     uint8_t session_key[16] = {0};
-    session->emulator->secure_messaging = dfc_secure_messaging_alloc(
-        DFC_CMD_AUTHENTICATE_ISO, session_key, sizeof(session_key), NULL);
+    install_test_authentication(
+        session->emulator, DFC_CMD_AUTHENTICATE_ISO, session_key, sizeof(session_key), 0x01);
     session->emulator->selected_application = DfcEmulatorSelectedApplicationApp;
-    // Access rights 0x1230 require read key 0x01.
-    session->emulator->auth_key_no = 0x01;
 
     uint8_t response[128];
     size_t response_len = 0;
@@ -350,15 +359,15 @@ static size_t exchange_read_data(
 static void seed_incompatible_file_state(DfcFile* file) {
     switch(file->type) {
     case DFC_FILE_TYPE_VALUE:
-        file->value_lower_limit = -41;
-        file->value_upper_limit = 93;
-        file->value = 17;
+        file->state.value.lower_limit = -41;
+        file->state.value.upper_limit = 93;
+        file->state.value.current = 17;
         break;
     case DFC_FILE_TYPE_LINEAR_RECORD:
     case DFC_FILE_TYPE_CYCLIC_RECORD:
-        file->record_size = 4;
-        file->max_records = 3;
-        file->record_count = 2;
+        file->state.record.size = 4;
+        file->state.record.max_records = 3;
+        file->state.record.count = 2;
         break;
     default:
         munit_error("incompatible ReadData fixture requires a value or record file");
@@ -374,7 +383,7 @@ static DfcVirtualPiccSession* prepare_read_data_session(
     DfcFile* file = &credential->files[0];
     file->type = file_type;
     file->access_rights = 0xEEEE;
-    file->sdm_read_counter = 7;
+    file->state.data.sdm_read_counter = 7;
     munit_assert_true(dfc_file_resize(credential, file, file_len));
     uint8_t* file_data = dfc_file_data(credential, file);
     munit_assert_not_null(file_data);
@@ -419,12 +428,8 @@ static MunitResult
             memcpy(file_data_before, file_data, sizeof(file_data_before));
 
             uint8_t session_key[16] = {0};
-            session->emulator->secure_messaging = dfc_secure_messaging_alloc(
-                DFC_CMD_AUTHENTICATE_ISO, session_key, sizeof(session_key), NULL);
-            munit_assert_not_null(session->emulator->secure_messaging);
-            session->emulator->auth_cipher = DFC_CMD_AUTHENTICATE_ISO;
-            session->emulator->auth_key_no = 1;
-            munit_assert_true(dfc_emulator_native_authentication_active(session->emulator));
+            install_test_authentication(
+                session->emulator, DFC_CMD_AUTHENTICATE_ISO, session_key, sizeof(session_key), 1);
 
             uint8_t response[32];
             memset(response, 0xA5, sizeof(response));
@@ -514,14 +519,11 @@ static MunitResult test_read_data_transaction_mac_uses_configured_protection(
     for(size_t i = 0; i < DFC_TRANSACTION_MAC_FILE_LENGTH; i++)
         file_data[i] = (uint8_t)(0x70 + i);
 
-    session->emulator->auth_key_no = 1;
-    session->emulator->auth_cipher = DFC_CMD_AUTHENTICATE_ISO;
     uint8_t session_key[16] = {0};
-    session->emulator->secure_messaging = dfc_secure_messaging_alloc(
-        DFC_CMD_AUTHENTICATE_ISO, session_key, sizeof(session_key), NULL);
+    install_test_authentication(
+        session->emulator, DFC_CMD_AUTHENTICATE_ISO, session_key, sizeof(session_key), 1);
     DfcSecureMessaging* oracle = dfc_secure_messaging_alloc(
         DFC_CMD_AUTHENTICATE_ISO, session_key, sizeof(session_key), NULL);
-    munit_assert_not_null(session->emulator->secure_messaging);
     munit_assert_not_null(oracle);
 
     static const uint32_t accepted_ranges[][2] = {
@@ -584,15 +586,11 @@ static MunitResult test_read_data_type_error_aborts_pending_transaction(
         prepare_read_data_session(&credential, DFC_FILE_TYPE_VALUE, 8, 0x5A);
     DfcFile* file = &credential.files[0];
     seed_incompatible_file_state(file);
-    file->value_pending = true;
-    file->value_pending_delta = 5;
+    file->state.value.pending = true;
+    file->state.value.pending_delta = 5;
     uint8_t session_key[16] = {0};
-    session->emulator->secure_messaging = dfc_secure_messaging_alloc(
-        DFC_CMD_AUTHENTICATE_ISO, session_key, sizeof(session_key), NULL);
-    munit_assert_not_null(session->emulator->secure_messaging);
-    session->emulator->auth_cipher = DFC_CMD_AUTHENTICATE_ISO;
-    session->emulator->auth_key_no = 1;
-    munit_assert_true(dfc_emulator_native_authentication_active(session->emulator));
+    install_test_authentication(
+        session->emulator, DFC_CMD_AUTHENTICATE_ISO, session_key, sizeof(session_key), 1);
 
     uint8_t response[32];
     size_t response_len = exchange_read_data(session, 0, 0, response, sizeof(response));
@@ -600,12 +598,12 @@ static MunitResult test_read_data_type_error_aborts_pending_transaction(
     munit_assert_memory_equal(2, response, ((uint8_t[]){0x91, DFC_STATUS_PERMISSION_DENIED}));
     // Error finalization rolls back the open transaction and retires the
     // authenticated session after returning the card status.
-    munit_assert_false(file->value_pending);
-    munit_assert_int32(file->value_pending_delta, ==, 0);
-    munit_assert_int32(file->value_lower_limit, ==, -41);
-    munit_assert_int32(file->value_upper_limit, ==, 93);
-    munit_assert_int32(file->value, ==, 17);
-    munit_assert_uint32(file->sdm_read_counter, ==, 7);
+    munit_assert_false(file->state.value.pending);
+    munit_assert_int32(file->state.value.pending_delta, ==, 0);
+    munit_assert_int32(file->state.value.lower_limit, ==, -41);
+    munit_assert_int32(file->state.value.upper_limit, ==, 93);
+    munit_assert_int32(file->state.value.current, ==, 17);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 7);
     munit_assert_false(dfc_emulator_native_authentication_active(session->emulator));
 
     dfc_virtual_picc_session_free(session);
@@ -624,9 +622,8 @@ static void check_get_version_terminal_frame(uint8_t cipher, size_t key_len, con
         dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
 
     uint8_t key[24] = {0};
-    session->emulator->secure_messaging = dfc_secure_messaging_alloc(cipher, key, key_len, NULL);
+    install_test_authentication(session->emulator, cipher, key, key_len, 0);
     DfcSecureMessaging* reader = dfc_secure_messaging_alloc(cipher, key, key_len, NULL);
-    munit_assert_not_null(session->emulator->secure_messaging);
     munit_assert_not_null(reader);
 
     const uint8_t get_version[] = {0x90, 0x60, 0x00, 0x00, 0x00};
@@ -727,9 +724,8 @@ static MunitResult test_get_version_length_error_clears_ev1_session(
             dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
 
         uint8_t key[16] = {0};
-        session->emulator->secure_messaging =
-            dfc_secure_messaging_alloc(DFC_CMD_AUTHENTICATE_ISO, key, sizeof(key), NULL);
-        munit_assert_not_null(session->emulator->secure_messaging);
+        install_test_authentication(
+            session->emulator, DFC_CMD_AUTHENTICATE_ISO, key, sizeof(key), 0);
 
         uint8_t response[64];
         size_t response_len = 0;

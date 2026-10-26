@@ -1,0 +1,7 @@
+# constructor|payload length|expected result
+write-data|248|accept
+write-data|249|reject
+write-record|248|accept
+write-record|249|reject
+update-record|245|accept
+update-record|246|reject

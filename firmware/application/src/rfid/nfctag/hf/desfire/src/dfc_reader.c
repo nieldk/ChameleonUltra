@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "dfc_crypto_internal.h"
+#include "dfc_ev2_command.h"
 #include "dfc_ev2_crypto.h"
 
 #if DFC_ENABLE_READER
@@ -46,14 +47,7 @@ enum {
     PlanEv2MacDecrypt,
 };
 
-#define FILE_HEADER_LENGTH          7
-#define UPDATE_RECORD_HEADER_LENGTH 10
-#define VALUE_HEADER_LENGTH         1
-#define SET_CONFIGURATION_HEADER    1
-#define CREATE_TMAC_HEADER          5
-#define COMMIT_READER_ID_HEADER     0
-#define CHANGE_KEY_EV2_HEADER       2
-#define CHANGE_KEY_HEADER           1
+#define CHANGE_KEY_HEADER 1
 
 #define WRAPPED_SW1             0x91
 #define DFC_READER_STREAM_CHUNK 152
@@ -176,36 +170,9 @@ static bool cbc_decrypt(
 // C[i] = D(P[i] ^ C[i-1]), from a zero IV.
 static bool
     d40_send(const uint8_t* key, size_t key_len, const uint8_t* in, size_t len, uint8_t* out) {
-    uint8_t previous[8] = {0};
-    uint8_t block[8] = {0};
-    DfcCryptoDesBlock cipher = {0};
-    bool ok = false;
-    if(!key || !in || !out || len % 8 != 0) goto cleanup;
-    ok = dfc_crypto_des_block_init(&cipher, false, key, key_len);
-    if(!ok) {
-        dfc_secure_wipe(out, len);
-        goto cleanup;
-    }
-    for(size_t off = 0; off + 8 <= len; off += 8) {
-        for(size_t i = 0; i < 8; i++)
-            block[i] = in[off + i] ^ previous[i];
-        ok = dfc_crypto_des_block_crypt(&cipher, block, out + off);
-        if(!ok) break;
-        memcpy(previous, out + off, 8);
-    }
-    if(!ok) dfc_secure_wipe(out, len);
-cleanup:
-    dfc_crypto_des_block_clear(&cipher);
-    dfc_secure_wipe(previous, sizeof(previous));
-    dfc_secure_wipe(block, sizeof(block));
-    return ok;
-}
-
-static void put_le32(uint8_t* out, uint32_t value) {
-    out[0] = (uint8_t)value;
-    out[1] = (uint8_t)(value >> 8);
-    out[2] = (uint8_t)(value >> 16);
-    out[3] = (uint8_t)(value >> 24);
+    static const uint8_t zero_iv[8] = {0};
+    return dfc_crypto_des_chain(
+        false, DfcCryptoDesChainForward, key, key_len, zero_iv, in, out, len);
 }
 
 // The full EV1 CMAC chained from the session IV. It becomes the next IV, and
@@ -568,6 +535,7 @@ static DfcReaderStatus step_authenticate_iso7816(
         apdu[3] = ex->auth_reference;
         apdu[4] = (uint8_t)(challenge * 2);
         uint8_t iv[DFC_AES_KEY_LENGTH] = {0};
+        DfcReaderStatus result;
         if(!cbc_encrypt(
                ex->auth_cipher,
                ex->auth_key,
@@ -576,15 +544,14 @@ static DfcReaderStatus step_authenticate_iso7816(
                clear,
                challenge * 2,
                apdu + IsoApduHeaderLength)) {
-            dfc_secure_wipe(clear, sizeof(clear));
-            dfc_secure_wipe(apdu, sizeof(apdu));
-            dfc_secure_wipe(iv, sizeof(iv));
-            return fail_auth(ex, DfcReaderProtocolError);
+            result = fail_auth(ex, DfcReaderProtocolError);
+            goto iso_external_cleanup;
         }
         memcpy(ex->auth_iv, apdu + IsoApduHeaderLength + challenge * 2 - block, block);
         ex->status = status;
         ex->phase = PhaseAuthExternal;
-        DfcReaderStatus result = emit_iso_auth_apdu(apdu, apdu_len, out, cap, out_len);
+        result = emit_iso_auth_apdu(apdu, apdu_len, out, cap, out_len);
+    iso_external_cleanup:
         dfc_secure_wipe(clear, sizeof(clear));
         dfc_secure_wipe(apdu, sizeof(apdu));
         dfc_secure_wipe(iv, sizeof(iv));
@@ -697,31 +664,26 @@ static DfcReaderStatus step_authenticate(
 
         uint8_t encrypted[32];
         uint8_t chain[16] = {0};
+        DfcReaderStatus result;
         if(cipher == DFC_CMD_AUTHENTICATE_LEGACY) {
             if(!d40_send(ex->auth_key, ex->auth_key_len, token, challenge * 2, encrypted)) {
-                dfc_secure_wipe(token, sizeof(token));
-                dfc_secure_wipe(encrypted, sizeof(encrypted));
-                dfc_secure_wipe(chain, sizeof(chain));
-                dfc_secure_wipe(iv, sizeof(iv));
-                return fail_auth(ex, DfcReaderProtocolError);
+                result = fail_auth(ex, DfcReaderProtocolError);
+                goto auth_challenge_cleanup;
             }
         } else {
             // The card chains from the last block of its own challenge.
             memcpy(chain, data + challenge - block, block);
             if(!cbc_encrypt(
                    cipher, ex->auth_key, ex->auth_key_len, chain, token, challenge * 2, encrypted)) {
-                dfc_secure_wipe(token, sizeof(token));
-                dfc_secure_wipe(encrypted, sizeof(encrypted));
-                dfc_secure_wipe(chain, sizeof(chain));
-                dfc_secure_wipe(iv, sizeof(iv));
-                return fail_auth(ex, DfcReaderProtocolError);
+                result = fail_auth(ex, DfcReaderProtocolError);
+                goto auth_challenge_cleanup;
             }
             memcpy(ex->auth_iv, encrypted + challenge * 2 - block, block);
         }
         ex->status = status;
         ex->phase = PhaseAuthConfirmation;
-        DfcReaderStatus result =
-            emit(ex, DFC_CMD_ADDITIONAL_FRAME, encrypted, challenge * 2, out, cap, out_len);
+        result = emit(ex, DFC_CMD_ADDITIONAL_FRAME, encrypted, challenge * 2, out, cap, out_len);
+    auth_challenge_cleanup:
         dfc_secure_wipe(token, sizeof(token));
         dfc_secure_wipe(encrypted, sizeof(encrypted));
         dfc_secure_wipe(chain, sizeof(chain));
@@ -843,18 +805,18 @@ static DfcReaderStatus step_authenticate_ev2(
         memcpy(token, ex->auth_random_a, DFC_EV2_RANDOM_LENGTH);
         dfc_ev2_rotate_left(ex->auth_random_b, token + DFC_EV2_RANDOM_LENGTH);
         uint8_t encrypted[sizeof(token)];
+        DfcReaderStatus result;
         memset(iv, 0, sizeof(iv));
         if(!dfc_worker_aes_cbc_encrypt(
                ex->auth_key, DFC_AES_KEY_LENGTH, iv, sizeof(token), token, encrypted)) {
-            dfc_secure_wipe(token, sizeof(token));
-            dfc_secure_wipe(encrypted, sizeof(encrypted));
-            dfc_secure_wipe(iv, sizeof(iv));
-            return fail_auth(ex, DfcReaderProtocolError);
+            result = fail_auth(ex, DfcReaderProtocolError);
+            goto ev2_challenge_cleanup;
         }
         ex->status = status;
         ex->phase = PhaseAuthConfirmation;
-        DfcReaderStatus result =
+        result =
             emit(ex, DFC_CMD_ADDITIONAL_FRAME, encrypted, sizeof(encrypted), out, cap, out_len);
+    ev2_challenge_cleanup:
         dfc_secure_wipe(token, sizeof(token));
         dfc_secure_wipe(encrypted, sizeof(encrypted));
         dfc_secure_wipe(iv, sizeof(iv));
@@ -909,17 +871,11 @@ static DfcReaderStatus step_authenticate_ev2(
 
     uint8_t encryption_key[DFC_AES_KEY_LENGTH];
     uint8_t mac_key[DFC_AES_KEY_LENGTH];
+    DfcReaderStatus result;
     if(!dfc_ev2_derive_session_keys(
            ex->auth_key, ex->auth_random_a, ex->auth_random_b, encryption_key, mac_key)) {
-        dfc_secure_wipe(clear, sizeof(clear));
-        dfc_secure_wipe(expected, sizeof(expected));
-        dfc_secure_wipe(transaction, sizeof(transaction));
-        dfc_secure_wipe(card_caps, sizeof(card_caps));
-        dfc_secure_wipe(reader_caps, sizeof(reader_caps));
-        dfc_secure_wipe(encryption_key, sizeof(encryption_key));
-        dfc_secure_wipe(mac_key, sizeof(mac_key));
-        dfc_secure_wipe(iv, sizeof(iv));
-        return fail_auth(ex, DfcReaderIntegrityError);
+        result = fail_auth(ex, DfcReaderIntegrityError);
+        goto ev2_confirmation_cleanup;
     }
     bool selected_application_is_picc = session->selected_application_is_picc;
     dfc_reader_session_init(session);
@@ -932,6 +888,8 @@ static DfcReaderStatus step_authenticate_ev2(
     memcpy(session->ev2_mac_key, mac_key, sizeof(mac_key));
     memcpy(session->ev2_card_capabilities, card_caps, sizeof(card_caps));
     memcpy(session->ev2_reader_capabilities, reader_caps, sizeof(reader_caps));
+    result = finish_auth(ex, DfcReaderOk);
+ev2_confirmation_cleanup:
     dfc_secure_wipe(encryption_key, sizeof(encryption_key));
     dfc_secure_wipe(mac_key, sizeof(mac_key));
     dfc_secure_wipe(clear, sizeof(clear));
@@ -940,15 +898,15 @@ static DfcReaderStatus step_authenticate_ev2(
     dfc_secure_wipe(card_caps, sizeof(card_caps));
     dfc_secure_wipe(reader_caps, sizeof(reader_caps));
     dfc_secure_wipe(iv, sizeof(iv));
-    return finish_auth(ex, DfcReaderOk);
+    return result;
 }
 #endif
 
 // ----------------------------------------------------------- command ---
 
 static bool is_file_read(uint8_t ins) {
-    return ins == DFC_CMD_READ_DATA || ins == DFC_CMD_READ_RECORDS ||
-           ins == DFC_CMD_READ_RECORDS_ISO || ins == DFC_CMD_GET_VALUE;
+    DfcEv2CommandMetadata metadata = dfc_ev2_command_metadata(ins);
+    return dfc_ev2_command_has(&metadata, DfcEv2CommandFileRead);
 }
 
 static bool response_is_always_full(uint8_t ins) {
@@ -961,50 +919,25 @@ static bool command_requires_response_data(const DfcCommand* command) {
     // record read has data. An empty record file reports an error instead.
     if(command->ins == DFC_CMD_READ_RECORDS || command->ins == DFC_CMD_READ_RECORDS_ISO)
         return true;
-    if(command->ins == DFC_CMD_READ_DATA && command->data_len >= FILE_HEADER_LENGTH) {
+    if(command->ins == DFC_CMD_READ_DATA && command->data_len >= DfcEv2FileHeaderLength) {
         return command->data[4] != 0 || command->data[5] != 0 || command->data[6] != 0;
     }
     return false;
 }
 
 static bool is_file_command(uint8_t ins) {
-    switch(ins) {
-    case DFC_CMD_READ_DATA:
-    case DFC_CMD_WRITE_DATA:
-    case DFC_CMD_READ_RECORDS:
-    case DFC_CMD_READ_RECORDS_ISO:
-    case DFC_CMD_WRITE_RECORD:
-    case DFC_CMD_WRITE_RECORD_ISO:
-    case DFC_CMD_UPDATE_RECORD:
-    case DFC_CMD_UPDATE_RECORD_ISO:
-    case DFC_CMD_GET_VALUE:
-    case DFC_CMD_CREDIT:
-    case DFC_CMD_DEBIT:
-    case DFC_CMD_LIMITED_CREDIT:
-        return true;
-    default:
-        return false;
-    }
+    DfcEv2CommandMetadata metadata = dfc_ev2_command_metadata(ins);
+    return dfc_ev2_command_has(&metadata, DfcEv2CommandFile);
 }
 
 // Clear head of a command whose data field a Full file encrypts, counted after
 // the instruction. SIZE_MAX when the instruction has no encrypted field.
 static size_t file_header_length(uint8_t ins) {
-    switch(ins) {
-    case DFC_CMD_WRITE_DATA:
-    case DFC_CMD_WRITE_RECORD:
-    case DFC_CMD_WRITE_RECORD_ISO:
-        return FILE_HEADER_LENGTH;
-    case DFC_CMD_UPDATE_RECORD:
-    case DFC_CMD_UPDATE_RECORD_ISO:
-        return UPDATE_RECORD_HEADER_LENGTH;
-    case DFC_CMD_CREDIT:
-    case DFC_CMD_DEBIT:
-    case DFC_CMD_LIMITED_CREDIT:
-        return VALUE_HEADER_LENGTH;
-    default:
-        return SIZE_MAX;
-    }
+    DfcEv2CommandMetadata metadata = dfc_ev2_command_metadata(ins);
+    return dfc_ev2_command_has(&metadata, DfcEv2CommandFile) &&
+                   !dfc_ev2_command_has(&metadata, DfcEv2CommandFileRead) ?
+               metadata.encrypted_header_length :
+               SIZE_MAX;
 }
 
 // Return the exact caller capacity needed to emit the first frame of the next
@@ -1013,8 +946,8 @@ static size_t next_stream_emit_capacity(const DfcReaderExchange* exchange) {
     const DfcReaderStream* stream = &exchange->stream;
     size_t remaining = stream->length - stream->offset;
     size_t body_len = remaining > DFC_READER_STREAM_CHUNK ? DFC_READER_STREAM_CHUNK : remaining;
-    size_t header_len = stream->kind == StreamUpdateRecord ? UPDATE_RECORD_HEADER_LENGTH :
-                                                             FILE_HEADER_LENGTH;
+    size_t header_len = stream->kind == StreamUpdateRecord ? DfcEv2UpdateRecordHeaderLength :
+                                                             DfcEv2FileHeaderLength;
     size_t wire_len = body_len;
     const DfcReaderSession* session = exchange->session;
 
@@ -1086,7 +1019,9 @@ static bool set_frame(
 }
 
 static void clear_command_transients(DfcReaderExchange* exchange) {
-    dfc_secure_wipe(exchange->frame, sizeof(exchange->frame));
+    // Once response assembly starts, frame aliases the published response.
+    if(exchange->phase != PhaseResponse && exchange->phase != PhaseDone)
+        dfc_secure_wipe(exchange->frame, sizeof(exchange->frame));
     exchange->frame_len = 0;
     exchange->frame_offset = 0;
     exchange->first_frame_len = 0;
@@ -1104,13 +1039,13 @@ static DfcReaderStatus fail_prepared_command(DfcReaderExchange* exchange, DfcRea
 // copy, and it bounds the length itself instead of trusting that every entry
 // point validated it.
 _Static_assert(
-    FILE_HEADER_LENGTH <= DFC_READER_MAX_CLEAR_HEADER_LENGTH,
+    DfcEv2FileHeaderLength <= DFC_READER_MAX_CLEAR_HEADER_LENGTH,
     "the clear-head bound must cover a data or record write");
 _Static_assert(
-    UPDATE_RECORD_HEADER_LENGTH == DFC_READER_MAX_CLEAR_HEADER_LENGTH,
+    DfcEv2UpdateRecordHeaderLength == DFC_READER_MAX_CLEAR_HEADER_LENGTH,
     "the clear-head bound is the UpdateRecord head");
 _Static_assert(
-    VALUE_HEADER_LENGTH <= DFC_READER_MAX_CLEAR_HEADER_LENGTH,
+    DfcEv2ValueHeaderLength <= DFC_READER_MAX_CLEAR_HEADER_LENGTH,
     "the clear-head bound must cover a value command");
 
 static DfcReaderStatus prepare_wrapped_file_write(
@@ -1162,7 +1097,11 @@ static DfcReaderStatus
     if(ins == DFC_CMD_SET_CONFIGURATION) {
         if(ex->comm_mode != DFC_COMM_ENCIPHERED) return DfcReaderInvalid;
         return prepare_wrapped_file_write(
-            ex, command, DFC_COMM_ENCIPHERED, SET_CONFIGURATION_HEADER);
+            ex, command, DFC_COMM_ENCIPHERED, DfcEv2SetConfigurationHeaderLength);
+    }
+    if(ins == DFC_CMD_COMMIT_READER_ID) {
+        if(ex->comm_mode != DFC_COMM_MAC) return DfcReaderInvalid;
+        return prepare_wrapped_file_write(ex, command, DFC_COMM_MAC, 0);
     }
     bool file_write = is_file_command(ins) && !is_file_read(ins);
     if(file_write && ex->comm_mode != DFC_COMM_PLAIN) {
@@ -1192,7 +1131,7 @@ static DfcReaderStatus
     if(ins == DFC_CMD_SET_CONFIGURATION) {
         if(ex->comm_mode != DFC_COMM_ENCIPHERED) return DfcReaderInvalid;
         return prepare_wrapped_file_write(
-            ex, command, DFC_COMM_ENCIPHERED, SET_CONFIGURATION_HEADER);
+            ex, command, DFC_COMM_ENCIPHERED, DfcEv2SetConfigurationHeaderLength);
     }
 
     if(ins == DFC_CMD_CHANGE_KEY) {
@@ -1240,39 +1179,22 @@ static DfcReaderStatus
 #if DFC_ENABLE_EV2_SECURE_MESSAGING
 // EV2: instructions whose data field is encrypted whatever the file says.
 static size_t ev2_always_encrypted_header(uint8_t ins) {
-    switch(ins) {
-    case DFC_CMD_SET_CONFIGURATION:
-        return SET_CONFIGURATION_HEADER;
-    case DFC_CMD_CREATE_TRANSACTION_MAC_FILE:
-        return CREATE_TMAC_HEADER;
-    case DFC_CMD_COMMIT_READER_ID:
-        return COMMIT_READER_ID_HEADER;
-    case DFC_CMD_CHANGE_KEY_EV2:
-        return CHANGE_KEY_EV2_HEADER;
-    case DFC_CMD_CHANGE_KEY_SETTINGS:
-        return 0;
-    case DFC_CMD_CHANGE_FILE_SETTINGS:
-        return 1;
-    default:
+    DfcEv2CommandMetadata metadata = dfc_ev2_command_metadata(ins);
+    if(dfc_ev2_command_has(&metadata, DfcEv2CommandFile) ||
+       metadata.encrypted_header_length == DfcEv2NoEncryptedHeader) {
         return SIZE_MAX;
     }
+    return metadata.encrypted_header_length;
 }
 
 static bool ev2_bypasses(uint8_t ins) {
-    switch(ins) {
-    case DFC_CMD_ADDITIONAL_FRAME:
-    case DFC_CMD_AUTHENTICATE_EV2_FIRST:
-    case DFC_CMD_AUTHENTICATE_EV2_NON_FIRST:
-    case DFC_CMD_CREATE_DELEGATED_APPLICATION:
-        return true;
-    default:
-        break;
-    }
-    return false;
+    DfcEv2CommandMetadata metadata = dfc_ev2_command_metadata(ins);
+    return dfc_ev2_command_has(&metadata, DfcEv2CommandReaderBypass);
 }
 
 static bool ev2_supports_effective_plain(uint8_t ins) {
-    return is_file_command(ins) || ins == DFC_CMD_CHANGE_FILE_SETTINGS;
+    DfcEv2CommandMetadata metadata = dfc_ev2_command_metadata(ins);
+    return dfc_ev2_command_has(&metadata, DfcEv2CommandSupportsEffectivePlain);
 }
 
 static DfcReaderStatus
@@ -1388,6 +1310,10 @@ static DfcReaderStatus reader_exchange_begin(
        command->ins == DFC_CMD_AUTHENTICATE_EV2_FIRST ||
        command->ins == DFC_CMD_AUTHENTICATE_EV2_NON_FIRST) {
         // Authentication has its own entry points, which keep the session right.
+        return DfcReaderInvalid;
+    }
+    if(session->auth_mode != DFC_READER_AUTH_NONE && command->ins == DFC_CMD_COMMIT_READER_ID &&
+       options->comm_mode != DFC_COMM_MAC) {
         return DfcReaderInvalid;
     }
 
@@ -1755,7 +1681,16 @@ static DfcReaderStatus
     DfcReaderStatus st = emit(ex, ins, ex->frame + ex->frame_offset, chunk, out, cap, out_len);
     if(st != DfcReaderPending) return st;
     ex->frame_offset += chunk;
-    ex->phase = ex->frame_offset < ex->frame_len ? PhaseCommandFrames : PhaseResponse;
+    if(ex->frame_offset < ex->frame_len) {
+        ex->phase = PhaseCommandFrames;
+    } else {
+        // No retry can need the assembled command after it has been copied to
+        // the caller. Retire it before response bytes reuse the storage.
+        dfc_secure_wipe(ex->frame, sizeof(ex->frame));
+        ex->frame_len = 0;
+        ex->frame_offset = 0;
+        ex->phase = PhaseResponse;
+    }
     return DfcReaderPending;
 }
 
@@ -1783,6 +1718,12 @@ static DfcReaderStatus step_command(
 
     if(ex->phase == PhaseCommandFrames) {
         if(status != DFC_CMD_ADDITIONAL_FRAME || data_len != 0) {
+            // A terminal or malformed reply ends command emission. Retire the
+            // unsent tail before its storage becomes the response buffer.
+            dfc_secure_wipe(ex->frame, sizeof(ex->frame));
+            ex->frame_len = 0;
+            ex->frame_offset = 0;
+            ex->phase = PhaseResponse;
             ex->status = status;
             if(!append_data(ex, data, data_len)) {
                 dfc_reader_session_clear(ex->session);
@@ -1967,10 +1908,10 @@ DfcReaderStatus dfc_reader_change_key_cryptogram(
     uint8_t crc_head[2] = {DFC_CMD_CHANGE_KEY, (uint8_t)(key_no & 0x3F)};
     uint32_t crc = dfc_crc32_extend(0xFFFFFFFFu, crc_head, sizeof(crc_head));
     crc = dfc_crc32_extend(crc, clear, cursor);
-    put_le32(clear + cursor, crc);
+    dfc_write_uint32_le(clear + cursor, crc);
     cursor += 4;
     if(different) {
-        put_le32(clear + cursor, dfc_crc32(stored, key_len));
+        dfc_write_uint32_le(clear + cursor, dfc_crc32(stored, key_len));
         cursor += 4;
     }
     size_t block = block_size(session->sm.cipher);
@@ -2000,19 +1941,6 @@ cleanup:
     return status;
 }
 
-// AES CMAC truncated to the odd-indexed octets, as every EV2-era MAC is.
-static bool wire_mac_8(const uint8_t key[16], const uint8_t* input, size_t len, uint8_t out[8]) {
-    uint8_t full[DFC_AES_CMAC_LENGTH];
-    if(!aes_cmac((uint8_t*)key, DFC_AES_KEY_LENGTH, (uint8_t*)input, len, full)) {
-        memset(out, 0, DFC_WIRE_MAC_LENGTH);
-        dfc_secure_wipe(full, sizeof(full));
-        return false;
-    }
-    dfc_truncate_aes_wire_mac(full, out);
-    dfc_secure_wipe(full, sizeof(full));
-    return true;
-}
-
 // ------------------------------------------------------------ EV2 keys ---
 
 #if DFC_ENABLE_EV2_SECURE_MESSAGING
@@ -2036,7 +1964,7 @@ DfcReaderStatus dfc_reader_change_key_ev2_command(
     }
     clear[len++] = new_version;
     if(!same) {
-        put_le32(clear + len, dfc_crc32(new_key, DFC_AES_KEY_LENGTH));
+        dfc_write_uint32_le(clear + len, dfc_crc32(new_key, DFC_AES_KEY_LENGTH));
         len += 4;
     }
     DfcCommandStatus st = dfc_command_change_key_ev2(command, key_set_no, key_no, clear, len);
@@ -2098,7 +2026,7 @@ DfcReaderStatus dfc_reader_create_delegated_application_begin(
 
     dam_input[0] = DFC_CMD_CREATE_DELEGATED_APPLICATION;
     memcpy(dam_input + 1, body, body_len);
-    if(!wire_mac_8(dam_mac_key, dam_input, 1 + body_len, body + body_len)) {
+    if(!dfc_aes_wire_mac(dam_mac_key, dam_input, 1 + body_len, body + body_len)) {
         goto cleanup;
     }
     body_len += DFC_DELEGATED_MAC_LENGTH;
@@ -2156,7 +2084,7 @@ bool dfc_reader_proximity_check_mac(
     len += published_len;
     if(transcript_len) memcpy(input + len, transcript, transcript_len);
     len += transcript_len;
-    bool ok = wire_mac_8(key, input, len, mac);
+    bool ok = dfc_aes_wire_mac(key, input, len, mac);
     dfc_secure_wipe(input, sizeof(input));
     return ok;
 }
@@ -2241,7 +2169,7 @@ DfcReaderStatus dfc_reader_virtual_card_authenticate_apdu(
     out[2] = 0x00;
     out[3] = 0x00;
     out[4] = DFC_WIRE_MAC_LENGTH;
-    if(!wire_mac_8(select_mac_key, input, sizeof(input), out + 5)) {
+    if(!dfc_aes_wire_mac(select_mac_key, input, sizeof(input), out + 5)) {
         dfc_secure_wipe(input, sizeof(input));
         dfc_secure_wipe(out, 5 + DFC_WIRE_MAC_LENGTH);
         return DfcReaderInvalid;

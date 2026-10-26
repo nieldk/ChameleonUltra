@@ -20,6 +20,7 @@ static void* free_observer_context;
 static bool fail_next_allocation;
 static DfcAllocTag fail_next_allocation_tag;
 static size_t allocations_before_failure;
+static size_t allocation_counts[DfcAllocCount];
 
 void dfc_host_fail_next_allocation(DfcAllocTag tag) {
     dfc_host_fail_allocation_after(tag, 0);
@@ -29,6 +30,10 @@ void dfc_host_fail_allocation_after(DfcAllocTag tag, size_t successful_allocatio
     fail_next_allocation = true;
     fail_next_allocation_tag = tag;
     allocations_before_failure = successful_allocations;
+}
+
+size_t dfc_host_allocation_count(DfcAllocTag tag) {
+    return tag < DfcAllocCount ? allocation_counts[tag] : 0;
 }
 
 void dfc_host_set_free_observer(DfcHostFreeObserver observer, void* context) {
@@ -104,7 +109,9 @@ void* dfc_platform_alloc(size_t size, DfcAllocTag tag) {
             return NULL;
         }
     }
-    return calloc(1, size);
+    void* allocation = calloc(1, size);
+    if(allocation && tag < DfcAllocCount) allocation_counts[tag]++;
+    return allocation;
 }
 
 void dfc_platform_free(void* ptr) {

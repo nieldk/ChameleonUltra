@@ -1,6 +1,7 @@
 #include "munit.h"
 
 #include "dfc_crypto.h"
+#include "dfc_crypto_internal.h"
 #include "dfc_ev2_crypto.h"
 
 #include <string.h>
@@ -237,6 +238,90 @@ static MunitResult test_rejects_invalid_lengths(const MunitParameter params[], v
     munit_assert_false(dfc_crypto_aes_cbc(true, key, 16, iv, buffer, buffer, 15));
     munit_assert_false(dfc_crypto_des_cbc(true, key, 12, iv, buffer, buffer, 8));
     munit_assert_false(dfc_crypto_des_cbc(true, key, 8, iv, buffer, buffer, 7));
+    return MUNIT_OK;
+}
+
+static void reference_des_chain(
+    bool primitive_encrypt,
+    DfcCryptoDesChainDirection direction,
+    const uint8_t* key,
+    size_t key_len,
+    const uint8_t iv[8],
+    const uint8_t* input,
+    uint8_t output[24]) {
+    uint8_t previous[8];
+    uint8_t block[8];
+    memcpy(previous, iv, sizeof(previous));
+    for(size_t offset = 0; offset < 24; offset += 8) {
+        if(direction == DfcCryptoDesChainForward) {
+            for(size_t i = 0; i < 8; i++)
+                block[i] = input[offset + i] ^ previous[i];
+            munit_assert_true(
+                dfc_crypto_des_ecb(primitive_encrypt, key, key_len, block, output + offset));
+            memcpy(previous, output + offset, sizeof(previous));
+        } else {
+            memcpy(block, input + offset, sizeof(block));
+            munit_assert_true(
+                dfc_crypto_des_ecb(primitive_encrypt, key, key_len, block, output + offset));
+            for(size_t i = 0; i < 8; i++)
+                output[offset + i] ^= previous[i];
+            memcpy(previous, block, sizeof(previous));
+        }
+    }
+}
+
+static MunitResult test_des_chain_matrix(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    const uint8_t key[24] = {0x13, 0x34, 0x57, 0x79, 0x9b, 0xbc, 0xdf, 0xf1,
+                             0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+                             0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23};
+    const uint8_t input[24] = {0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96,
+                               0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a,
+                               0xae, 0x2d, 0x8a, 0x57, 0x1e, 0x03, 0xac, 0x9c};
+    const uint8_t ivs[2][8] = {{0}, {0x12, 0x34, 0x56, 0x78, 0x90, 0xab, 0xcd, 0xef}};
+    uint8_t expected[24];
+    uint8_t output[24];
+
+    output[0] = 0xa5;
+    munit_assert_true(
+        dfc_crypto_des_chain(true, DfcCryptoDesChainForward, key, 8, ivs[0], input, output, 0));
+    munit_assert_uint8(output[0], ==, 0xa5);
+
+    for(size_t key_len = 8; key_len <= sizeof(key); key_len += 8) {
+        for(size_t encrypt = 0; encrypt < 2; encrypt++) {
+            for(size_t direction = DfcCryptoDesChainForward; direction <= DfcCryptoDesChainReverse;
+                direction++) {
+                for(size_t iv_index = 0; iv_index < 2; iv_index++) {
+                    reference_des_chain(
+                        encrypt, direction, key, key_len, ivs[iv_index], input, expected);
+                    memset(output, 0xa5, sizeof(output));
+                    munit_assert_true(dfc_crypto_des_chain(
+                        encrypt,
+                        direction,
+                        key,
+                        key_len,
+                        ivs[iv_index],
+                        input,
+                        output,
+                        sizeof(output)));
+                    munit_assert_memory_equal(sizeof(output), output, expected);
+
+                    memcpy(output, input, sizeof(output));
+                    munit_assert_true(dfc_crypto_des_chain(
+                        encrypt,
+                        direction,
+                        key,
+                        key_len,
+                        ivs[iv_index],
+                        output,
+                        output,
+                        sizeof(output)));
+                    munit_assert_memory_equal(sizeof(output), output, expected);
+                }
+            }
+        }
+    }
     return MUNIT_OK;
 }
 
@@ -521,6 +606,7 @@ static MunitTest tests[] = {
     {(char*)"/aes-cbc-vector", test_aes_cbc_vector, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {(char*)"/des-ecb-vector", test_des_ecb_vector, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {(char*)"/tdes-cbc-vectors", test_tdes_cbc_vectors, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {(char*)"/des-chain-matrix", test_des_chain_matrix, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {(char*)"/invalid-lengths",
      test_rejects_invalid_lengths,
      NULL,

@@ -201,7 +201,7 @@ static MunitResult test_maximal(const MunitParameter params[], void* data) {
     bool found_sdm = false;
     for(size_t i = 0; i < from_binary.num_files; i++) {
         if(from_binary.files[i].app_index == 0 && from_binary.files[i].number == 0x01) {
-            found_sdm = from_binary.files[i].sdm_enabled;
+            found_sdm = dfc_file_sdm_flag_is_set(&from_binary.files[i], DfcSdmFlagEnabled);
         }
     }
     munit_assert_true(found_sdm);

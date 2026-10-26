@@ -277,6 +277,10 @@ DfcCommandStatus
 
 // ---------------------------------------------------------------- files ---
 
+static bool valid_file_number(uint8_t file_no) {
+    return file_no <= DFC_COMMAND_MAX_FILE_NUMBER;
+}
+
 static void put_file_head(
     Builder* b,
     uint8_t file_no,
@@ -292,7 +296,9 @@ static void put_file_head(
 
 static DfcCommandStatus
     data_file(DfcCommand* command, uint8_t ins, const DfcCommandDataFile* file) {
-    if(!command || !file || file->size > DFC_COMMAND_UINT24_MAX) return DfcCommandInvalid;
+    if(!command || !file || !valid_file_number(file->file_no) ||
+       file->size > DFC_COMMAND_UINT24_MAX)
+        return DfcCommandInvalid;
     if(file->has_iso_file_id && dfc_iso_file_id_is_reserved(file->iso_file_id))
         return DfcCommandInvalid;
     Builder b = builder_start(command, ins);
@@ -319,7 +325,7 @@ DfcCommandStatus
 
 DfcCommandStatus
     dfc_command_create_record_file(DfcCommand* command, const DfcCommandRecordFile* file) {
-    if(!command || !file) return DfcCommandInvalid;
+    if(!command || !file || !valid_file_number(file->file_no)) return DfcCommandInvalid;
     if(file->record_size == 0 || file->record_size > DFC_COMMAND_UINT24_MAX) {
         return DfcCommandInvalid;
     }
@@ -345,7 +351,7 @@ DfcCommandStatus
 
 DfcCommandStatus
     dfc_command_create_value_file(DfcCommand* command, const DfcCommandValueFile* file) {
-    if(!command || !file) return DfcCommandInvalid;
+    if(!command || !file || !valid_file_number(file->file_no)) return DfcCommandInvalid;
     if(file->lower_limit > file->upper_limit || file->value < file->lower_limit ||
        file->value > file->upper_limit) {
         return DfcCommandInvalid;
@@ -362,7 +368,7 @@ DfcCommandStatus
 DfcCommandStatus dfc_command_create_transaction_mac_file(
     DfcCommand* command,
     const DfcCommandTransactionMacFile* file) {
-    if(!command || !file) return DfcCommandInvalid;
+    if(!command || !file || !valid_file_number(file->file_no)) return DfcCommandInvalid;
     Builder b = builder_start(command, DFC_CMD_CREATE_TRANSACTION_MAC_FILE);
     put_file_head(&b, file->file_no, false, 0, file->comm_settings, file->access_rights);
     put_byte(&b, file->key_type);
@@ -372,14 +378,17 @@ DfcCommandStatus dfc_command_create_transaction_mac_file(
 }
 
 DfcCommandStatus dfc_command_delete_file(DfcCommand* command, uint8_t file_no) {
+    if(!valid_file_number(file_no)) return DfcCommandInvalid;
     return with_byte(command, DFC_CMD_DELETE_FILE, file_no);
 }
 
 DfcCommandStatus dfc_command_get_file_settings(DfcCommand* command, uint8_t file_no) {
+    if(!valid_file_number(file_no)) return DfcCommandInvalid;
     return with_byte(command, DFC_CMD_GET_FILE_SETTINGS, file_no);
 }
 
 DfcCommandStatus dfc_command_get_file_counters(DfcCommand* command, uint8_t file_no) {
+    if(!valid_file_number(file_no)) return DfcCommandInvalid;
     return with_byte(command, DFC_CMD_GET_FILE_COUNTERS, file_no);
 }
 
@@ -390,7 +399,8 @@ DfcCommandStatus dfc_command_change_file_settings(
     uint16_t access_rights,
     const uint8_t* additional,
     size_t additional_len) {
-    if(!command || (!additional && additional_len)) return DfcCommandInvalid;
+    if(!command || !valid_file_number(file_no) || (!additional && additional_len))
+        return DfcCommandInvalid;
     Builder b = builder_start(command, DFC_CMD_CHANGE_FILE_SETTINGS);
     put_byte(&b, file_no);
     put_byte(&b, comm_settings);
@@ -409,7 +419,8 @@ static DfcCommandStatus file_range(
     uint32_t second,
     const uint8_t* content,
     size_t content_len) {
-    if(!command || (!content && content_len)) return DfcCommandInvalid;
+    if(!command || !valid_file_number(file_no) || (!content && content_len))
+        return DfcCommandInvalid;
     if(first > DFC_COMMAND_UINT24_MAX || second > DFC_COMMAND_UINT24_MAX) {
         return DfcCommandInvalid;
     }
@@ -479,7 +490,7 @@ DfcCommandStatus dfc_command_update_record(
     const uint8_t* data,
     size_t data_len,
     bool iso_chaining) {
-    if(!command || (!data && data_len)) return DfcCommandInvalid;
+    if(!command || !valid_file_number(file_no) || (!data && data_len)) return DfcCommandInvalid;
     if(record_no > DFC_COMMAND_UINT24_MAX || offset > DFC_COMMAND_UINT24_MAX ||
        data_len > DFC_COMMAND_UINT24_MAX) {
         return DfcCommandInvalid;
@@ -495,18 +506,20 @@ DfcCommandStatus dfc_command_update_record(
 }
 
 DfcCommandStatus dfc_command_clear_record_file(DfcCommand* command, uint8_t file_no) {
+    if(!valid_file_number(file_no)) return DfcCommandInvalid;
     return with_byte(command, DFC_CMD_CLEAR_RECORD_FILE, file_no);
 }
 
 // --------------------------------------------------- values, transactions ---
 
 DfcCommandStatus dfc_command_get_value(DfcCommand* command, uint8_t file_no) {
+    if(!valid_file_number(file_no)) return DfcCommandInvalid;
     return with_byte(command, DFC_CMD_GET_VALUE, file_no);
 }
 
 static DfcCommandStatus
     change_value(DfcCommand* command, uint8_t ins, uint8_t file_no, int32_t amount) {
-    if(!command) return DfcCommandInvalid;
+    if(!command || !valid_file_number(file_no)) return DfcCommandInvalid;
     Builder b = builder_start(command, ins);
     put_byte(&b, file_no);
     put_i32(&b, amount);

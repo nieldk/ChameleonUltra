@@ -103,6 +103,15 @@
 #define DFC_ENABLE_STATIC_SIGNATURE DFC_PROFILE_INCLUDES_EV2
 #endif
 
+// Cipher-family reachability is derived from protocol features. Build systems
+// use the same definitions to omit unused primitive and CMAC translation units.
+#define DFC_ENABLE_AES_CRYPTO                                                             \
+    (DFC_ENABLE_AUTH_AES || DFC_ENABLE_ISO7816_AUTH || DFC_ENABLE_EV2_SECURE_MESSAGING || \
+     DFC_ENABLE_SDM || DFC_ENABLE_PROXIMITY_CHECK || DFC_ENABLE_VIRTUAL_CARD ||           \
+     DFC_ENABLE_TRANSACTION_MAC || DFC_ENABLE_KEY_SETS || DFC_ENABLE_DELEGATED_APPLICATIONS)
+#define DFC_ENABLE_DES_CRYPTO \
+    (DFC_ENABLE_AUTH_D40 || DFC_ENABLE_AUTH_ISO || DFC_ENABLE_ISO7816_AUTH)
+
 // Select one role. A role chooses which halves of the library a build carries,
 // independently of the profile, which chooses the card generation.
 //

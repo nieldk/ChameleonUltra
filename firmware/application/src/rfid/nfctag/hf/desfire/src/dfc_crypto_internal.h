@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dfc_build_config.h"
 #include "dfc_crypto.h"
 
 #if defined(DFC_CRYPTO_BACKEND_TINY)
@@ -50,3 +51,22 @@ bool dfc_crypto_des_block_crypt(
     const uint8_t input[8],
     uint8_t output[8]);
 void dfc_crypto_des_block_clear(DfcCryptoDesBlock* block);
+
+typedef enum {
+    DfcCryptoDesChainForward,
+    DfcCryptoDesChainReverse,
+} DfcCryptoDesChainDirection;
+
+// Applies one prepared DES/TDEA primitive across a CBC-style chain. Forward
+// computes C[i] = primitive(P[i] xor C[i-1]); reverse computes
+// P[i] = primitive(C[i]) xor C[i-1]. Input and output may be the same buffer.
+// On failure, the complete output is wiped.
+bool dfc_crypto_des_chain(
+    bool primitive_encrypt,
+    DfcCryptoDesChainDirection direction,
+    const uint8_t* key,
+    size_t key_len,
+    const uint8_t iv[8],
+    const uint8_t* input,
+    uint8_t* output,
+    size_t length);

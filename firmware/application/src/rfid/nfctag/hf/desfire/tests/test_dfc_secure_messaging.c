@@ -1176,6 +1176,9 @@ static MunitResult test_initialization_rejects_invalid_cipher_key_pairs(
         {DFC_CMD_AUTHENTICATE_ISO, 7},
         {DFC_CMD_AUTHENTICATE_AES, 8},
         {DFC_CMD_AUTHENTICATE_AES, 24},
+        // A caller-controlled size must be rejected before it can narrow into
+        // the compact session record or copy beyond the fixed key buffer.
+        {DFC_CMD_AUTHENTICATE_AES, (size_t)UINT8_MAX + 1u},
     };
     uint8_t key[DFC_MAX_KEY_LEN] = {0};
     for(size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {

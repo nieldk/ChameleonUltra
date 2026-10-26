@@ -21,30 +21,9 @@ bool dfc_emulator_d40_receive_plain(
     const uint8_t* encrypted,
     size_t encrypted_len,
     uint8_t* plain) {
-    uint8_t previous[8] = {0};
-    uint8_t block[8] = {0};
-    DfcCryptoDesBlock cipher = {0};
-    bool ok = false;
-    if(!key || !encrypted || !plain || encrypted_len % 8 != 0) goto cleanup;
-    ok = dfc_crypto_des_block_init(&cipher, true, key, key_len);
-    if(!ok) {
-        dfc_secure_wipe(plain, encrypted_len);
-        goto cleanup;
-    }
-    for(size_t offset = 0; offset < encrypted_len; offset += 8) {
-        ok = dfc_crypto_des_block_crypt(&cipher, encrypted + offset, block);
-        if(!ok) break;
-        for(size_t i = 0; i < 8; i++) {
-            plain[offset + i] = block[i] ^ previous[i];
-        }
-        memcpy(previous, encrypted + offset, sizeof(previous));
-    }
-    if(!ok) dfc_secure_wipe(plain, encrypted_len);
-cleanup:
-    dfc_crypto_des_block_clear(&cipher);
-    dfc_secure_wipe(previous, sizeof(previous));
-    dfc_secure_wipe(block, sizeof(block));
-    return ok;
+    static const uint8_t zero_iv[8] = {0};
+    return dfc_crypto_des_chain(
+        true, DfcCryptoDesChainReverse, key, key_len, zero_iv, encrypted, plain, encrypted_len);
 }
 
 uint8_t dfc_emulator_des_key_version(const uint8_t* key) {

@@ -82,6 +82,14 @@ TESTS := test_dfc_crypto test_cmac test_dfc_session test_dfc_secure_messaging te
 
 TESTS += test_dfc_ev2_capabilities test_dfc_static_signature
 
+# dfc-core 2.0.0: AN10922 diversification, typed response decoders, SDM/SUN
+# verification, and Transaction MAC receipt verification. The emulator itself
+# already calls into dfc_sdm.c/dfc_transaction_mac.c (session-key derivation,
+# the transaction MAC accumulator) via their _i.h headers, so these aren't
+# optional add-ons -- the engine doesn't link without them.
+TESTS += test_dfc_an10922 test_dfc_sdm_verify test_dfc_transaction_mac_lifecycle \
+	test_dfc_transaction_mac_verify test_dfc_response test_dfc_ev2_command_metadata
+
 # test_dfc_reader drives the reader-role engine through a link-time stub
 # rather than a real transport; dfc-core v2 split that stub out of the test
 # file into its own translation unit.
@@ -103,6 +111,16 @@ ROLE_FORBIDDEN_target := dfc_text_ dfc_reader_ dfc_command_
 ROLE_FORBIDDEN_host := dfc_emulator_ dfc_virtual_picc_
 ROLE_FORBIDDEN_simulator :=
 
+# test_des_chain_failures supplies its own fake dfc_crypto_des_block_* so it
+# links only the chain file under test, not the real crypto backend.
+FAULT_TEST := test_des_chain_failures
+
+# test_dfc_sdm_failures supplies its own fake AES/DES primitives
+# (auth_fault_test_support.c) to inject crypto-backend failures, so it must
+# not also link the real dfc_crypto.c -- that would duplicate every symbol.
+FAULT_CORE_SRC := $(filter-out $(CORE)/dfc_crypto.c,$(CORE_SRC))
+SDM_FAULT_TEST := test_dfc_sdm_failures
+
 .PHONY: test test-backends test-ev2-profile test-auth-profile profile-builds role-builds clean
 
 # One pattern rule serves every suite: each links the whole core, so a suite
@@ -113,8 +131,15 @@ $(TESTS): %: %.c dfc_virtual_picc_test_helpers.c $(COMMON)
 $(TOOLS): %: %.c $(COMMON)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-test: $(TESTS) $(TOOLS) profile-builds role-builds test-ev2-profile test-auth-profile
-	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
+$(FAULT_TEST): test_des_chain_failures.c $(CORE)/dfc_crypto_des_chain.c munit/munit.c
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+$(SDM_FAULT_TEST): test_dfc_sdm_failures.c auth_fault_test_support.c \
+		dfc_virtual_picc_test_helpers.c $(FAULT_CORE_SRC) $(HOST)/dfc_bytebuf_host.c munit/munit.c
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test: $(TESTS) $(TOOLS) $(FAULT_TEST) $(SDM_FAULT_TEST) profile-builds role-builds test-ev2-profile test-auth-profile
+	@for t in $(TESTS) $(FAULT_TEST) $(SDM_FAULT_TEST); do echo "=== $$t ==="; ./$$t || exit 1; done
 
 test_dfc_static_signature_ev2: test_dfc_static_signature.c dfc_virtual_picc_test_helpers.c $(COMMON)
 	$(CC) $(CFLAGS) -DDFC_BUILD_PROFILE=DFC_PROFILE_FULL_EV2 -o $@ $^ $(LDFLAGS)
@@ -164,4 +189,5 @@ role-builds:
 	done; done
 
 clean:
-	rm -rf $(TESTS) $(TOOLS) test_dfc_static_signature_ev2 test_dfc_der_no_iso *.dSYM $(ROLE_DIR)
+	rm -rf $(TESTS) $(TOOLS) $(FAULT_TEST) $(SDM_FAULT_TEST) test_dfc_static_signature_ev2 \
+		test_dfc_der_no_iso *.dSYM $(ROLE_DIR)

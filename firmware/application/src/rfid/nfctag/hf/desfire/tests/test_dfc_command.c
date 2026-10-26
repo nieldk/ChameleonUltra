@@ -4,6 +4,8 @@
 
 #include "dfc_command.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static size_t hex(const char* text, uint8_t* out) {
@@ -274,6 +276,185 @@ static MunitResult test_framing_and_bounds(const MunitParameter params[], void* 
     return MUNIT_OK;
 }
 
+static FILE* open_constructor_vectors(void) {
+    FILE* vectors = fopen("command-constructor-vectors.txt", "r");
+    return vectors ? vectors : fopen("tests/command-constructor-vectors.txt", "r");
+}
+
+static FILE* open_constructor_boundaries(void) {
+    FILE* vectors = fopen("command-constructor-boundaries.txt", "r");
+    return vectors ? vectors : fopen("tests/command-constructor-boundaries.txt", "r");
+}
+
+static DfcCommandStatus
+    construct_vector(DfcCommand* command, const char* name, const char* arguments) {
+    unsigned first = 0, second = 0, third = 0;
+    if(strcmp(name, "get-version") == 0) return dfc_command_get_version(command);
+    if(strcmp(name, "get-free-memory") == 0) return dfc_command_get_free_memory(command);
+    if(strcmp(name, "format-picc") == 0) return dfc_command_format_picc(command);
+    if(strcmp(name, "get-key-settings") == 0) return dfc_command_get_key_settings(command);
+    if(strcmp(name, "get-application-ids") == 0) return dfc_command_get_application_ids(command);
+    if(strcmp(name, "get-df-names") == 0) return dfc_command_get_df_names(command);
+    if(strcmp(name, "get-file-ids") == 0) return dfc_command_get_file_ids(command);
+    if(strcmp(name, "get-iso-file-ids") == 0) return dfc_command_get_iso_file_ids(command);
+    if(strcmp(name, "get-card-uid") == 0) return dfc_command_get_card_uid(command);
+    if(strcmp(name, "read-signature") == 0)
+        return dfc_command_read_signature(command, (uint8_t)strtoul(arguments, NULL, 10));
+    if(strcmp(name, "get-key-version") == 0)
+        return dfc_command_get_key_version(command, (uint8_t)strtoul(arguments, NULL, 10));
+    if(strcmp(name, "select-application") == 0) {
+        uint8_t aid[DFC_COMMAND_AID_LENGTH];
+        if(hex(arguments, aid) != sizeof(aid)) return DfcCommandInvalid;
+        return dfc_command_select_application(command, aid, NULL);
+    }
+    if(strcmp(name, "get-file-settings") == 0) {
+        return dfc_command_get_file_settings(command, (uint8_t)strtoul(arguments, NULL, 10));
+    }
+    if(strcmp(name, "get-file-counters") == 0) {
+        return dfc_command_get_file_counters(command, (uint8_t)strtoul(arguments, NULL, 10));
+    }
+    if(strcmp(name, "delete-file") == 0)
+        return dfc_command_delete_file(command, (uint8_t)strtoul(arguments, NULL, 10));
+    if(strcmp(name, "clear-record-file") == 0) {
+        return dfc_command_clear_record_file(command, (uint8_t)strtoul(arguments, NULL, 10));
+    }
+    if(strcmp(name, "get-value") == 0)
+        return dfc_command_get_value(command, (uint8_t)strtoul(arguments, NULL, 10));
+    if(strcmp(name, "read-data") == 0) {
+        if(sscanf(arguments, "%u,%u,%u", &first, &second, &third) != 3) return DfcCommandInvalid;
+        return dfc_command_read_data(command, (uint8_t)first, second, third);
+    }
+    if(strcmp(name, "write-data") == 0 || strcmp(name, "write-record") == 0) {
+        char payload_text[DFC_COMMAND_MAX_DATA * 2 + 1];
+        if(sscanf(arguments, "%u,%u,%510s", &first, &second, payload_text) != 3)
+            return DfcCommandInvalid;
+        uint8_t payload[DFC_COMMAND_MAX_DATA];
+        size_t payload_len = hex(payload_text, payload);
+        if(strcmp(name, "write-data") == 0) {
+            return dfc_command_write_data(command, (uint8_t)first, second, payload, payload_len);
+        }
+        return dfc_command_write_record(
+            command, (uint8_t)first, second, payload, payload_len, false);
+    }
+    if(strcmp(name, "read-records") == 0) {
+        if(sscanf(arguments, "%u,%u,%u", &first, &second, &third) != 3) return DfcCommandInvalid;
+        return dfc_command_read_records(command, (uint8_t)first, second, third, false);
+    }
+    if(strcmp(name, "update-record") == 0) {
+        unsigned fourth = 0;
+        char payload_text[DFC_COMMAND_MAX_DATA * 2 + 1];
+        if(sscanf(arguments, "%u,%u,%u,%510s", &first, &second, &third, payload_text) != 4)
+            return DfcCommandInvalid;
+        uint8_t payload[DFC_COMMAND_MAX_DATA];
+        fourth = (unsigned)hex(payload_text, payload);
+        return dfc_command_update_record(
+            command, (uint8_t)first, second, third, payload, fourth, false);
+    }
+    if(strcmp(name, "credit") == 0 || strcmp(name, "debit") == 0 ||
+       strcmp(name, "limited-credit") == 0) {
+        int amount = 0;
+        if(sscanf(arguments, "%u,%d", &first, &amount) != 2) return DfcCommandInvalid;
+        if(strcmp(name, "credit") == 0) return dfc_command_credit(command, (uint8_t)first, amount);
+        if(strcmp(name, "debit") == 0) return dfc_command_debit(command, (uint8_t)first, amount);
+        return dfc_command_limited_credit(command, (uint8_t)first, amount);
+    }
+    if(strcmp(name, "commit-transaction") == 0) {
+        if(arguments[0]) {
+            return dfc_command_commit_transaction_with_option(
+                command, (uint8_t)strtoul(arguments, NULL, 10));
+        }
+        return dfc_command_commit_transaction(command);
+    }
+    if(strcmp(name, "abort-transaction") == 0) return dfc_command_abort_transaction(command);
+    return DfcCommandInvalid;
+}
+
+static MunitResult test_shared_constructor_vectors(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    FILE* vectors = open_constructor_vectors();
+    munit_assert_not_null(vectors);
+    char line[160];
+    while(fgets(line, sizeof(line), vectors)) {
+        if(line[0] == '#' || line[0] == '\n') continue;
+        char* name = line;
+        char* arguments = strchr(name, '|');
+        munit_assert_not_null(arguments);
+        *arguments++ = '\0';
+        char* expected_text = strchr(arguments, '|');
+        munit_assert_not_null(expected_text);
+        *expected_text++ = '\0';
+        expected_text[strcspn(expected_text, "\r\n")] = '\0';
+        munit_assert_not_null(name);
+
+        DfcCommand command;
+        munit_assert_int(construct_vector(&command, name, arguments), ==, DfcCommandOk);
+        uint8_t actual[DFC_COMMAND_MAX_DATA + 1];
+        size_t actual_len = 0;
+        munit_assert_int(
+            dfc_command_to_frame(&command, actual, sizeof(actual), &actual_len), ==, DfcCommandOk);
+        uint8_t expected[DFC_COMMAND_MAX_DATA + 1];
+        size_t expected_len = hex(expected_text, expected);
+        munit_assert_size(actual_len, ==, expected_len);
+        munit_assert_memory_equal(expected_len, actual, expected);
+    }
+    fclose(vectors);
+    return MUNIT_OK;
+}
+
+static MunitResult test_file_number_bounds(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    DfcCommand command;
+    munit_assert_int(
+        dfc_command_get_file_settings(&command, DFC_COMMAND_MAX_FILE_NUMBER), ==, DfcCommandOk);
+    munit_assert_int(
+        dfc_command_get_file_settings(&command, DFC_COMMAND_MAX_FILE_NUMBER + 1),
+        ==,
+        DfcCommandInvalid);
+    munit_assert_int(
+        dfc_command_read_data(&command, DFC_COMMAND_MAX_FILE_NUMBER + 1, 0, 1),
+        ==,
+        DfcCommandInvalid);
+    munit_assert_int(
+        dfc_command_credit(&command, DFC_COMMAND_MAX_FILE_NUMBER + 1, 1), ==, DfcCommandInvalid);
+    DfcCommandDataFile file = {0};
+    file.file_no = DFC_COMMAND_MAX_FILE_NUMBER + 1;
+    file.size = 1;
+    munit_assert_int(
+        dfc_command_create_standard_data_file(&command, &file), ==, DfcCommandInvalid);
+    return MUNIT_OK;
+}
+
+static MunitResult test_payload_boundaries(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    FILE* vectors = open_constructor_boundaries();
+    munit_assert_not_null(vectors);
+    uint8_t payload[DFC_COMMAND_MAX_DATA] = {0};
+    char line[80];
+    while(fgets(line, sizeof(line), vectors)) {
+        if(line[0] == '#' || line[0] == '\n') continue;
+        char name[24], expected[8];
+        unsigned length = 0;
+        munit_assert_int(sscanf(line, "%23[^|]|%u|%7s", name, &length, expected), ==, 3);
+        DfcCommand command;
+        DfcCommandStatus status = DfcCommandInvalid;
+        if(strcmp(name, "write-data") == 0) {
+            status = dfc_command_write_data(&command, 1, 0, payload, length);
+        } else if(strcmp(name, "write-record") == 0) {
+            status = dfc_command_write_record(&command, 1, 0, payload, length, false);
+        } else if(strcmp(name, "update-record") == 0) {
+            status = dfc_command_update_record(&command, 1, 0, 0, payload, length, false);
+        } else {
+            munit_errorf("unknown boundary constructor %s", name);
+        }
+        munit_assert_int(status == DfcCommandOk, ==, strcmp(expected, "accept") == 0);
+    }
+    fclose(vectors);
+    return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/simple", test_simple_commands, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/applications", test_application_commands, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
@@ -281,6 +462,14 @@ static MunitTest tests[] = {
     {"/values-and-keys", test_value_and_key_commands, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/authentication", test_authentication_commands, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/framing-and-bounds", test_framing_and_bounds, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/shared-constructor-vectors",
+     test_shared_constructor_vectors,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/file-number-bounds", test_file_number_bounds, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/payload-boundaries", test_payload_boundaries, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
 };
 

@@ -1,0 +1,13 @@
+# cipher|key length|challenge length|accepted
+legacy|8|8|yes
+legacy|16|8|yes
+legacy|7|8|no
+legacy|8|16|no
+iso|8|8|yes
+iso|16|8|yes
+iso|24|16|yes
+iso|24|8|no
+iso|16|16|no
+aes|16|16|yes
+aes|15|16|no
+aes|16|8|no

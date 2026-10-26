@@ -1,5 +1,9 @@
 #include "dfc_common.h"
 
+#if DFC_ENABLE_AES_CRYPTO
+#include "aes_cmac.h"
+#endif
+
 bool dfc_uid_length_is_valid(size_t length) {
     return length == DFC_DESFIRE_UID_SHORT_LEN || length == DFC_DESFIRE_UID_LEN ||
            length == DFC_DESFIRE_UID_LONG_LEN;
@@ -34,13 +38,13 @@ bool dfc_access_rights_are_valid(uint16_t rights, size_t key_count) {
 bool dfc_transaction_mac_access_rights_are_valid(uint16_t rights, size_t key_count) {
     // This file type reserves the write nibble and requires its disabled value.
     return dfc_access_rights_are_valid(rights, key_count) &&
-           (((rights >> 8) & 0x0F) == DFC_ACCESS_DENY);
+           dfc_access_nibble(rights, 8) == DFC_ACCESS_DENY;
 }
 
 bool dfc_sdm_access_rights_are_valid(uint16_t rights, size_t key_count) {
     uint8_t meta_read = (uint8_t)(rights >> 12);
-    uint8_t file_read = (uint8_t)(rights >> 8) & 0x0F;
-    uint8_t reserved = (uint8_t)(rights >> 4) & 0x0F;
+    uint8_t file_read = dfc_access_nibble(rights, 8);
+    uint8_t reserved = dfc_access_nibble(rights, 4);
     uint8_t counter_read = (uint8_t)rights & 0x0F;
     // The wire sends the low byte first, but the model keeps semantic nibble order.
     return access_nibble_is_valid(meta_read, key_count) &&
@@ -80,6 +84,26 @@ void dfc_truncate_aes_wire_mac(
         wire[i] = full[i * 2 + 1];
 }
 
+bool dfc_aes_wire_mac(
+    const uint8_t key[DFC_AES_KEY_LENGTH],
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t output[DFC_WIRE_MAC_LENGTH]) {
+    if(!output) return false;
+    memset(output, 0, DFC_WIRE_MAC_LENGTH);
+    if(!key || (input_len != 0 && !input)) return false;
+
+#if DFC_ENABLE_AES_CRYPTO
+    uint8_t full[DFC_AES_CMAC_LENGTH] = {0};
+    bool success = aes_cmac((uint8_t*)key, DFC_AES_KEY_LENGTH, (uint8_t*)input, input_len, full);
+    if(success) dfc_truncate_aes_wire_mac(full, output);
+    dfc_secure_wipe(full, sizeof(full));
+    return success;
+#else
+    return false;
+#endif
+}
+
 void dfc_secure_wipe(void* buffer, size_t length) {
     volatile uint8_t* bytes = buffer;
     while(length--)
@@ -113,8 +137,6 @@ uint32_t dfc_crc32_extend(uint32_t crc, const uint8_t* data, size_t length) {
 uint32_t dfc_crc32(const uint8_t* data, size_t length) {
     return dfc_crc32_extend(0xFFFFFFFFu, data, length);
 }
-
-#include <stdio.h>
 
 const uint8_t DFC_ISO_AID[7] = {0xD2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x00};
 
@@ -255,22 +277,6 @@ bool dfc_wrap_native_response_as_iso7816(
     return true;
 }
 
-void dfc_log_buffer(char* TAG, char* prefix, uint8_t* buffer, size_t buffer_len) {
-    (void)TAG;
-    char display[DFC_WORKER_MAX_BUFFER_SIZE * 2 + 1];
-
-    size_t limit = DFC_MIN((size_t)DFC_WORKER_MAX_BUFFER_SIZE, buffer_len);
-    memset(display, 0, sizeof(display));
-    for(uint8_t i = 0; i < limit; i++) {
-        snprintf(display + (i * 2), sizeof(display), "%02x", buffer[i]);
-    }
-    if(prefix) {
-        DFC_LOG_T(TAG, "%s %d: %s", prefix, limit, display);
-    } else {
-        DFC_LOG_T(TAG, "Buffer %d: %s", limit, display);
-    }
-}
-
 void dfc_rotate_left(uint8_t* buffer, size_t len) {
     if(len == 0) return;
     uint8_t first = buffer[0];
@@ -278,6 +284,7 @@ void dfc_rotate_left(uint8_t* buffer, size_t len) {
     buffer[len - 1] = first;
 }
 
+#if DFC_ENABLE_DES_CRYPTO
 bool dfc_worker_des_cbc_decrypt(
     const uint8_t* key,
     size_t key_len,
@@ -299,7 +306,9 @@ bool dfc_worker_des_cbc_encrypt(
     bool ok = dfc_crypto_des_cbc(true, key, key_len, iv, clear, encrypted, length);
     return ok;
 }
+#endif
 
+#if DFC_ENABLE_AES_CRYPTO
 bool dfc_worker_aes_cbc_decrypt(
     const uint8_t* key,
     size_t key_len,
@@ -321,6 +330,7 @@ bool dfc_worker_aes_cbc_encrypt(
     bool ok = dfc_crypto_aes_cbc(true, key, key_len, iv, clear, encrypted, length);
     return ok;
 }
+#endif
 
 // True when a 16-octet key is the same 8-octet key twice, which makes it single
 // DES rather than 2K3DES.

@@ -53,13 +53,26 @@ static DfcFile* add_data_file(
     f->type = 0x00;
     f->comm_settings = 0x00;
     f->access_rights = 0xEEEE;
-    f->declared_size = size;
+    munit_assert_true(dfc_file_set_declared_size(f, size));
     f->contents_complete = complete;
     if(data_len) {
         munit_assert_true(dfc_file_resize(c, f, data_len));
         memcpy(dfc_file_data(c, f), data, data_len);
     }
     return f;
+}
+
+static size_t find_unique_u16(uint8_t* encoded, size_t length, uint16_t value) {
+    const uint8_t high = (uint8_t)(value >> 8);
+    const uint8_t low = (uint8_t)value;
+    size_t found = SIZE_MAX;
+    for(size_t i = 0; i + 1 < length; i++) {
+        if(encoded[i] != high || encoded[i + 1] != low) continue;
+        munit_assert_size(found, ==, SIZE_MAX);
+        found = i;
+    }
+    munit_assert_size(found, !=, SIZE_MAX);
+    return found;
 }
 
 static void downgrade_v6_auth_fields(uint8_t* encoded, size_t length, uint8_t version) {
@@ -166,20 +179,20 @@ static MunitResult test_round_trip(const MunitParameter params[], void* data) {
     value->type = 0x02;
     value->comm_settings = 0x03;
     value->access_rights = 0x00EE;
-    value->value_lower_limit = -100;
-    value->value_upper_limit = 1000;
-    value->value = 42;
-    value->limited_credit = 0x03;
-    value->limited_credit_value = 17;
+    value->state.value.lower_limit = -100;
+    value->state.value.upper_limit = 1000;
+    value->state.value.current = 42;
+    value->state.value.limited_credit = 0x03;
+    value->state.value.limited_credit_value = 17;
 
     DfcFile* rec = dfc_credential_create_file(&src, 0, 0x04);
     munit_assert_not_null(rec);
     rec->type = 0x03;
     rec->comm_settings = 0x00;
     rec->access_rights = 0xE000;
-    rec->record_size = 4;
-    rec->max_records = 5;
-    rec->record_count = 2;
+    rec->state.record.size = 4;
+    rec->state.record.max_records = 5;
+    rec->state.record.count = 2;
     rec->contents_complete = true;
     // The emulator reserves the whole record-file capacity in its pool. Only
     // current records belong in DFCB, not the unused backing bytes.
@@ -220,24 +233,26 @@ static MunitResult test_round_trip(const MunitParameter params[], void* data) {
 
     const DfcFile* d0 = dfc_credential_find_file_in_app(&dst, 0, 0x01);
     munit_assert_not_null(d0);
-    munit_assert_uint32(d0->declared_size, ==, 32);
+    uint32_t declared_size;
+    munit_assert_true(dfc_file_get_declared_size(d0, &declared_size));
+    munit_assert_uint32(declared_size, ==, 32);
     munit_assert_size(d0->data_len, ==, 4);
     munit_assert_false(d0->contents_complete);
     munit_assert_memory_equal(4, dfc_file_data_const(&dst, d0), "\x12\x34\x56\x78");
 
     const DfcFile* d1 = dfc_credential_find_file_in_app(&dst, 0, 0x03);
     munit_assert_not_null(d1);
-    munit_assert_int32(d1->value_lower_limit, ==, -100);
-    munit_assert_int32(d1->value_upper_limit, ==, 1000);
-    munit_assert_int32(d1->value, ==, 42);
-    munit_assert_uint8(d1->limited_credit, ==, 0x03);
-    munit_assert_int32(d1->limited_credit_value, ==, 17);
+    munit_assert_int32(d1->state.value.lower_limit, ==, -100);
+    munit_assert_int32(d1->state.value.upper_limit, ==, 1000);
+    munit_assert_int32(d1->state.value.current, ==, 42);
+    munit_assert_uint8(d1->state.value.limited_credit, ==, 0x03);
+    munit_assert_int32(d1->state.value.limited_credit_value, ==, 17);
 
     const DfcFile* d2 = dfc_credential_find_file_in_app(&dst, 0, 0x04);
     munit_assert_not_null(d2);
-    munit_assert_uint32(d2->record_size, ==, 4);
-    munit_assert_uint32(d2->max_records, ==, 5);
-    munit_assert_uint32(d2->record_count, ==, 2);
+    munit_assert_uint32(d2->state.record.size, ==, 4);
+    munit_assert_uint32(d2->state.record.max_records, ==, 5);
+    munit_assert_uint32(d2->state.record.count, ==, 2);
     munit_assert_true(d2->contents_complete);
     munit_assert_size(d2->data_len, ==, 8);
 
@@ -349,7 +364,7 @@ static MunitResult test_picc_level_file(const MunitParameter params[], void* dat
     f->number = 0x00;
     f->type = 0x00;
     f->access_rights = 0xEEEE;
-    f->declared_size = 16;
+    munit_assert_true(dfc_file_set_declared_size(f, 16));
     f->data_offset = DFC_FILE_POOL_NONE;
     munit_assert_true(dfc_file_resize(&src, f, 4));
     memcpy(dfc_file_data(&src, f), "\xDE\xAD\xBE\xEF", 4);
@@ -449,6 +464,50 @@ static MunitResult test_rejections(const MunitParameter params[], void* data) {
     return MUNIT_OK;
 }
 
+static MunitResult test_reserved_iso_file_id_decode(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    DfcCredential src = {0};
+    build_basic(&src);
+    src.apps[0].iso_file_id = 0xA1A2;
+    DfcFile* file = add_data_file(&src, 0x01, 32, NULL, 0, false);
+    file->has_iso_file_id = true;
+    file->iso_file_id = 0xB1B2;
+
+    uint8_t encoded[DFC_DER_MAX_SIZE];
+    size_t encoded_len = 0;
+    munit_assert_int(dfc_der_encode(&src, encoded, sizeof(encoded), &encoded_len), ==, DfcDerOk);
+    const size_t app_fid_offset = find_unique_u16(encoded, encoded_len, src.apps[0].iso_file_id);
+    const size_t file_fid_offset = find_unique_u16(encoded, encoded_len, file->iso_file_id);
+
+    static const uint16_t reserved[] = {0x0000, 0x3F00, 0x3FFF, 0xFFFF};
+    static const uint16_t adjacent_valid[] = {0x0001, 0x3EFF, 0x3F01, 0x3FFE, 0x4000, 0xFFFE};
+    DfcCredential decoded;
+    for(size_t field = 0; field < 2; field++) {
+        const size_t offset = field == 0 ? app_fid_offset : file_fid_offset;
+        for(size_t i = 0; i < sizeof(reserved) / sizeof(reserved[0]); i++) {
+            uint8_t candidate[DFC_DER_MAX_SIZE];
+            memcpy(candidate, encoded, encoded_len);
+            candidate[offset] = (uint8_t)(reserved[i] >> 8);
+            candidate[offset + 1] = (uint8_t)reserved[i];
+            memset(&decoded, 0xA5, sizeof(decoded));
+            munit_assert_int(
+                dfc_der_decode(&decoded, candidate, encoded_len), ==, DfcDerMalformed);
+        }
+        for(size_t i = 0; i < sizeof(adjacent_valid) / sizeof(adjacent_valid[0]); i++) {
+            uint8_t candidate[DFC_DER_MAX_SIZE];
+            memcpy(candidate, encoded, encoded_len);
+            candidate[offset] = (uint8_t)(adjacent_valid[i] >> 8);
+            candidate[offset + 1] = (uint8_t)adjacent_valid[i];
+            munit_assert_int(dfc_der_decode(&decoded, candidate, encoded_len), ==, DfcDerOk);
+            const uint16_t decoded_fid = field == 0 ? decoded.apps[0].iso_file_id :
+                                                      decoded.files[0].iso_file_id;
+            munit_assert_uint16(decoded_fid, ==, adjacent_valid[i]);
+        }
+    }
+    return MUNIT_OK;
+}
+
 static MunitResult test_model_validation(const MunitParameter params[], void* data) {
     (void)params;
     (void)data;
@@ -465,13 +524,13 @@ static MunitResult test_model_validation(const MunitParameter params[], void* da
     munit_assert_not_null(f);
     f->type = 0x05;
     f->access_rights = 0xEFEF;
-    f->transaction_counter = 9;
-    memcpy(f->transaction_mac, "\x01\x23\x45\x67\x89\xAB\xCD\xEF", 8);
-    f->transaction_mac_key_type = DFC_TRANSACTION_MAC_KEY_TYPE_AES;
-    f->transaction_mac_key_version = 3;
-    for(size_t i = 0; i < sizeof(f->transaction_mac_key); i++) {
-        f->transaction_mac_key[i] = (uint8_t)(0xB0 + i);
-        f->previous_reader_id[i] = (uint8_t)(0xC0 + i);
+    f->state.transaction_mac.counter = 9;
+    memcpy(f->state.transaction_mac.mac, "\x01\x23\x45\x67\x89\xAB\xCD\xEF", 8);
+    f->state.transaction_mac.key_type = DFC_TRANSACTION_MAC_KEY_TYPE_AES;
+    f->state.transaction_mac.key_version = 3;
+    for(size_t i = 0; i < sizeof(f->state.transaction_mac.key); i++) {
+        f->state.transaction_mac.key[i] = (uint8_t)(0xB0 + i);
+        f->state.transaction_mac.previous_reader_id[i] = (uint8_t)(0xC0 + i);
     }
     munit_assert_int(dfc_der_encode(&tmac, buf, sizeof(buf), &len), ==, DfcDerOk);
 
@@ -480,14 +539,18 @@ static MunitResult test_model_validation(const MunitParameter params[], void* da
     munit_assert_size(tmac_back.num_files, ==, 1);
     const DfcFile* g = &tmac_back.files[0];
     munit_assert_uint8(g->type, ==, 0x05);
-    munit_assert_uint32(g->transaction_counter, ==, 9);
-    munit_assert_memory_equal(8, g->transaction_mac, f->transaction_mac);
-    munit_assert_uint8(g->transaction_mac_key_type, ==, DFC_TRANSACTION_MAC_KEY_TYPE_AES);
-    munit_assert_uint8(g->transaction_mac_key_version, ==, 3);
+    munit_assert_uint32(g->state.transaction_mac.counter, ==, 9);
+    munit_assert_memory_equal(8, g->state.transaction_mac.mac, f->state.transaction_mac.mac);
+    munit_assert_uint8(g->state.transaction_mac.key_type, ==, DFC_TRANSACTION_MAC_KEY_TYPE_AES);
+    munit_assert_uint8(g->state.transaction_mac.key_version, ==, 3);
     munit_assert_memory_equal(
-        sizeof(g->transaction_mac_key), g->transaction_mac_key, f->transaction_mac_key);
+        sizeof(g->state.transaction_mac.key),
+        g->state.transaction_mac.key,
+        f->state.transaction_mac.key);
     munit_assert_memory_equal(
-        sizeof(g->previous_reader_id), g->previous_reader_id, f->previous_reader_id);
+        sizeof(g->state.transaction_mac.previous_reader_id),
+        g->state.transaction_mac.previous_reader_id,
+        f->state.transaction_mac.previous_reader_id);
 
     static const uint8_t expected[] = {0x80, 0x01, 0x09, 0x81, 0x08, 0x01, 0x23, 0x45, 0x67, 0x89,
                                        0xAB, 0xCD, 0xEF, 0x82, 0x01, 0x02, 0x83, 0x01, 0x03, 0x84,
@@ -601,16 +664,16 @@ static MunitResult test_model_validation(const MunitParameter params[], void* da
     DfcFile* v = dfc_credential_create_file(&bad_value, 0, 0x03);
     munit_assert_not_null(v);
     v->type = 0x02;
-    v->value_lower_limit = 0;
-    v->value_upper_limit = 100;
-    v->value = 500;
+    v->state.value.lower_limit = 0;
+    v->state.value.upper_limit = 100;
+    v->state.value.current = 500;
     munit_assert_int(dfc_der_encode(&bad_value, buf, sizeof(buf), &len), ==, DfcDerMalformed);
-    v->value = 50;
-    v->limited_credit = 0;
-    v->limited_credit_value = 1;
+    v->state.value.current = 50;
+    v->state.value.limited_credit = 0;
+    v->state.value.limited_credit_value = 1;
     munit_assert_int(dfc_der_encode(&bad_value, buf, sizeof(buf), &len), ==, DfcDerMalformed);
-    v->limited_credit = 1;
-    v->limited_credit_value = -1;
+    v->state.value.limited_credit = 1;
+    v->state.value.limited_credit_value = -1;
     munit_assert_int(dfc_der_encode(&bad_value, buf, sizeof(buf), &len), ==, DfcDerMalformed);
 
     // A reserved ISO file ID.
@@ -648,9 +711,9 @@ static MunitResult test_model_validation(const MunitParameter params[], void* da
     DfcFile* cf = dfc_credential_create_file(&cyclic, 0, 0x06);
     munit_assert_not_null(cf);
     cf->type = 0x04;
-    cf->record_size = 2;
-    cf->max_records = 1;
-    cf->record_count = 0;
+    cf->state.record.size = 2;
+    cf->state.record.max_records = 1;
+    cf->state.record.count = 0;
     munit_assert_int(dfc_der_encode(&cyclic, buf, sizeof(buf), &len), ==, DfcDerMalformed);
 
     return MUNIT_OK;
@@ -677,6 +740,97 @@ static MunitResult test_capacity(const MunitParameter params[], void* data) {
     return MUNIT_OK;
 }
 
+static MunitResult test_long_form_field_indexing(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    DfcCredential src = {0};
+    build_basic(&src);
+    uint8_t contents[300];
+    for(size_t i = 0; i < sizeof(contents); i++)
+        contents[i] = (uint8_t)i;
+    add_data_file(&src, 1, sizeof(contents), (const char*)contents, sizeof(contents), true);
+
+    uint8_t encoded[DFC_DER_MAX_SIZE];
+    size_t encoded_len = 0;
+    munit_assert_int(dfc_der_encode(&src, encoded, sizeof(encoded), &encoded_len), ==, DfcDerOk);
+
+    DfcCredential decoded = {0};
+    munit_assert_int(dfc_der_decode(&decoded, encoded, encoded_len), ==, DfcDerOk);
+    munit_assert_size(decoded.files[0].data_len, ==, sizeof(contents));
+    munit_assert_memory_equal(
+        sizeof(contents), contents, dfc_file_data_const(&decoded, &decoded.files[0]));
+
+    uint8_t oversized[DFC_DER_MAX_SIZE + 1] = {0};
+    memset(&decoded, 0xA5, sizeof(decoded));
+    munit_assert_int(dfc_der_decode(&decoded, oversized, sizeof(oversized)), ==, DfcDerMalformed);
+    DfcCredential empty = {0};
+    dfc_credential_clear(&empty);
+    munit_assert_memory_equal(sizeof(decoded), &empty, &decoded);
+    return MUNIT_OK;
+}
+
+static bool
+    scan_canonical_lengths(const uint8_t* encoded, size_t encoded_len, bool boundaries[4]) {
+    size_t offset = 0;
+    while(offset < encoded_len) {
+        if(encoded_len - offset < 2) return false;
+        uint8_t tag = encoded[offset++];
+        uint8_t first = encoded[offset++];
+        size_t body_len = 0;
+        if((first & 0x80) == 0) {
+            body_len = first;
+        } else {
+            size_t count = first & 0x7F;
+            if(count == 0 || count > 2 || encoded_len - offset < count) return false;
+            if(encoded[offset] == 0) return false;
+            for(size_t i = 0; i < count; i++)
+                body_len = (body_len << 8) | encoded[offset++];
+            if(body_len < (count == 1 ? 128u : 256u)) return false;
+        }
+        if(body_len > encoded_len - offset) return false;
+        if(body_len == 127) boundaries[0] = true;
+        if(body_len == 128) boundaries[1] = true;
+        if(body_len == 255) boundaries[2] = true;
+        if(body_len == 256) boundaries[3] = true;
+        if((tag & 0x20) != 0 && !scan_canonical_lengths(encoded + offset, body_len, boundaries))
+            return false;
+        offset += body_len;
+    }
+    return offset == encoded_len;
+}
+
+static MunitResult test_constructed_length_boundaries(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    bool boundaries[4] = {false};
+    uint8_t contents[300] = {0};
+    uint8_t encoded[DFC_DER_MAX_SIZE];
+
+    for(size_t contents_len = 1; contents_len <= sizeof(contents); contents_len++) {
+        DfcCredential credential = {0};
+        build_basic(&credential);
+        add_data_file(
+            &credential, 1, (uint32_t)contents_len, (const char*)contents, contents_len, true);
+        size_t encoded_len = 0;
+        size_t needed = 0;
+        munit_assert_int(dfc_der_encoded_size(&credential, &needed), ==, DfcDerOk);
+        munit_assert_int(dfc_der_encode(&credential, encoded, needed, &encoded_len), ==, DfcDerOk);
+        munit_assert_size(encoded_len, ==, needed);
+        munit_assert_true(scan_canonical_lengths(encoded, encoded_len, boundaries));
+
+        DfcCredential decoded = {0};
+        munit_assert_int(dfc_der_decode(&decoded, encoded, encoded_len), ==, DfcDerOk);
+        uint8_t again[DFC_DER_MAX_SIZE];
+        size_t again_len = 0;
+        munit_assert_int(dfc_der_encode(&decoded, again, sizeof(again), &again_len), ==, DfcDerOk);
+        munit_assert_size(again_len, ==, encoded_len);
+        munit_assert_memory_equal(encoded_len, encoded, again);
+    }
+    for(size_t i = 0; i < sizeof(boundaries); i++)
+        munit_assert_true(boundaries[i]);
+    return MUNIT_OK;
+}
+
 #if DFC_ENABLE_KEY_SETS
 static MunitResult test_mixed_key_set_round_trip(const MunitParameter params[], void* data) {
     (void)params;
@@ -686,11 +840,11 @@ static MunitResult test_mixed_key_set_round_trip(const MunitParameter params[], 
     src.card.generation = DfcGenerationEv2;
     DfcApplication* app = &src.apps[0];
     munit_assert_true(dfc_credential_key_sets_resize(&src, app, 3, 1, 16, 24));
-    app->key_set_types[0] = DFC_KEY_SET_TYPE_AES;
-    app->key_set_types[1] = DFC_KEY_SET_TYPE_3K3DES;
-    app->key_set_types[2] = DFC_KEY_SET_TYPE_AES;
+    *dfc_credential_key_set_type(&src, app, 0) = DFC_KEY_SET_TYPE_AES;
+    *dfc_credential_key_set_type(&src, app, 1) = DFC_KEY_SET_TYPE_3K3DES;
+    *dfc_credential_key_set_type(&src, app, 2) = DFC_KEY_SET_TYPE_AES;
     for(size_t set = 0; set < 3; set++) {
-        app->key_set_initialized[set] = true;
+        munit_assert_true(dfc_credential_key_set_set_initialized(&src, app, set, true));
         uint8_t* key = dfc_credential_key_in_set(&src, app, set, 0);
         munit_assert_not_null(key);
         memset(key, (int)(0x30 + set), set == 1 ? 24 : 16);
@@ -701,7 +855,8 @@ static MunitResult test_mixed_key_set_round_trip(const MunitParameter params[], 
     munit_assert_int(dfc_der_encode(&src, buf, sizeof(buf), &len), ==, DfcDerOk);
     DfcCredential dst = {0};
     munit_assert_int(dfc_der_decode(&dst, buf, len), ==, DfcDerOk);
-    munit_assert_uint8(dst.apps[0].key_set_types[1], ==, DFC_KEY_SET_TYPE_3K3DES);
+    munit_assert_uint8(
+        *dfc_credential_key_set_type(&dst, &dst.apps[0], 1), ==, DFC_KEY_SET_TYPE_3K3DES);
     munit_assert_memory_equal(
         24,
         dfc_credential_key_in_set_const(&dst, &dst.apps[0], 1, 0),
@@ -750,6 +905,12 @@ static MunitTest tests[] = {
      NULL},
     {"/picc-level-file", test_picc_level_file, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/rejections", test_rejections, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/reserved-iso-file-id-decode",
+     test_reserved_iso_file_id_decode,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
     {"/model-validation", test_model_validation, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
 #if DFC_ENABLE_KEY_SETS
     {"/mixed-key-set-round-trip",
@@ -760,6 +921,18 @@ static MunitTest tests[] = {
      NULL},
 #endif
     {"/capacity", test_capacity, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/long-form-field-indexing",
+     test_long_form_field_indexing,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/constructed-length-boundaries",
+     test_constructed_length_boundaries,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
 };
 

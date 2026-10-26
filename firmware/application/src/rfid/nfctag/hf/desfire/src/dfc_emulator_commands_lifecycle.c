@@ -21,58 +21,47 @@ enum {
     DfcSdmFieldCount,
 };
 
-_Static_assert(
-    offsetof(DfcFile, sdm_counter_offset) - offsetof(DfcFile, sdm_uid_offset) ==
-        DfcSdmFieldCounterOffset * sizeof(uint32_t),
-    "SDM counter offset layout changed");
-_Static_assert(
-    offsetof(DfcFile, sdm_picc_data_offset) - offsetof(DfcFile, sdm_uid_offset) ==
-        DfcSdmFieldPiccDataOffset * sizeof(uint32_t),
-    "SDM PICC data offset layout changed");
-_Static_assert(
-    offsetof(DfcFile, sdm_mac_input_offset) - offsetof(DfcFile, sdm_uid_offset) ==
-        DfcSdmFieldMacInputOffset * sizeof(uint32_t),
-    "SDM MAC input offset layout changed");
-_Static_assert(
-    offsetof(DfcFile, sdm_encrypted_file_offset) - offsetof(DfcFile, sdm_uid_offset) ==
-        DfcSdmFieldEncryptedFileOffset * sizeof(uint32_t),
-    "SDM encrypted file offset layout changed");
-_Static_assert(
-    offsetof(DfcFile, sdm_encrypted_file_length) - offsetof(DfcFile, sdm_uid_offset) ==
-        DfcSdmFieldEncryptedFileLength * sizeof(uint32_t),
-    "SDM encrypted file length layout changed");
-_Static_assert(
-    offsetof(DfcFile, sdm_mac_offset) - offsetof(DfcFile, sdm_uid_offset) ==
-        DfcSdmFieldMacOffset * sizeof(uint32_t),
-    "SDM MAC offset layout changed");
-_Static_assert(
-    offsetof(DfcFile, sdm_counter_limit) - offsetof(DfcFile, sdm_uid_offset) ==
-        DfcSdmFieldCounterLimit * sizeof(uint32_t),
-    "SDM counter limit layout changed");
-_Static_assert(
-    offsetof(DfcFile, sdm_has_counter_offset) - offsetof(DfcFile, sdm_has_uid_offset) ==
-        DfcSdmFieldCounterOffset * sizeof(bool),
-    "SDM counter presence layout changed");
-_Static_assert(
-    offsetof(DfcFile, sdm_has_picc_data_offset) - offsetof(DfcFile, sdm_has_uid_offset) ==
-        DfcSdmFieldPiccDataOffset * sizeof(bool),
-    "SDM PICC data presence layout changed");
-_Static_assert(
-    offsetof(DfcFile, sdm_has_mac_input_offset) - offsetof(DfcFile, sdm_has_uid_offset) ==
-        DfcSdmFieldMacInputOffset * sizeof(bool),
-    "SDM MAC input presence layout changed");
-_Static_assert(
-    offsetof(DfcFile, sdm_has_encrypted_file_offset) - offsetof(DfcFile, sdm_has_uid_offset) ==
-        DfcSdmFieldEncryptedFileOffset * sizeof(bool),
-    "SDM encrypted file presence layout changed");
-_Static_assert(
-    offsetof(DfcFile, sdm_has_mac_offset) - offsetof(DfcFile, sdm_has_uid_offset) ==
-        (DfcSdmFieldMacOffset - 1) * sizeof(bool),
-    "SDM MAC presence layout changed");
-_Static_assert(
-    offsetof(DfcFile, sdm_has_counter_limit) - offsetof(DfcFile, sdm_has_uid_offset) ==
-        (DfcSdmFieldCounterLimit - 1) * sizeof(bool),
-    "SDM counter limit presence layout changed");
+static void set_sdm_field(DfcFile* file, size_t field, uint32_t value) {
+    DfcSdmSettings* sdm = &file->state.data.sdm;
+    switch(field) {
+    case DfcSdmFieldUidOffset:
+        sdm->uid_offset = value;
+        dfc_file_sdm_flag_set(file, DfcSdmFlagUidOffset, true);
+        break;
+    case DfcSdmFieldCounterOffset:
+        sdm->counter_offset = value;
+        dfc_file_sdm_flag_set(
+            file, DfcSdmFlagCounterOffset, value != DFC_SDM_HIDDEN_COUNTER_OFFSET);
+        break;
+    case DfcSdmFieldPiccDataOffset:
+        sdm->picc_data_offset = value;
+        dfc_file_sdm_flag_set(file, DfcSdmFlagPiccDataOffset, true);
+        break;
+    case DfcSdmFieldMacInputOffset:
+        sdm->mac_input_offset = value;
+        dfc_file_sdm_flag_set(file, DfcSdmFlagMacInputOffset, true);
+        break;
+    case DfcSdmFieldEncryptedFileOffset:
+        sdm->encrypted_file_offset = value;
+        dfc_file_sdm_flag_set(file, DfcSdmFlagEncryptedFile, true);
+        break;
+    case DfcSdmFieldEncryptedFileLength:
+        sdm->encrypted_file_length = value;
+        break;
+    case DfcSdmFieldMacOffset:
+        sdm->mac_offset = value;
+        dfc_file_sdm_flag_set(file, DfcSdmFlagMacOffset, true);
+        break;
+    case DfcSdmFieldCounterLimit:
+        sdm->counter_limit = value;
+        dfc_file_sdm_flag_set(file, DfcSdmFlagCounterLimit, true);
+        break;
+    default:
+        DFC_ASSERT(false);
+        break;
+    }
+}
+
 #endif
 
 static bool require_create_delete_access(DfcEmulator* emulator, DfcByteBuf* tx_buffer) {
@@ -131,11 +120,13 @@ static size_t allocated_file_bytes(const DfcCredential* credential) {
     for(size_t i = 0; i < credential->num_files; i++) {
         const DfcFile* file = &credential->files[i];
         if(file->type == DFC_FILE_TYPE_STANDARD_DATA || file->type == DFC_FILE_TYPE_BACKUP_DATA) {
-            used += file->declared_size;
+            uint32_t declared_size;
+            if(!dfc_file_get_declared_size(file, &declared_size)) return SIZE_MAX;
+            used += declared_size;
         } else if(
             file->type == DFC_FILE_TYPE_LINEAR_RECORD ||
             file->type == DFC_FILE_TYPE_CYCLIC_RECORD) {
-            used += (size_t)file->record_size * file->max_records;
+            used += (size_t)file->state.record.size * file->state.record.max_records;
         }
     }
     return used;
@@ -404,12 +395,12 @@ void dfc_emulator_command_get_file_settings(
         uint8_t rights_wire[2];
         dfc_emulator_command_access_rights_to_wire(file->access_rights, rights_wire);
         dfc_bytebuf_append_bytes(tx_buffer, rights_wire, sizeof(rights_wire));
-        dfc_emulator_command_append_int32_le(tx_buffer, file->value_lower_limit);
-        dfc_emulator_command_append_int32_le(tx_buffer, file->value_upper_limit);
+        dfc_emulator_command_append_int32_le(tx_buffer, file->state.value.lower_limit);
+        dfc_emulator_command_append_int32_le(tx_buffer, file->state.value.upper_limit);
         // File settings expose the committed reusable limit, not the balance
         // and not a debit that is still pending in the current transaction.
-        dfc_emulator_command_append_int32_le(tx_buffer, file->limited_credit_value);
-        dfc_bytebuf_append_byte(tx_buffer, file->limited_credit);
+        dfc_emulator_command_append_int32_le(tx_buffer, file->state.value.limited_credit_value);
+        dfc_bytebuf_append_byte(tx_buffer, file->state.value.limited_credit);
     } else {
         uint8_t settings[7];
         dfc_encode_standard_data_file_settings(
@@ -524,25 +515,19 @@ static void apply_change_file_settings(
     file->comm_settings = comm_settings;
     file->access_rights = access_rights;
 #if DFC_ENABLE_SDM
-    memset(&file->sdm_resettable, 0, sizeof(file->sdm_resettable));
+    memset(&file->state.data.sdm, 0, sizeof(file->state.data.sdm));
     if(settings) {
-        file->sdm_options = sdm_options;
-        file->sdm_access_rights = sdm_access_rights;
+        file->state.data.sdm.options = sdm_options;
+        file->state.data.sdm.access_rights = sdm_access_rights;
         const uint8_t* cursor = settings + DFC_SDM_BASE_SETTINGS_LENGTH;
         for(size_t i = 0; i < DfcSdmFieldCount; i++, sdm_fields >>= 1) {
             if((sdm_fields & 1u) == 0) continue;
             uint32_t value = read_uint24_le(cursor);
             cursor += DFC_SDM_OFFSET_LENGTH;
-            (&file->sdm_uid_offset)[i] = value;
-            if(i != DfcSdmFieldEncryptedFileLength) {
-                bool present = i != DfcSdmFieldCounterOffset ||
-                               value != DFC_SDM_HIDDEN_COUNTER_OFFSET;
-                size_t has_index = i < DfcSdmFieldEncryptedFileLength ? i : i - 1;
-                (&file->sdm_has_uid_offset)[has_index] = present;
-            }
+            set_sdm_field(file, i, value);
         }
-        file->sdm_enabled = true;
-        file->sdm_read_counter = 0;
+        dfc_file_sdm_flag_set(file, DfcSdmFlagEnabled, true);
+        file->state.data.sdm_read_counter = 0;
     }
     emulator->sdm_read_cache_valid = false;
 #endif
@@ -567,7 +552,7 @@ void dfc_emulator_command_change_file_settings(
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PERMISSION_DENIED);
         return;
     }
-    if(!dfc_emulator_command_access_nibble_allows(change_key, emulator)) {
+    if(!dfc_emulator_access_nibble_allows(emulator, change_key)) {
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_AUTHENTICATION_ERR);
         return;
     }
@@ -575,6 +560,7 @@ void dfc_emulator_command_change_file_settings(
     const uint8_t* body = apdu + 2;
     size_t body_len = apdu_len - 2;
     size_t clear_len = 0;
+    size_t scratch_len = 0;
     bool ev2_active = false;
 #if DFC_ENABLE_EV2_SECURE_MESSAGING
     ev2_active = emulator->ev2_session_active;
@@ -589,18 +575,20 @@ void dfc_emulator_command_change_file_settings(
             1,
             protection,
             emulator->pending_chain,
-            sizeof(emulator->pending_chain));
+            sizeof(emulator->pending_chain),
+            &body,
+            &scratch_len);
         if(clear_len == SIZE_MAX) {
+            dfc_secure_wipe(emulator->pending_chain, scratch_len);
             dfc_emulator_reset_session(emulator);
             dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_INTEGRITY_ERROR);
             return;
         }
-        body = emulator->pending_chain;
         body_len = clear_len;
     }
 
     apply_change_file_settings(emulator, file, body, body_len, tx_buffer);
-    dfc_secure_wipe(emulator->pending_chain, clear_len);
+    dfc_secure_wipe(emulator->pending_chain, scratch_len);
 }
 
 void dfc_emulator_command_get_application_ids(DfcEmulator* emulator, DfcByteBuf* tx_buffer) {
@@ -786,11 +774,25 @@ void dfc_emulator_command_create_application(
             return;
         }
         app->key_set_settings = key_set_settings;
-        app->key_set_versions[0] = active_key_set_version;
+        uint8_t* active_version = dfc_credential_key_set_version(credential, app, 0);
         uint8_t active_type =
             (uint8_t)((key_settings_2 & DFC_KEY_TYPE_MASK) >> DFC_KEY_TYPE_SHIFT);
+        if(!active_version) {
+            size_t app_index = dfc_credential_application_index(credential, app);
+            dfc_credential_delete_application_at(credential, app_index);
+            dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OUT_OF_EEPROM);
+            return;
+        }
+        *active_version = active_key_set_version;
         for(size_t index = 0; index < app->num_key_sets; index++) {
-            app->key_set_types[index] = active_type;
+            uint8_t* type = dfc_credential_key_set_type(credential, app, index);
+            if(!type) {
+                size_t app_index = dfc_credential_application_index(credential, app);
+                dfc_credential_delete_application_at(credential, app_index);
+                dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OUT_OF_EEPROM);
+                return;
+            }
+            *type = active_type;
         }
     }
 #endif
@@ -800,7 +802,7 @@ void dfc_emulator_command_create_application(
     }
     if(df_name_len > 0) {
         memcpy(app->iso_aid, df_name, df_name_len);
-        app->iso_aid_len = df_name_len;
+        app->iso_aid_len = (uint8_t)df_name_len;
     }
     dfc_credential_mark_dirty(credential);
     dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OK);
@@ -881,6 +883,7 @@ static void publish_created_file(DfcEmulator* emulator, DfcFile* file, DfcByteBu
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OUT_OF_EEPROM);
         return;
     }
+    dfc_emulator_transaction_snapshot_note_persistent_change(emulator);
     dfc_credential_mark_dirty(credential);
     dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OK);
 }
@@ -1017,9 +1020,9 @@ void dfc_emulator_command_create_record_file(
     file->comm_settings = apdu[settings_offset];
     file->access_rights = dfc_emulator_command_access_rights_from_wire(
         apdu[settings_offset + 1], apdu[settings_offset + 2]);
-    file->record_size = record_size;
-    file->max_records = max_records;
-    file->record_count = 0;
+    file->state.record.size = record_size;
+    file->state.record.max_records = max_records;
+    file->state.record.count = 0;
     if(has_iso_file_id) {
         file->has_iso_file_id = true;
         file->iso_file_id = iso_file_id;
@@ -1061,16 +1064,16 @@ void dfc_emulator_command_create_value_file(
     file->type = 0x02;
     file->comm_settings = apdu[2];
     file->access_rights = dfc_emulator_command_access_rights_from_wire(apdu[3], apdu[4]);
-    file->value_lower_limit = lower_limit;
-    file->value_upper_limit = upper_limit;
-    file->value = value;
-    file->limited_credit = apdu[17];
-    file->limited_credit_value = 0;
-    file->limited_credit_pending = 0;
-    file->value_pending = false;
-    file->value_pending_delta = 0;
-    file->value_pending_value = 0;
-    file->value_pending_absolute = false;
+    file->state.value.lower_limit = lower_limit;
+    file->state.value.upper_limit = upper_limit;
+    file->state.value.current = value;
+    file->state.value.limited_credit = apdu[17];
+    file->state.value.limited_credit_value = 0;
+    file->state.value.limited_credit_pending = 0;
+    file->state.value.pending = false;
+    file->state.value.pending_delta = 0;
+    file->state.value.pending_value = 0;
+    file->state.value.pending_absolute = false;
     publish_created_file(emulator, file, tx_buffer);
 }
 
@@ -1091,6 +1094,7 @@ void dfc_emulator_command_delete_file(
             emulator, (size_t)(file - emulator->credential->files));
     }
     if(dfc_credential_delete_file(emulator->credential, emulator->selected_app_index, file_no)) {
+        dfc_emulator_transaction_snapshot_note_persistent_change(emulator);
         dfc_credential_mark_dirty(emulator->credential);
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OK);
         return;
@@ -1148,11 +1152,10 @@ void dfc_emulator_command_create_transaction_mac_file(
     file->type = DFC_FILE_TYPE_TRANSACTION_MAC;
     file->comm_settings = buffer[2];
     file->access_rights = access_rights;
-    file->transaction_mac_key_type = buffer[5];
-    file->declared_size = DFC_TRANSACTION_MAC_FILE_LENGTH;
+    file->state.transaction_mac.key_type = buffer[5];
     file->contents_complete = true;
-    memcpy(file->transaction_mac_key, buffer + 6, DFC_AES_KEY_LENGTH);
-    file->transaction_mac_key_version = buffer[6 + DFC_AES_KEY_LENGTH];
+    memcpy(file->state.transaction_mac.key, buffer + 6, DFC_AES_KEY_LENGTH);
+    file->state.transaction_mac.key_version = buffer[6 + DFC_AES_KEY_LENGTH];
     dfc_credential_mark_dirty(emulator->credential);
     dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OK);
 }

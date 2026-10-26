@@ -70,17 +70,7 @@ bool dfc_ev2_wire_mac(
     const uint8_t* input,
     size_t input_len,
     uint8_t output[DFC_WIRE_MAC_LENGTH]) {
-    if(!output) return false;
-    memset(output, 0, DFC_WIRE_MAC_LENGTH);
-    if(!key || (input_len != 0 && !input)) return false;
-    uint8_t full[DFC_AES_CMAC_LENGTH] = {0};
-    if(!aes_cmac((uint8_t*)key, DFC_AES_KEY_LENGTH, (uint8_t*)input, input_len, full)) {
-        dfc_secure_wipe(full, sizeof(full));
-        return false;
-    }
-    dfc_truncate_aes_wire_mac(full, output);
-    dfc_secure_wipe(full, sizeof(full));
-    return true;
+    return dfc_aes_wire_mac(key, input, input_len, output);
 }
 
 bool dfc_ev2_mac(

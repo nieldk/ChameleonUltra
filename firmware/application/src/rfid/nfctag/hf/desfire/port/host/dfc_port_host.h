@@ -23,3 +23,5 @@ void dfc_host_set_free_observer(DfcHostFreeObserver observer, void* context);
 // Makes exactly the next allocation with this tag fail.
 void dfc_host_fail_next_allocation(DfcAllocTag tag);
 void dfc_host_fail_allocation_after(DfcAllocTag tag, size_t successful_allocations);
+// Successful allocations since process start, separated by engine allocation tag.
+size_t dfc_host_allocation_count(DfcAllocTag tag);

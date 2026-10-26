@@ -39,9 +39,9 @@ static void add_value_file(DfcCredential* c, size_t app, uint8_t number, uint8_t
     file->type = DFC_FILE_TYPE_VALUE;
     file->comm_settings = comm;
     file->access_rights = 0x0000;
-    file->value_lower_limit = 0;
-    file->value_upper_limit = 1000;
-    file->value = 100;
+    file->state.value.lower_limit = 0;
+    file->state.value.upper_limit = 1000;
+    file->state.value.current = 100;
 }
 
 static DfcApplication*

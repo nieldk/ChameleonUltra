@@ -26,11 +26,8 @@ static bool proximity_wire_mac(
     memcpy(input + input_len, emulator->proximity_transcript, emulator->proximity_transcript_len);
     input_len += emulator->proximity_transcript_len;
 
-    uint8_t full_mac[DFC_AES_CMAC_LENGTH] = {0};
-    bool ok = aes_cmac((uint8_t*)key, DFC_AES_KEY_LENGTH, input, input_len, full_mac);
-    if(ok) dfc_truncate_aes_wire_mac(full_mac, output);
+    bool ok = dfc_aes_wire_mac(key, input, input_len, output);
     dfc_secure_wipe(input, sizeof(input));
-    dfc_secure_wipe(full_mac, sizeof(full_mac));
     return ok;
 }
 

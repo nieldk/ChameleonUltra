@@ -31,6 +31,7 @@
 #define DFC_COMMAND_TMAC_KEY_LENGTH       16
 #define DFC_COMMAND_EV2_CAPABILITY_LENGTH 6
 #define DFC_COMMAND_UINT24_MAX            0xFFFFFFu
+#define DFC_COMMAND_MAX_FILE_NUMBER       31u
 
 typedef enum {
     DfcCommandOk = 0,

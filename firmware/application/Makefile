@@ -514,13 +514,20 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
     $(DESFIRE_DIR)/src/dfc_secure_messaging.c \
     $(DESFIRE_DIR)/src/dfc_common.c \
     $(DESFIRE_DIR)/src/dfc_crypto.c \
+    $(DESFIRE_DIR)/src/dfc_crypto_des_chain.c \
+    $(DESFIRE_DIR)/src/dfc_crypto_disabled.c \
     $(DESFIRE_DIR)/src/dfc_profile.c \
     $(DESFIRE_DIR)/src/dfc_ev2.c \
+    $(DESFIRE_DIR)/src/dfc_ev2_command.c \
     $(DESFIRE_DIR)/src/dfc_ev2_crypto.c \
     $(DESFIRE_DIR)/src/dfc_command.c \
     $(DESFIRE_DIR)/src/dfc_reader.c \
     $(DESFIRE_DIR)/src/aes_cmac.c \
     $(DESFIRE_DIR)/src/des_cmac.c \
+    $(DESFIRE_DIR)/src/dfc_an10922.c \
+    $(DESFIRE_DIR)/src/dfc_sdm.c \
+    $(DESFIRE_DIR)/src/dfc_transaction_mac.c \
+    $(DESFIRE_DIR)/src/dfc_response.c \
     $(TINY_DES_DIR)/des.c \
     $(DESFIRE_DIR)/shim/mbedtls_compat.c \
 
@@ -549,8 +556,10 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
 # Ceiling is the _Static_assert in nfc_desfire.c: slot record must fit one
 # 8192B FDS page (8136B after record overhead). x86-64 host build at these
 # limits (size_t is 8B here, 4B on the real target, so this over-estimates):
-# EV3 credential 4488B (dfc-core v2), record 4792B, ~3344B spare. Re-check on
-# an ARM build once a toolchain is available.
+# EV3 credential 2716B (dfc-core 2.0.0, down from 4488B on v2 Unreleased --
+# tagged-union file state and pooled key-set metadata both shrank it further),
+# record ~2772B, ~5364B spare. Re-check on an ARM build once a toolchain is
+# available.
 CFLAGS += -DDFC_KEY_POOL_SIZE=448
 CFLAGS += -DDFC_MAX_APPS=4 -DDFC_MAX_KEYS=14 -DDFC_MAX_FILES=8
 CFLAGS += -DDFC_FILE_POOL_SIZE=1024 -DDFC_MAX_FILE_DATA=1024
@@ -561,6 +570,16 @@ CFLAGS += -DDFC_FILE_POOL_SIZE=1024 -DDFC_MAX_FILE_DATA=1024
 # no useful speed. Build this one translation unit for size; the trailing -Os
 # wins over the global -O3.
 %/dfc_der.c.o: CFLAGS += -Os
+
+# False positive: dfc_emulator_abort_transaction_snapshot loops `index <
+# emulator->credential->num_files` over a DFC_MAX_FILES-sized array. Every
+# site that increments num_files (dfc_der.c's decoder, dfc_credential.c's
+# live file-create path) gates on `>= DFC_MAX_FILES` first, so it can never
+# exceed the array bound -- but at -O3 GCC splits this function into a cold
+# path (the ".part.0" in the diagnostic) and loses that invariant across the
+# split. Demote to a warning for this one object rather than disable
+# array-bounds checking globally.
+%/dfc_emulator.c.o: CFLAGS += -Wno-error=array-bounds
 
 $(info  Chameleon Ultra <Application>: reader and tag emulation module enable.)
 else ifeq (${CURRENT_DEVICE_TYPE}, ${CHAMELEON_LITE})

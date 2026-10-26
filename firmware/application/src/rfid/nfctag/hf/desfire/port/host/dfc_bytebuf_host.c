@@ -4,7 +4,7 @@
 
 DfcByteBuf* dfc_bytebuf_alloc(size_t max_size) {
     (void)max_size;
-    DfcByteBuf* buffer = dfc_platform_alloc(sizeof(DfcByteBuf), DfcAllocEmulator);
+    DfcByteBuf* buffer = dfc_platform_alloc(sizeof(DfcByteBuf), DfcAllocByteBuf);
     return buffer;
 }
 

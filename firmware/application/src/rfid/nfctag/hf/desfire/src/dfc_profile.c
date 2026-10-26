@@ -146,9 +146,11 @@ DfcDerStatus dfc_profile_check(
         for(size_t i = 0; i < credential->num_files; i++) {
             const DfcFile* f = &credential->files[i];
             if(f->type == 0x00 || f->type == 0x01) {
-                declared += f->declared_size;
+                uint32_t declared_size;
+                if(!dfc_file_get_declared_size(f, &declared_size)) return DfcDerMalformed;
+                declared += declared_size;
             } else if(f->type == 0x03 || f->type == 0x04) {
-                declared += (uint64_t)f->record_size * f->max_records;
+                declared += (uint64_t)f->state.record.size * f->state.record.max_records;
             }
         }
         if(declared > profile->max_storage) {

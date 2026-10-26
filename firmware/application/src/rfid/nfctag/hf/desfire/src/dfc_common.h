@@ -207,6 +207,20 @@ extern const uint8_t DFC_ISO_AID[7];
 #define DFC_CHANGE_KEY_ACCESS_SAME       0x0E
 #define DFC_CHANGE_KEY_ACCESS_FROZEN     0x0F
 
+// Decode one logical access-right nibble. Access rights stay in host order
+// inside the engine; only APDU ingress and egress convert the two wire octets.
+static inline uint8_t dfc_access_nibble(uint16_t access_rights, unsigned shift) {
+    return (uint8_t)((access_rights >> shift) & 0x0Fu);
+}
+
+// Store the little-endian counters and CRC values used by native commands.
+static inline void dfc_write_uint32_le(uint8_t output[4], uint32_t value) {
+    output[0] = (uint8_t)value;
+    output[1] = (uint8_t)(value >> 8);
+    output[2] = (uint8_t)(value >> 16);
+    output[3] = (uint8_t)(value >> 24);
+}
+
 // Access-right nibble values
 #define DFC_ACCESS_FREE 0x0E
 #define DFC_ACCESS_DENY 0x0F
@@ -334,6 +348,20 @@ uint32_t dfc_crc32(const uint8_t* data, size_t length);
 #ifndef DFC_KEY_POOL_SIZE
 #define DFC_KEY_POOL_SIZE 4096
 #endif
+#if DFC_ENABLE_KEY_SETS
+// A key-set application's metadata is at most 7/32 of the key storage it
+// already reserves (one key, two sets is the worst ratio). Keeping that bound
+// in a separate pool preserves every credential that fits in key_pool without
+// charging every application for sixteen sets.
+#ifndef DFC_KEY_SET_METADATA_POOL_SIZE
+#define DFC_KEY_SET_METADATA_POOL_SIZE \
+    ((DFC_KEY_POOL_SIZE / 32u) * 7u + (((DFC_KEY_POOL_SIZE % 32u) * 7u + 31u) / 32u))
+#endif
+#define DFC_KEY_SET_METADATA_POOL_NONE UINT16_MAX
+#if DFC_KEY_SET_METADATA_POOL_SIZE >= UINT16_MAX
+#error "DFC_KEY_SET_METADATA_POOL_SIZE must fit in a uint16_t offset"
+#endif
+#endif
 // Allocation a blank card's first file gets. WriteData bounds-checks against
 // the file length and never grows the file, so a zero-length file cannot be
 // written to and a blank card would be useless. Kept well under
@@ -367,6 +395,11 @@ uint32_t dfc_crc32(const uint8_t* data, size_t length);
 void dfc_truncate_aes_wire_mac(
     const uint8_t full[DFC_AES_CMAC_LENGTH],
     uint8_t wire[DFC_WIRE_MAC_LENGTH]);
+bool dfc_aes_wire_mac(
+    const uint8_t key[DFC_AES_KEY_LENGTH],
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t output[DFC_WIRE_MAC_LENGTH]);
 #define DFC_VIRTUAL_CARD_CHALLENGE_LENGTH           DFC_AES_KEY_LENGTH
 #define DFC_VIRTUAL_CARD_CLEAR_DATA_LENGTH          DFC_AES_KEY_LENGTH
 #define DFC_VIRTUAL_CARD_CAPABILITY_LENGTH          2
@@ -397,7 +430,6 @@ void dfc_truncate_aes_wire_mac(
 #define DFC_CMD_NOTIFY_TRANSACTION_SUCCESS          0xEE
 #define DFC_TRANSACTION_MAC_FILE_LENGTH             12
 #define DFC_TRANSACTION_READER_ID_LENGTH            DFC_AES_KEY_LENGTH
-#define DFC_TRANSACTION_INPUT_MAX_LENGTH            128
 #define DFC_TRANSACTION_COMMIT_RETURN_MAC_OPTION    0x01
 #define DFC_TRANSACTION_MAC_DERIVATION_LABEL        0x5A
 #define DFC_TRANSACTION_ENCRYPTION_DERIVATION_LABEL 0xA5
@@ -472,20 +504,9 @@ void dfc_truncate_aes_wire_mac(
 #endif
 #define DFC_LEGACY_RANDOM_UID_FIRST_BYTE 0x80
 
-// Active DESFire authentication session, used to secure ReadData/WriteData
-// after a successful Authenticate(D40/ISO/AES) exchange.
-typedef struct {
-    uint8_t cipher; // DFC_CMD_AUTHENTICATE_LEGACY / _ISO / _AES
-    uint8_t key[DFC_MAX_KEY_LEN];
-    size_t key_len;
-    uint8_t session_key[DFC_MAX_KEY_LEN];
-    uint8_t iv[16];
-} DfcAuthParameters;
-
 size_t dfc_key_len_for_cipher(uint8_t cipher);
 size_t dfc_block_size_for_cipher(uint8_t cipher);
 
-void dfc_log_buffer(char* TAG, char* prefix, uint8_t* buffer, size_t buffer_len);
 bool dfc_desfire_uid_is_detectable(const uint8_t* uid, size_t uid_len);
 const char* dfc_authentication_mode_to_string(uint8_t auth_command);
 bool dfc_authentication_mode_from_string(const char* value, uint8_t* auth_command);

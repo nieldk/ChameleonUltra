@@ -66,12 +66,10 @@ bool dfc_random_failure_is_retryable(void);
 
 /* Object allocation.
  *
- * The engine allocates exactly four kinds of long-lived object, so allocation
- * is tagged rather than being a generic heap call. That lets the firmware serve
- * each tag from a dedicated static slot instead of a heap: its heap is 8 KiB
- * and shared, these four objects total ~4.4 KiB, and dfc_virtual_picc_field_off
- * releases and reacquires the emulator from an interrupt handler on every RF
- * field drop -- where a general-purpose allocator is neither safe nor bounded.
+ * Allocation is tagged by lifetime so firmware can provide dedicated static
+ * storage instead of a general-purpose heap. Long-lived objects and transient
+ * command/snapshot storage have distinct tags because their lifetimes can
+ * overlap.
  *
  * Returns NULL if the tag's storage is already in use. Host tests back these
  * with plain malloc/free, so behaviour is identical either way. */
@@ -79,6 +77,10 @@ typedef enum {
     DfcAllocEmulator,
     DfcAllocSecureMessaging,
     DfcAllocSession,
+    DfcAllocByteBuf,
+    DfcAllocCommandChain,
+    DfcAllocTransactionSnapshot,
+    DfcAllocCount,
 } DfcAllocTag;
 
 void* dfc_platform_alloc(size_t size, DfcAllocTag tag);

@@ -40,7 +40,7 @@ bool dfc_secure_messaging_init(
 
     memset(sm, 0, sizeof(*sm));
     sm->cipher = cipher;
-    sm->session_key_len = session_key_len;
+    sm->session_key_len = (uint8_t)session_key_len;
     memcpy(sm->session_key, session_key, session_key_len);
     if(initial_iv) memcpy(sm->iv, initial_iv, sizeof(sm->iv));
     return true;
@@ -252,6 +252,7 @@ bool dfc_secure_messaging_ev1_transmits_command_mac(uint8_t cmd) {
     case DFC_CMD_DEBIT:
     case DFC_CMD_LIMITED_CREDIT:
     case DFC_CMD_GET_FILE_COUNTERS:
+    case DFC_CMD_COMMIT_READER_ID:
         return true;
     default:
         return false;
@@ -424,26 +425,20 @@ static bool legacy_cbc_forward(
     const uint8_t* in,
     size_t len,
     uint8_t* out) {
-    if(!sm || !in || !out || len % DFC_SM_LEGACY_BLOCK_SIZE != 0) {
+    static const uint8_t zero_iv[8] = {0};
+    if(!sm || len > DFC_SM_MAX_CRYPTO_SIZE) {
         if(out && len <= DFC_SM_MAX_CRYPTO_SIZE) dfc_secure_wipe(out, len);
         return false;
     }
-    uint8_t prev[8] = {0};
-    DfcCryptoDesBlock cipher;
-    bool ok = dfc_crypto_des_block_init(&cipher, encrypt, sm->session_key, sm->session_key_len);
-    if(!ok) return false;
-    for(size_t off = 0; off + 8 <= len; off += 8) {
-        uint8_t blk[8];
-        for(size_t i = 0; i < 8; i++)
-            blk[i] = in[off + i] ^ prev[i];
-        ok = dfc_crypto_des_block_crypt(&cipher, blk, out + off);
-        dfc_secure_wipe(blk, sizeof(blk));
-        if(!ok) break;
-        memcpy(prev, out + off, 8);
-    }
-    dfc_crypto_des_block_clear(&cipher);
-    dfc_secure_wipe(prev, sizeof(prev));
-    return ok;
+    return dfc_crypto_des_chain(
+        encrypt,
+        DfcCryptoDesChainForward,
+        sm->session_key,
+        sm->session_key_len,
+        zero_iv,
+        in,
+        out,
+        len);
 }
 
 // P[i] = prim(C[i]) ^ C[i-1]
@@ -453,33 +448,20 @@ static bool legacy_cbc_reverse(
     const uint8_t* in,
     size_t len,
     uint8_t* out) {
-    if(!sm || !in || !out || len % DFC_SM_LEGACY_BLOCK_SIZE != 0) {
+    static const uint8_t zero_iv[8] = {0};
+    if(!sm || len > DFC_SM_MAX_CRYPTO_SIZE) {
         if(out && len <= DFC_SM_MAX_CRYPTO_SIZE) dfc_secure_wipe(out, len);
         return false;
     }
-    uint8_t prev[8] = {0};
-    DfcCryptoDesBlock cipher;
-    bool ok = dfc_crypto_des_block_init(&cipher, encrypt, sm->session_key, sm->session_key_len);
-    if(!ok) return false;
-    for(size_t off = 0; off + 8 <= len; off += 8) {
-        uint8_t blk[8];
-        uint8_t current[8];
-        memcpy(current, in + off, sizeof(current));
-        ok = dfc_crypto_des_block_crypt(&cipher, current, blk);
-        if(!ok) {
-            dfc_secure_wipe(blk, sizeof(blk));
-            dfc_secure_wipe(current, sizeof(current));
-            break;
-        }
-        for(size_t i = 0; i < 8; i++)
-            out[off + i] = blk[i] ^ prev[i];
-        memcpy(prev, current, sizeof(prev));
-        dfc_secure_wipe(blk, sizeof(blk));
-        dfc_secure_wipe(current, sizeof(current));
-    }
-    dfc_crypto_des_block_clear(&cipher);
-    dfc_secure_wipe(prev, sizeof(prev));
-    return ok;
+    return dfc_crypto_des_chain(
+        encrypt,
+        DfcCryptoDesChainReverse,
+        sm->session_key,
+        sm->session_key_len,
+        zero_iv,
+        in,
+        out,
+        len);
 }
 
 // Shared by both directions: enciphered mode is a plain CBC-encrypt-with-CRC scheme with no
