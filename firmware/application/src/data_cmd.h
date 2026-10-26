@@ -50,9 +50,14 @@
 #define DATA_CMD_GET_ALL_SLOT_NICKS             (1038)
 #define DATA_CMD_GET_SLEEP_TIMEOUT              (1039)
 #define DATA_CMD_SET_SLEEP_TIMEOUT              (1040)
-#define DATA_CMD_GET_BOOTLOADER_VERSION         (1041)
+// 1041/1042 were DATA_CMD_GET_BOOTLOADER_VERSION/GET_FREE_MEMORY -- moved to
+// 1061/1062. 1041/1042 are RRG's DATA_CMD_GET_LONG_PRESS_THRESHOLD/
+// SET_LONG_PRESS_THRESHOLD; the official ChameleonUltraGUI gates those
+// settings on the device reporting these IDs as a capability (which it did,
+// since capabilities is just every registered command ID), then sent/parsed
+// the long-press-threshold shape against what were actually these two
+// commands. IDs left reserved, same as 1022.
 #define DATA_CMD_GET_DFU_APP_VERSION            (1046)  /* DFU application-version counter (build.sh) from settings page */
-#define DATA_CMD_GET_FREE_MEMORY                (1042)
 #define DATA_CMD_GET_BLE_NAME                   (1043)
 #define DATA_CMD_SET_BLE_NAME                   (1044)
 #define DATA_CMD_RESET_DEVICE                   (1045)  /* plain reboot into the app, no bootloader/factory wipe */
@@ -70,6 +75,8 @@
 #define DATA_CMD_FDS_LIST                       (1058)  /* -> N * {u16 file_id, u16 key, u16 len_bytes} (big-endian) */
 #define DATA_CMD_FDS_READ                       (1059)  /* u16 file_id, u16 key, u16 offset, u16 len -> record slice (len 0 = max) */
 #define DATA_CMD_U2F_SET_ATTESTATION            (1060)  /* u8[32] att_priv, u8[] att_cert_der -> provision U2F attestation */
+#define DATA_CMD_GET_BOOTLOADER_VERSION         (1061)
+#define DATA_CMD_GET_FREE_MEMORY                (1062)
 
 //
 // ******************************************************************
@@ -93,7 +100,13 @@
 #define DATA_CMD_HF14A_RAW                      (2010)
 #define DATA_CMD_HF14A_SCAN_KEEP                (2016)  /* scan+RATS, keep field alive for APDU exchange */
 #define DATA_CMD_HF14A_AUTH_TRACE               (2017)  /* full anticoll + Crypto1 auth, every frame returned for inspection */
-#define DATA_CMD_HF14A_PASSIVE_RECV             (2018)  /* listen-only: capture one card->reader frame under an external field (uplink sniff gate test) */
+// 2018 was DATA_CMD_HF14A_PASSIVE_RECV -- moved to 2023. 2018/2019/2021/2022
+// are RRG's DATA_CMD_MF0_ULC_AUTH/READ/WRITE/SET_KEY; this firmware doesn't
+// implement Ultralight-C reader auth, but 2018 being registered here made
+// GET_DEVICE_CAPABILITIES report it present, so the official ChameleonUltraGUI
+// (which gates its Ultralight-C option on that same ID) offered it and then
+// got a passive-sniff response instead of a 3DES auth result.
+#define DATA_CMD_HF14A_PASSIVE_RECV             (2023)  /* listen-only: capture one card->reader frame under an external field (uplink sniff gate test) */
 #define DATA_CMD_MF1_MANIPULATE_VALUE_BLOCK     (2011)
 #define DATA_CMD_MF1_CHECK_KEYS_OF_SECTORS      (2012)
 #define DATA_CMD_MF1_HARDNESTED_ACQUIRE         (2013)
