@@ -2047,6 +2047,9 @@ async function dispatch(line){
   if(tokens[0]==="help" || tokens[0]==="?"){
     return helpFor(tokens.length>1 ? walk(tokens.slice(1)).node : ROOT);
   }
+  // Not a registered command, not in help, not tab-completable. Known to
+  // exactly one person who bothers to read this file.
+  if(tokens[0]==="2600") return blueBox();
 
   let node = ROOT, i = 0;
   while(node instanceof Group){
@@ -2117,6 +2120,35 @@ const history = [];
 let histIdx = 0;
 
 function clearLog(){ if(out) out.textContent = ""; }
+
+// 2600 Hz was the single-frequency tone AT&T's long-distance trunks used for
+// on-hook/idle supervision. The toy whistle in boxes of Cap'n Crunch cereal
+// happened to blow it dead-on, so a kid with a bowl of cereal and a payphone
+// could seize an idle trunk for free -- John Draper took "Captain Crunch"
+// from the whistle, and the scene around him took "phreak" (phone + freak).
+// Phreak + byte. No request goes out over BLE for this; it's local only.
+let blueBoxCtx = null;
+async function blueBox(){
+  try{
+    blueBoxCtx = blueBoxCtx || new (window.AudioContext||window.webkitAudioContext)();
+    const ctx = blueBoxCtx, o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = 2600; o.connect(g); g.connect(ctx.destination);
+    const t = ctx.currentTime;
+    g.gain.setValueAtTime(0.15, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+0.9);
+    o.start(t); o.stop(t+0.9);
+  }catch(e){ /* no audio output here; the text still tells the story */ }
+  return [
+    "",
+    "   *** 2600 Hz ***",
+    "   AT&T's trunks listened for one pure tone to mean \"idle, take me\".",
+    "   A plastic whistle from a box of Cap'n Crunch sang it exactly --",
+    "   blow it into a payphone and you owned an open trunk, operator-free.",
+    "   John Draper became \"Captain Crunch\"; his scene became \"phreaks\".",
+    "   Phreak + byte -- you're standing in the family tree.",
+    "",
+  ];
+}
 
 function printLines(lines, cls){
   for(const l of lines){
