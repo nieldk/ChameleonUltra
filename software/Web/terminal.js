@@ -10,10 +10,11 @@
  * hw/hf/lf/slot/standalone/data/emv, several of which (hf mf nested/darkside/
  * hardnested/autopwn/senested, the DESFire/SEOS/MF+ groups, most of lf) are
  * nontrivial algorithm ports (PRNG/crypto1 recovery, etc.) and are NOT here.
- * Unimplemented groups still exist in the command tree (so `help`/tab-complete
- * walk them) but their leaf commands print a "not ported yet" notice instead
- * of a real result. Commands this file DOES implement mirror the Python
- * CLI's flags and output text as closely as the two environments allow.
+ * Unported groups/commands simply aren't registered: they're absent from
+ * `help`/tab-complete and running them reports an unknown command, same as
+ * any other command this terminal doesn't have. Commands this file DOES
+ * implement mirror the Python CLI's flags and output text as closely as
+ * the two environments allow.
  * ------------------------------------------------------------------- */
 
 (function(){
@@ -135,14 +136,6 @@ class Group {
 
 const ROOT = new Group("", "ChameleonUltra (Phreakbyte) in-browser terminal");
 
-function notPorted(groupPath){
-  // .run is what dispatch() actually calls (via node.name==="*") -- the rest
-  // of this object is never read. An earlier version of this helper left
-  // .run undefined, so every "*" stub built from it (e.g. `hf mfu`) threw
-  // "node.run is not a function" the moment it was invoked.
-  return { run: async () => ["("+groupPath+" commands aren't ported to this terminal yet.)"] };
-}
-
 /* ================= hw ================= */
 const hw = ROOT.subgroup("hw", "Hardware-related commands");
 
@@ -202,11 +195,10 @@ hw.command("battery", "Get battery information, voltage and level", [], async ()
 
 hw.command("blver", "Show the bootloader version (settings counter; full info-block decode not ported here)", [], async () => {
   need();
+  // cmd_processor_get_bootloader_version (app_cmd.c) always returns a
+  // single big-endian u32 (dfuver_get's bl_v).
   const f = okOrThrow(await request(CU.GET_BOOTLOADER_VERSION));
-  let v;
-  if(f.data.length===4) v = ((f.data[0]<<24)|(f.data[1]<<16)|(f.data[2]<<8)|f.data[3])>>>0;
-  else if(f.data.length===2) v = (f.data[0]<<8)|f.data[1];
-  else v = bhex(f.data);
+  const v = ((f.data[0]<<24)|(f.data[1]<<16)|(f.data[2]<<8)|f.data[3])>>>0;
   return [" - Bootloader Version: "+v+" (settings counter; use the Device tab for the full info-block decode)"];
 });
 
@@ -256,10 +248,14 @@ hw.command("status", "Show a one-shot summary of connection, firmware and hardwa
     "   latency     -> "+latencyMs.toFixed(1)+" ms (round-trip)",
     "   model       -> Phreakbyte edition ("+model+")",
     "   firmware    -> v"+fv.data[0]+"."+fv.data[1]+" ("+bytesToUtf8(gv.data)+")"];
-  try{ lines.push("   bootloader  -> "+bhex(okOrThrow(await request(CU.GET_BOOTLOADER_VERSION)).data)); }
-  catch(e){ lines.push("   bootloader  -> not supported by current firmware"); }
-  try{ lines.push("   application -> "+bhex(okOrThrow(await request(CU.GET_DFU_APP_VERSION)).data)); }
-  catch(e){ lines.push("   application -> not supported by current firmware"); }
+  try{
+    const d = okOrThrow(await request(CU.GET_BOOTLOADER_VERSION)).data;
+    lines.push("   bootloader  -> "+(((d[0]<<24)|(d[1]<<16)|(d[2]<<8)|d[3])>>>0));
+  }catch(e){ lines.push("   bootloader  -> not supported by current firmware"); }
+  try{
+    const d = okOrThrow(await request(CU.GET_DFU_APP_VERSION)).data;
+    lines.push("   application -> "+(((d[0]<<24)|(d[1]<<16)|(d[2]<<8)|d[3])>>>0));
+  }catch(e){ lines.push("   application -> not supported by current firmware"); }
   lines.push("   chip ID     -> "+bhex(okOrThrow(await request(CU.GET_DEVICE_CHIP_ID)).data));
   lines.push("   address     -> "+bhex(okOrThrow(await request(CU.GET_DEVICE_ADDRESS)).data));
   try{
@@ -304,7 +300,8 @@ hw.command("dfu", "Restart application to bootloader/DFU mode", [], async () => 
   return ["Application restarting...", " - Enter success @.@~"];
 });
 
-hw.command("flash", "(not ported to this terminal yet -- needs a local .zip/.hex/.bin file; this terminal has no filesystem)", [], notPorted("hw flash").run);
+// `hw flash` needs a local .zip/.hex/.bin file -- this terminal has no
+// filesystem, so the command isn't registered rather than left as a stub.
 
 /* ---- hw slot ---- */
 const hwSlot = hw.subgroup("slot", "Emulation slots commands");
@@ -630,7 +627,8 @@ hwBl.command("info", "Read-only bootloader-forwarding snapshot: where the MBR bo
   }
   return lines;
 });
-hwBl.command("push", "(not ported to this terminal yet -- needs a local .hex/.bin file; this terminal has no filesystem, and this write bypasses the MBR with no power-loss safety net)", [], notPorted("hw bl push").run);
+// `hw bl push` needs a local .hex/.bin file -- this terminal has no
+// filesystem, so the command isn't registered rather than left as a stub.
 
 /* ---- hw fds ---- */
 const hwFds = hw.subgroup("fds", "Inspect the device FDS flash store");
@@ -758,22 +756,21 @@ hwLog.command("clear", "Erase the stored debug log", [], async () => {
   return [" - Log clear requested"];
 });
 
-hwLog.command("stream", "(not ported to this terminal yet -- the real CLI's Ctrl-C/Enter-to-stop live poll doesn't map onto this terminal's synchronous command model; use `hw log dump` to fetch what's stored)", [], notPorted("hw log stream").run);
+// `hw log stream`'s Ctrl-C/Enter-to-stop live poll doesn't map onto this
+// terminal's synchronous command model -- not registered; use `hw log dump`.
 
-/* ---- hw u2f ---- */
-hw.subgroup("u2f", "Provision the U2F standalone mode").command("set-attestation",
-  "(not ported to this terminal yet -- needs a local PEM/DER key+cert file and a crypto library this terminal doesn't have)",
-  [], notPorted("hw u2f set-attestation").run);
+// `hw u2f set-attestation` needs a local PEM/DER key+cert file and a crypto
+// library this terminal doesn't have -- the whole `hw u2f` group isn't
+// registered rather than left as an empty stub.
 
 /* ================= hf ================= */
 const hf = ROOT.subgroup("hf", "High Frequency commands");
 const hf14a = hf.subgroup("14a", "ISO14443-a commands");
 const hfMf  = hf.subgroup("mf", "MIFARE Classic commands");
-hf.subgroup("mfu", "MIFARE Ultralight / NTAG commands").command("*", null, [], notPorted("hf mfu").run);
+// hf mfu / hf seos / hf st25ta / hf mfplus: not ported -- not registered, so
+// they don't show in help/tab-complete and "hf mfu" reports an unknown
+// subcommand, same as any other command this terminal doesn't have.
 const hfDes = hf.subgroup("des", "MIFARE DESFire commands");
-hf.subgroup("seos", "SEOS commands").command("*", null, [], notPorted("hf seos").run);
-hf.subgroup("st25ta", "ST25TA (NFC Forum Type 4) commands").command("*", null, [], notPorted("hf st25ta").run);
-hf.subgroup("mfplus", "MIFARE Plus SL3 (AES) commands").command("*", null, [], notPorted("hf mfplus").run);
 
 // one tag: uid_len(1) uid(uid_len) atqa(2) sak(1) ats_len(1) ats(ats_len) --
 // uid is exactly uid_len bytes on the wire, NOT padded (app_cmd.c
@@ -1050,11 +1047,10 @@ hfMf.command("value", "Mifare Classic value block commands (--get/--set/--inc/--
   return [" - "+label+" done.", ...(await getValue(dstBlk, dstType, dstKey))];
 });
 
-// Catch-all for everything else under `hf mf` (dump/sim/nested/hardnested/
-// darkside/autopwn/clone/gen3*/gdm*/e*/c* -- magic-card and crypto-attack
-// flows this JS terminal doesn't implement). Added after rdbl/wrbl/fchk/
-// value so it only catches names those four don't already own.
-hfMf.command("*", null, [], notPorted("hf mf").run);
+// Everything else under `hf mf` (dump/sim/nested/hardnested/darkside/
+// autopwn/clone/gen3*/gdm*/e*/c* -- magic-card and crypto-attack flows this
+// JS terminal doesn't implement) isn't registered; those names report an
+// unknown subcommand, the same as any other command this terminal lacks.
 
 /* ================= hf des ================= */
 // Reuses fullcmd.js's already-tested DESFire/EMV plumbing directly (same
@@ -1309,9 +1305,8 @@ hfDes.command("signature", "Read the NXP originality signature (Read_Sig) -- pri
   ];
 });
 
-for(const path of ["chk","auth-trace","divkey","parse"]){
-  hfDes.command(path, "("+path+" not ported to this terminal yet -- needs host-side crypto/auth state this JS terminal doesn't implement)", [], notPorted("hf des "+path).run);
-}
+// hf des chk/auth-trace/divkey/parse need host-side crypto/auth state this
+// JS terminal doesn't implement -- not registered.
 
 /* ================= emv ================= */
 const emv = ROOT.subgroup("emv", "EMV contactless payment card commands");
@@ -1542,10 +1537,11 @@ emv.command("load", "Load EMV APDU responses into the HF14A_4 slot for autonomou
   return [" Specify --cmd/--resp, --clear, or --defaults (--file JSON mode needs a filesystem this terminal doesn't have)"];
 });
 
-emv.command("apdu", "(not ported to this terminal yet -- the real command is an interactive relay that waits for typed hex mid-command, which this request/response terminal can't do)", [], notPorted("emv apdu").run);
+// emv apdu is an interactive relay that waits for typed hex mid-command,
+// which this request/response terminal can't do -- not registered.
 
-/* Stub out the remaining real CLI groups so they exist for help/tab-complete
-   but are honest about not being implemented here yet. */
+/* The remaining real CLI groups below aren't ported here and so aren't
+   registered; see the removal note further down for why. */
 const lf = ROOT.subgroup("lf", "Low Frequency commands");
 
 // Reduced port of LFSearch (cli_lf.py): the real command decodes each tag
@@ -1562,7 +1558,7 @@ lf.command("search", "Search for any supported LF tag -- tries every decoder in 
 
 const lfEm = lf.subgroup("em", "EM commands");
 const lfEm410x = lfEm.subgroup("410x", "EM410x commands");
-lfEm.subgroup("4x05", "EM4x05/EM4x69 commands").command("*", null, [], notPorted("lf em 4x05").run);
+// lf em 4x05 not ported -- not registered.
 
 lfEm410x.command("read", "Scan em410x tag and print id", [], async () => {
   await needReader();
@@ -1689,11 +1685,8 @@ lfHidProx.command("econfig", "Set/get the emulated hidprox card id (in the activ
   return lines;
 });
 
-/* Stub out the remaining real CLI groups/subgroups so they exist for
-   help/tab-complete but are honest about not being implemented here yet. */
-for(const path of ["fdxb","generic","idteck","t55xx"]){
-  lf.subgroup(path, "("+path+" commands)").command("*", null, [], notPorted("lf "+path).run);
-}
+// lf fdxb / lf generic / lf idteck / lf t55xx aren't ported -- not
+// registered, so they're absent from help/tab-complete rather than stubbed.
 
 /* ---- pm3-style LF decode/encode, ported from lf_info.py / cli_core.py ---- */
 function vikingRaw(idb){ // pm3 getVikingBits(): F2 00 00 <id32> <chk>
@@ -2016,14 +2009,10 @@ lfIoprox.command("econfig", "Set/get emulated ioProx card id (in the active slot
     "   ID: "+cn, "   Raw: "+bhex(raw8).toUpperCase()];
 });
 
-lf.command("clone", "(not ported to this terminal yet -- use the matching GUI tab)", [], notPorted("lf clone").run);
-lf.command("sniff", "(not ported to this terminal yet -- use the matching GUI tab)", [], notPorted("lf sniff").run);
-
-for(const [path, grp] of [["data", ROOT.subgroup("data","Data analysis and visualization commands")],
-                          ["standalone", ROOT.subgroup("standalone","Host-less standalone modes -- use the Standalone tab")]]){
-  grp.command("*", "(not ported to this terminal yet -- use the matching GUI tab)", [], async () =>
-    ["("+path+" commands aren't ported to this terminal yet -- use the "+path+" tab above.)"]);
-}
+// lf clone / lf sniff -- no equivalent anywhere on this page -- not
+// registered. standalone -- ported as the page's own Standalone tab, not
+// through this terminal -- not registered. data (PM3 waveform analysis;
+// this page has no waveform capture) -- not registered.
 
 /* ---------------------------------------------------------------------
  *  Dispatch: walk tokens through the group tree.
@@ -2061,23 +2050,11 @@ async function dispatch(line){
 
   let node = ROOT, i = 0;
   while(node instanceof Group){
-    // A group whose only child is the "*" catch-all (built via notPorted())
-    // has nothing else to show; running the bare group name should hit the
-    // stub message directly instead of a one-item "available: *" listing.
-    if(i >= tokens.length){
-      const onlyStar = node.children.size===1 && node.children.get("*");
-      if(onlyStar) return onlyStar.run();
-      return helpFor(node);
-    }
-    // children.get() is an exact-name Map lookup, so a group's "*" child is
-    // never reached by a real subcommand name unless we fall back to it
-    // explicitly here -- without this, typing e.g. `hf mfu dump` reports
-    // "unknown 'mfu' subcommand: dump" instead of the "not ported" message.
-    const next = node.children.get(tokens[i]) || node.children.get("*");
+    if(i >= tokens.length) return helpFor(node);
+    const next = node.children.get(tokens[i]);
     if(!next) return ["error: unknown "+(node.name?"'"+node.name+"' subcommand":"command")+": "+tokens[i], ...helpFor(node)];
     node = next; i++;
   }
-  if(node.notPorted || node.name==="*") return node.run();
   if(tokens[i]==="-h" || tokens[i]==="--help") return helpFor(node);
   try{
     const args = parseFlags(tokens.slice(i), node.specs);
