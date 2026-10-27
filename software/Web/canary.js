@@ -838,10 +838,13 @@ async function rsessShare(){
   if(!(device && device.gatt.connected && rx)){ $("relayErr").textContent="Connect over Bluetooth first -- sharing mirrors a connection that already exists."; return; }
   const url = $("relayUrl").value.trim();
   if(!url){ $("relayErr").textContent="Enter the remote-session server's ws(s):// address first."; return; }
-  // Persisted so the join link stays the same across reloads/reconnects
-  // instead of a fresh random id (and fresh link) every time you share.
-  rsessId = rsessId || (()=>{ try{ return localStorage.getItem("rsessId"); }catch(e){ return null; } })() || Math.random().toString(36).slice(2,10);
+  // A typed session id makes the join link fully static -- same link works
+  // across browsers/machines/reloads, not just this one profile. Falls back
+  // to this profile's remembered id, then a random one, if left blank.
+  const typedId = $("relaySessId").value.trim();
+  rsessId = typedId || rsessId || (()=>{ try{ return localStorage.getItem("rsessId"); }catch(e){ return null; } })() || Math.random().toString(36).slice(2,10);
   try{ localStorage.setItem("rsessId", rsessId); }catch(e){}
+  $("relaySessId").value = rsessId;
   try{
     await new Promise((resolve,reject)=>{
       const ws = rsessConnect(url, rsessId, "host");
