@@ -338,6 +338,17 @@ footer { border-top:1px solid var(--border); padding:32px 0; }
     <label><input type="checkbox" id="oRe" checked> Reconnect automatically</label>
   </div>
 
+  <div class="status" id="relayBox">
+    <div class="lamp" id="relayLamp"></div>
+    <div><b id="relaySt">Local only</b><span id="relaySub">Not shared. No login: anyone with the join link gets full control.</span></div>
+  </div>
+  <div class="opts" id="relayHostControls">
+    <input id="relayUrl" placeholder="wss://your-relay-host:8787" size="28">
+    <button id="relayShare">Share this device</button>
+    <button id="relayStop" style="display:none">Stop sharing</button>
+  </div>
+  <div class="msg" id="relayErr" role="alert"></div>
+
   <div class="tabnav">
     <div class="tabs" id="tabs">
       <div class="tabgroup">
@@ -1206,8 +1217,8 @@ AABBCCDDEEFF</textarea></label>
   </div>
 </footer>
 
-<script src="canary.js?v=18"></script>
+<script src="canary.js?v=19"></script>
 <script src="fullcmd.js?v=14"></script>
-<script src="terminal.js?v=9"></script>
+<script src="terminal.js?v=10"></script>
 </body>
 </html>

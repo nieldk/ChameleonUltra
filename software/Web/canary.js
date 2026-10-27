@@ -79,6 +79,43 @@ let events=[];
 // onNotify hands raw notification bytes straight to this sink instead.
 let rawRspSink=null;
 
+// ---- remote session: sharing a BLE-connected device with other browsers --
+// (unrelated to MODE_RELAY, the device's own NFC relay-attack standalone
+// mode -- same word, different feature, named "rsess" here to keep them
+// apart). One browser holds the real Web Bluetooth link ("host"); any
+// number of others ("peer") join over a small WebSocket relay server
+// (remote-session-server.js) that only moves bytes -- no protocol logic
+// lives there. Once a peer is joined, rawWrite()/connected() below make
+// every existing tab (fullcmd.js, terminal.js, hw gdb) work unmodified,
+// because they all bottom out through those two functions.
+let rsessWs=null, rsessRole=null, rsessId=null;
+// Every round-trip that waits for a specific reply (request() below,
+// terminal.js's hw-gdb rspSend()) goes through this, so a host's own local
+// command and a peer's forwarded one can never be in flight on the single
+// physical link at the same time.
+let deviceLock=Promise.resolve();
+function withDeviceLock(fn){
+  const run=()=>fn();
+  const next=deviceLock.then(run,run);
+  deviceLock=next.catch(()=>{});
+  return next;
+}
+let lastRxAt=0;
+// Peer-forwarded raw bytes carry no reply-ness the host can recognize (it
+// doesn't parse them), so instead of waiting for "the" reply, the host just
+// waits for the link to go quiet -- good enough for the one-request-at-a-
+// time commands this page issues, without needing to understand them.
+function waitForQuiet(idleMs,maxMs){
+  return new Promise(resolve=>{
+    const start=Date.now();
+    (function tick(){
+      const sinceRx=Date.now()-lastRxAt;
+      if(sinceRx>=idleMs || Date.now()-start>=maxMs) return resolve();
+      setTimeout(tick, Math.min(idleMs-sinceRx, 50));
+    })();
+  });
+}
+
 function setStatus(kind, title, sub){
   $("lamp").className="lamp "+kind;
   $("st").textContent=title; $("stsub").textContent=sub||"";
@@ -155,14 +192,19 @@ function onPayload(p){
 }
 
 /* ---- Bluetooth ---- */
-function onNotify(e){
-  const v=new Uint8Array(e.target.value.buffer);
+// The real device's bytes, whichever source they came from (a direct GATT
+// notification here on the host, or relayed over rsessWs on a peer -- see
+// rsessConnect below). Kept separate from onNotify so both paths share it.
+function handleDeviceBytes(v){
+  lastRxAt=Date.now();
+  if(rsessRole==="host" && rsessWs && rsessWs.readyState===1) rsessWs.send(v);
   if(rawRspSink){ rawRspSink(v); return; }
   for(const f of parser.feed(Array.from(v))){
     if(f.cmd===CMD_EVENT) onPayload(f.data);
     else if(pending && f.cmd===pending.cmd){ const p=pending; pending=null; p.resolve(f); }
   }
 }
+function onNotify(e){ handleDeviceBytes(new Uint8Array(e.target.value.buffer)); }
 async function openLink(){
   setStatus("wait","Connecting…",device.name||"");
   const server=await device.gatt.connect();
@@ -240,6 +282,14 @@ document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==
 // write properties (ble_nus.c), so this is supported by the firmware.
 const BLE_WRITE_CHUNK = 180;
 async function rawWrite(bytes){
+  // A peer has no real GATT characteristic -- its "write" is just handing
+  // the same bytes to the host over the remote-session link, which writes
+  // them to the real device exactly as if they were its own.
+  if(rsessRole==="peer"){
+    if(!rsessWs || rsessWs.readyState!==1) throw new Error("remote session link is down");
+    rsessWs.send(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+    return;
+  }
   for(let o=0;o<bytes.length;o+=BLE_WRITE_CHUNK){
     await rx.writeValueWithResponse(bytes.slice(o, o+BLE_WRITE_CHUNK));
   }
@@ -247,12 +297,12 @@ async function rawWrite(bytes){
 
 /* ---- fetch the device's saved log (GET_RESULT 7004, repeated until an empty chunk) ---- */
 function request(cmd,data=[]){
-  return new Promise(async (resolve,reject)=>{
+  return withDeviceLock(() => new Promise(async (resolve,reject)=>{
     const t=setTimeout(()=>{ pending=null; reject(new Error("no reply over Bluetooth. If a USB serial session (the CLI, a terminal) is open, the device sends its answer there instead. Close it and try again.")); },6000);
     pending={cmd,resolve:f=>{clearTimeout(t);resolve(f);},reject:e=>{clearTimeout(t);reject(e);}};
     try{ await rawWrite(makeFrame(cmd,data)); }
     catch(e){ clearTimeout(t); pending=null; reject(e); }
-  });
+  }));
 }
 function parseRecords(raw){
   const out=[];
@@ -265,7 +315,7 @@ function parseRecords(raw){
 }
 async function fetchSaved(){
   const btn=$("fetch"), st=$("fstat");
-  if(!(device&&device.gatt.connected&&rx)){ st.textContent="Not connected. Press Connect first."; return; }
+  if(!connected()){ st.textContent="Not connected. Press Connect first."; return; }
   btn.disabled=true; st.textContent="Fetching…";
   try{
     await readState();
@@ -644,7 +694,7 @@ $("fetch").addEventListener("click",fetchSaved);
 
 /* ---- arm / disarm / test (7000 GET_MODE, 7006 TRIGGER, 7009 DISARM) ---- */
 let devState=null, devMode=null, devFlags=0;
-const connected=()=>!!(device&&device.gatt.connected&&rx);
+const connected=()=>!!(device&&device.gatt.connected&&rx) || (rsessRole==="peer" && !!rsessWs && rsessWs.readyState===1);
 function cmsg(t){ $("cstat").textContent=t; }
 async function readState(){
   const f=await request(CMD_GET_MODE);
@@ -737,4 +787,84 @@ $("test").addEventListener("click",()=>guarded(async()=>{
 }));
 $("btn").addEventListener("click",()=>{ (wantConn||(device&&device.gatt.connected)) ? disconnect() : connect(); });
 $("clr").addEventListener("click",()=>{ events=[]; save(); render(); });
+
+/* ---- remote session wiring (see the "rsess" block near the top) ---- */
+function rsessConnect(url, id, role){
+  const full = url + (url.includes("?")?"&":"?") + "session="+encodeURIComponent(id);
+  const ws = new WebSocket(full);
+  ws.binaryType = "arraybuffer";
+  rsessWs = ws; rsessRole = role; rsessId = id;
+  ws.onmessage = (ev) => {
+    if(typeof ev.data === "string"){ rsessControlMsg(ev.data); return; }
+    const bytes = new Uint8Array(ev.data);
+    if(rsessRole === "host") rsessHostHandleBinary(bytes);
+    else handleDeviceBytes(bytes);
+  };
+  ws.onopen = () => ws.send(JSON.stringify({role}));
+  ws.onclose = () => { if(rsessWs===ws) rsessOnClosed(); };
+  ws.onerror = () => {};
+  return ws;
+}
+function rsessControlMsg(raw){
+  let msg; try{ msg=JSON.parse(raw); }catch(e){ return; }
+  if(rsessRole!=="peer") return;
+  if(msg.type==="host_online"){ $("relaySt").textContent="Joined (live)"; $("relaySub").textContent="Driving the host's connected device. Every tab works as if you were plugged in locally."; }
+  else if(msg.type==="host_offline"){ $("relaySt").textContent="Joined (host offline)"; $("relaySub").textContent="Waiting for the host to reconnect its device…"; }
+}
+function rsessOnClosed(){
+  rsessWs=null; rsessRole=null;
+  $("relaySt").textContent = "Not connected"; $("relaySub").textContent = "The remote session ended.";
+  $("relayShare").style.display=""; $("relayStop").style.display="none";
+}
+// Peer's forwarded raw bytes carry no reply-ness this layer understands --
+// just relay them to the real device and release the lock once the link
+// goes quiet (see waitForQuiet above).
+function rsessHostHandleBinary(bytes){
+  withDeviceLock(async () => {
+    try{ await rawWrite(bytes); }catch(e){}
+    lastRxAt = Date.now();
+    await waitForQuiet(300, 3000);
+  });
+}
+async function rsessShare(){
+  showErr("");
+  $("relayErr").textContent="";
+  if(!(device && device.gatt.connected && rx)){ $("relayErr").textContent="Connect over Bluetooth first -- sharing mirrors a connection that already exists."; return; }
+  const url = $("relayUrl").value.trim();
+  if(!url){ $("relayErr").textContent="Enter the remote-session server's ws(s):// address first."; return; }
+  rsessId = rsessId || Math.random().toString(36).slice(2,10);
+  try{
+    await new Promise((resolve,reject)=>{
+      const ws = rsessConnect(url, rsessId, "host");
+      const t = setTimeout(()=>{ reject(new Error("timed out connecting")); }, 8000);
+      ws.addEventListener("open", ()=>{ clearTimeout(t); resolve(); }, {once:true});
+      ws.addEventListener("error", ()=>{ clearTimeout(t); reject(new Error("could not reach the relay server")); }, {once:true});
+    });
+  }catch(e){ $("relayErr").textContent = "Could not start sharing: "+e.message; return; }
+  const link = location.origin+location.pathname+"?rsess="+encodeURIComponent(rsessId)+"&rsrelay="+encodeURIComponent(url);
+  $("relaySt").textContent = "Sharing"; $("relaySub").textContent = "Join link: "+link;
+  $("relayShare").style.display="none"; $("relayStop").style.display="";
+}
+function rsessStop(){
+  if(rsessWs){ try{ rsessWs.close(); }catch(e){} }
+  rsessWs=null; rsessRole=null;
+  $("relaySt").textContent="Local only"; $("relaySub").textContent="Not shared. No login: anyone with the join link gets full control.";
+  $("relayShare").style.display=""; $("relayStop").style.display="none";
+}
+$("relayShare").addEventListener("click", rsessShare);
+$("relayStop").addEventListener("click", rsessStop);
+
+// Auto-join: a link from rsessShare() carries ?rsess=<id>&rsrelay=<url>.
+// A peer tab has no real device of its own -- the whole connection row and
+// remote-session controls are replaced with a plain status line.
+(function rsessAutoJoin(){
+  const q = new URLSearchParams(location.search);
+  const id = q.get("rsess"), url = q.get("rsrelay");
+  if(!id || !url) return;
+  $("relayHostControls").style.display="none";
+  document.querySelector(".status").style.display="none";   // no real device to connect to as a peer
+  $("relaySt").textContent="Joining…";
+  rsessConnect(url, id, "peer");
+})();
+
 load(); render();

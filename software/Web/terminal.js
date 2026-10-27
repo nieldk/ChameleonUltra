@@ -810,11 +810,13 @@ function rspEscape(bytes){
 }
 
 function rspSend(bodyBytes){
-  return new Promise((resolve,reject)=>{
+  // withDeviceLock (canary.js): serializes against request() and against
+  // any remote-session peer's forwarded traffic on the same physical link.
+  return withDeviceLock(() => new Promise((resolve,reject)=>{
     const t=setTimeout(()=>{ rspWaiter=null; reject(new Error("no RSP reply (armed? try 'hw gdb arm' first)")); }, RSP_TIMEOUT_MS);
     rspWaiter = {resolve:p=>{clearTimeout(t); resolve(p);}};
     rawWrite(rspAsciiFrame(bodyBytes)).catch(e=>{ clearTimeout(t); rspWaiter=null; reject(e); });
-  });
+  }));
 }
 function rspEnter(){ rspBuf=[]; rawRspSink=rspOnBytes; }
 function rspLeave(){ if(rawRspSink===rspOnBytes) rawRspSink=null; }
