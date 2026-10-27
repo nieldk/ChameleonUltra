@@ -88,7 +88,7 @@ let rawRspSink=null;
 // lives there. Once a peer is joined, rawWrite()/connected() below make
 // every existing tab (fullcmd.js, terminal.js, hw gdb) work unmodified,
 // because they all bottom out through those two functions.
-let rsessWs=null, rsessRole=null, rsessId=null;
+let rsessWs=null, rsessRole=null, rsessId=null, rsessLink=null, rsessPeerCount=0;
 // Every round-trip that waits for a specific reply (request() below,
 // terminal.js's hw-gdb rspSend()) goes through this, so a host's own local
 // command and a peer's forwarded one can never be in flight on the single
@@ -807,9 +807,15 @@ function rsessConnect(url, id, role){
 }
 function rsessControlMsg(raw){
   let msg; try{ msg=JSON.parse(raw); }catch(e){ return; }
+  if(msg.type==="peer_count" && rsessRole==="host"){ rsessPeerCount=msg.count; rsessUpdateHostStatus(); return; }
   if(rsessRole!=="peer") return;
   if(msg.type==="host_online"){ $("relaySt").textContent="Joined (live)"; $("relaySub").textContent="Driving the host's connected device. Every tab works as if you were plugged in locally."; }
   else if(msg.type==="host_offline"){ $("relaySt").textContent="Joined (host offline)"; $("relaySub").textContent="Waiting for the host to reconnect its device…"; }
+}
+function rsessUpdateHostStatus(){
+  const n=rsessPeerCount;
+  $("relaySt").textContent = "Sharing · "+n+" peer"+(n===1?"":"s")+" connected";
+  $("relaySub").textContent = "Join link: "+rsessLink;
 }
 function rsessOnClosed(){
   rsessWs=null; rsessRole=null;
@@ -832,7 +838,10 @@ async function rsessShare(){
   if(!(device && device.gatt.connected && rx)){ $("relayErr").textContent="Connect over Bluetooth first -- sharing mirrors a connection that already exists."; return; }
   const url = $("relayUrl").value.trim();
   if(!url){ $("relayErr").textContent="Enter the remote-session server's ws(s):// address first."; return; }
-  rsessId = rsessId || Math.random().toString(36).slice(2,10);
+  // Persisted so the join link stays the same across reloads/reconnects
+  // instead of a fresh random id (and fresh link) every time you share.
+  rsessId = rsessId || (()=>{ try{ return localStorage.getItem("rsessId"); }catch(e){ return null; } })() || Math.random().toString(36).slice(2,10);
+  try{ localStorage.setItem("rsessId", rsessId); }catch(e){}
   try{
     await new Promise((resolve,reject)=>{
       const ws = rsessConnect(url, rsessId, "host");
@@ -841,13 +850,13 @@ async function rsessShare(){
       ws.addEventListener("error", ()=>{ clearTimeout(t); reject(new Error("could not reach the relay server")); }, {once:true});
     });
   }catch(e){ $("relayErr").textContent = "Could not start sharing: "+e.message; return; }
-  const link = location.origin+location.pathname+"?rsess="+encodeURIComponent(rsessId)+"&rsrelay="+encodeURIComponent(url);
-  $("relaySt").textContent = "Sharing"; $("relaySub").textContent = "Join link: "+link;
+  rsessLink = location.origin+location.pathname+"?rsess="+encodeURIComponent(rsessId)+"&rsrelay="+encodeURIComponent(url);
+  rsessPeerCount=0; rsessUpdateHostStatus();
   $("relayShare").style.display="none"; $("relayStop").style.display="";
 }
 function rsessStop(){
   if(rsessWs){ try{ rsessWs.close(); }catch(e){} }
-  rsessWs=null; rsessRole=null;
+  rsessWs=null; rsessRole=null; rsessLink=null; rsessPeerCount=0;
   $("relaySt").textContent="Local only"; $("relaySub").textContent="Not shared. No login: anyone with the join link gets full control.";
   $("relayShare").style.display=""; $("relayStop").style.display="none";
 }
