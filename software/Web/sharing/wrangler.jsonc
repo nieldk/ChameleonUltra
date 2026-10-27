@@ -1,0 +1,13 @@
+{
+  "name": "phreakbyte-rsess-relay",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "durable_objects": {
+    "bindings": [
+      { "name": "RSESS_ROOM", "class_name": "RsessRoom" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RsessRoom"] }
+  ]
+}
