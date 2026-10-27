@@ -1,10 +1,11 @@
 /*
  * mode_gdb_gateway.c
  *
- * Standalone mode: a GDB memory/flash gateway on the device's own USB-CDC link.
- * While armed, the CDC link speaks the GDB Remote Serial Protocol instead of
- * the framed CLI protocol (see utils/gdb_rsp.c), so arm-none-eabi-gdb can
- * `target remote` this Chameleon and read/write memory and program flash
+ * Standalone mode: a GDB memory/flash gateway on the device's USB-CDC or BLE
+ * NUS link, whichever is up. While armed, that link speaks the GDB Remote
+ * Serial Protocol instead of the framed CLI protocol (see utils/gdb_rsp.c),
+ * so arm-none-eabi-gdb can `target remote` this Chameleon and read/write
+ * memory and program flash
  * (gdb `load`/`dump`/`x`/`set`). No SWD, no external connections, no execution
  * control (no breakpoints/step) -- the firmware keeps running while gdb pokes.
  *
@@ -25,18 +26,18 @@ static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len) {
     (void)cfg;
     (void)cfg_len;
     gdb_rsp_enter();
-    NRF_LOG_INFO("gdb_gateway: armed, CDC is now GDB RSP");
+    NRF_LOG_INFO("gdb_gateway: armed, active link is now GDB RSP");
     return STANDALONE_RC_OK;
 }
 
 static standalone_rc_t on_exit(void) {
     gdb_rsp_leave();
-    NRF_LOG_INFO("gdb_gateway: disarmed, CDC back to CLI");
+    NRF_LOG_INFO("gdb_gateway: disarmed, link back to CLI");
     return STANDALONE_RC_OK;
 }
 
 static standalone_rc_t on_button(standalone_button_evt_t evt) {
-    (void)evt;   /* no on-device action; all work is over USB */
+    (void)evt;   /* no on-device action; all work is over USB or BLE */
     return STANDALONE_RC_OK;
 }
 

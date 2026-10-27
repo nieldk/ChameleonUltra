@@ -23,6 +23,9 @@
 #include "dataframe.h"
 #include "hw_connect.h"
 #include "settings.h"
+#if CONFIG_STANDALONE_GDB_GATEWAY
+#include "gdb_rsp.h"
+#endif
 
 #define NRF_LOG_MODULE_NAME ble_main
 #include "nrf_log.h"
@@ -197,6 +200,14 @@ static void nus_data_handler(ble_nus_evt_t *p_evt) {
     if (p_evt->type == BLE_NUS_EVT_RX_DATA) {
         NRF_LOG_DEBUG("Received data from BLE NUS.");
         NRF_LOG_HEXDUMP_DEBUG(p_evt->params.rx_data.p_data, p_evt->params.rx_data.length);
+#if CONFIG_STANDALONE_GDB_GATEWAY
+        // When gdb_gateway is armed the link speaks GDB RSP, not the framed
+        // CLI protocol; route bytes accordingly (mirrors usb_main.c).
+        if (gdb_rsp_active()) {
+            gdb_rsp_rx((const uint8_t *)(p_evt->params.rx_data.p_data), p_evt->params.rx_data.length);
+            return;
+        }
+#endif
         data_frame_receive((uint8_t *)(p_evt->params.rx_data.p_data), p_evt->params.rx_data.length);
     }
 }

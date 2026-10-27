@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "bsp_wdt.h"
+#include "ble_main.h"
 #include "delayed_reset.h"
 #include "nrf_delay.h"
 #include "nrf_fstorage.h"
@@ -151,8 +152,15 @@ static int parse_hex(const char **pp, const char *end, uint32_t *out) {
 }
 
 /* ---- packet output --------------------------------------------------- */
+/* Same link-selection as app_cmd.c's auto_response_data: reply on whichever
+ * transport is actually up, USB preferred. Lets the gateway work unmodified
+ * whether gdb attaches over USB-CDC or BLE NUS. */
 static void send_raw(const char *s, uint16_t len) {
-    usb_cdc_write(s, len);
+    if (is_usb_working()) {
+        usb_cdc_write(s, len);
+    } else if (is_nus_working()) {
+        nus_data_response((uint8_t *)s, len);
+    }
 }
 
 /* Frame and send m_out[0..len): "$<payload>#<csum>". */
@@ -607,9 +615,11 @@ void gdb_mon_handle(uint32_t *frame, uint32_t exc_return, uint32_t *r4_11) {
     send_str("S05");                 /* unsolicited stop reply to gdb */
 
     while (m_run == 0) {
-        /* If gdb closed the port (quit / cable yank) while stopped, resume and
-         * disarm breakpoints so the firmware does not stay frozen in here. */
-        if (!g_usb_port_opened) {
+        /* If the active link dropped (gdb quit, cable yank, BLE disconnect)
+         * while stopped, resume and disarm breakpoints so the firmware does
+         * not stay frozen in here. g_usb_port_opened is only meaningful on
+         * USB, so also accept a live BLE NUS link. */
+        if (!g_usb_port_opened && !is_nus_working()) {
             bp_clear_all();
             m_run = 1;
             break;

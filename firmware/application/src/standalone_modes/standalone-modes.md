@@ -354,45 +354,60 @@ the mode **re-selects before every key attempt**, so a full 16-sector run takes
 BOTH_SHORT = run one check · BOTH_LONG = arm/disarm · BOTH_VLONG = discard
 results. No `--opt-in` needed (never writes).
 
-## `gdb_gateway` ,  GDB memory/flash gateway over USB  *(Lite + Ultra)*
+## `gdb_gateway` ,  GDB memory/flash gateway over USB or BLE  *(Lite + Ultra)*
 
-The odd one out: instead of running host-less, this mode turns the USB-CDC link
-into a **GDB server**. While armed, the CDC speaks the GDB Remote Serial
-Protocol instead of the CLI, so `arm-none-eabi-gdb` can `target remote` the
-device, read/dump memory, program flash, and (by default) set **breakpoints**
-and **step** ,  all with no SWD probe and no wires.
+The odd one out: instead of running host-less, this mode turns the device's
+active link ,  USB-CDC or BLE NUS, whichever is up ,  into a **GDB server**.
+While armed, that link speaks the GDB Remote Serial Protocol instead of the
+CLI, so `arm-none-eabi-gdb` can `target remote` the device, read/dump memory,
+program flash, and (by default) set **breakpoints** and **step** ,  all with
+no SWD probe and no wires. Replies go out the same link the request came in
+on, picked the same way the normal CLI protocol auto-selects USB over BLE
+(`app_cmd.c`'s `auto_response_data`).
 
 Execution control is monitor-mode debug (Cortex-M DebugMonitor + FPB/DWT):
 **up to 6 hardware breakpoints, 4 watchpoints**, continue and register access.
 Its limits are inherent: you **cannot break inside the SoftDevice or
-high-priority ISRs** (the monitor sits below them so the USB link and radio
+high-priority ISRs** (the monitor sits below them so the link and radio
 keep running while you are stopped), it is **not a true halt** (higher-priority
 interrupts keep executing at a breakpoint), and it only works with no SWD
 debugger attached. There is **no async interrupt** (gdb Ctrl-C): stopping would
-have to come from the USB/RSP path, which reenters the USB stack, so you **stop
-a running target by hitting a breakpoint**, not by interrupting. **Stepping is
-software single-step:** hardware single-step is not advertised (resuming for
-one instruction lets a USB/SoftDevice interrupt escape the step and drop the
-link), so gdb steps with temporary breakpoints + continue over the same
-breakpoint path ,  `step`/`next`/`stepi` work, using 1-2 FPB slots while
-stepping. Build-time flag `GDB_GATEWAY_EXEC` (default `1`) gates it; set
-`GDB_GATEWAY_EXEC=0` for a smaller memory/flash-only gateway.
+have to come from the USB/BLE RSP path, which reenters the USB/SoftDevice
+stack, so you **stop a running target by hitting a breakpoint**, not by
+interrupting. **Stepping is software single-step:** hardware single-step is
+not advertised (resuming for one instruction lets a USB/SoftDevice interrupt
+escape the step and drop the link), so gdb steps with temporary breakpoints +
+continue over the same breakpoint path ,  `step`/`next`/`stepi` work, using
+1-2 FPB slots while stepping. Build-time flag `GDB_GATEWAY_EXEC` (default `1`)
+gates it; set `GDB_GATEWAY_EXEC=0` for a smaller memory/flash-only gateway.
 
-**Transfer speed:** the CDC link is USB bulk (the `hw status` baud is cosmetic),
-so bulk reads are bounded by RSP round-trips, not line rate. `GDB_GATEWAY_PKT`
+**Transfer speed:** over USB the CDC link is bulk (the `hw status` baud is
+cosmetic), so bulk reads are bounded by RSP round-trips, not line rate. Over
+BLE each round-trip is also capped by the negotiated ATT MTU (typically far
+below `GDB_PACKET_SIZE`), so BLE is noticeably slower for `dump`/`load` ,  fine
+for register/memory pokes, painful for a full-chip dump. `GDB_GATEWAY_PKT`
 (default `0x200`) sets the advertised PacketSize and the derived RX/TX buffers;
-raise it (e.g. `0x800`) to move more per round-trip and cut a full-chip
-`dump`/`find` several-fold, for a few KB more RAM. Reads also feed the watchdog,
-so a long scan won't reset the device.
+raise it (e.g. `0x800`) to move more per USB round-trip and cut a full-chip
+`dump`/`find` several-fold, for a few KB more RAM ,  it does not help the BLE
+MTU ceiling. Reads also feed the watchdog, so a long scan won't reset the
+device.
+
+gdb itself has no BLE transport, so the BLE path needs a local bridge
+(`software/script/gdb_ble_bridge.py`) that opens a TCP port and pumps raw
+bytes to/from the device over `chameleon_ble`; gdb then targets that TCP port
+exactly as it would a serial port.
 
 ```
 standalone set-mode gdb-gateway --opt-in   # can program flash ,  --opt-in required
-#  press both-buttons long to ARM (green LED); the CDC is now GDB RSP
-#  then exit the CLI and point gdb at the same port:
-arm-none-eabi-gdb -ex 'target remote /dev/ttyACM0'
+#  press both-buttons long to ARM (green LED); the active link is now GDB RSP
+#  then exit the CLI and point gdb at the same link:
+arm-none-eabi-gdb -ex 'target remote /dev/ttyACM0'      # USB
+#  or, over BLE:
+python3 software/script/gdb_ble_bridge.py
+arm-none-eabi-gdb -ex 'target remote localhost:3333'    # BLE, via the bridge
 #  (gdb) dump memory flash.bin 0x0 0x100000     # full-chip dump
 #  (gdb) restore blob.bin binary 0x000c7000     # write a non-running region
-#  press both-buttons long again to DISARM; the CDC returns to the CLI
+#  press both-buttons long again to DISARM; the link returns to the CLI
 ```
 
 **Reads are unrestricted:** dump any flash/RAM/peripheral address (the whole
@@ -424,7 +439,8 @@ disarm with both-buttons long. For big transfers, `set remotetimeout 60` in gdb.
   to the default on every arm.
 - `monitor lock` ,  restore the default `0xC7000` write floor.
 - `monitor reset` ,  reboot the device. The gdb link drops (the device is the
-  target), coming back up disarmed.
+  target), coming back up disarmed. Over BLE, `gdb_ble_bridge.py` reconnects
+  automatically on the next gdb session; gdb itself still needs reattaching.
 
 ---
 ## `u2f` ,  FIDO U2F (CTAP1) authenticator over NFC  *(Lite + Ultra)*
