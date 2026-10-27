@@ -399,15 +399,17 @@ exactly as it would a serial port.
 
 ```
 standalone set-mode gdb-gateway --opt-in   # can program flash ,  --opt-in required
-#  press both-buttons long to ARM (green LED); the active link is now GDB RSP
-#  then exit the CLI and point gdb at the same link:
+#  ARM: press both-buttons long (green LED), or `standalone trigger` / the
+#  host's STANDALONE_TRIGGER command -- app_standalone_trigger() arms in
+#  software if disarmed, no button needed. Either way the active link is
+#  now GDB RSP, so exit the CLI (or, over BLE, disconnect it) first.
 arm-none-eabi-gdb -ex 'target remote /dev/ttyACM0'      # USB
 #  or, over BLE:
 python3 software/script/gdb_ble_bridge.py
 arm-none-eabi-gdb -ex 'target remote localhost:3333'    # BLE, via the bridge
 #  (gdb) dump memory flash.bin 0x0 0x100000     # full-chip dump
 #  (gdb) restore blob.bin binary 0x000c7000     # write a non-running region
-#  press both-buttons long again to DISARM; the link returns to the CLI
+#  DISARM: both-buttons long again, or `standalone disarm` / STANDALONE_DISARM
 ```
 
 **Reads are unrestricted:** dump any flash/RAM/peripheral address (the whole
@@ -421,10 +423,20 @@ can be lowered at runtime with `monitor unlock-app` (see below) for targeted
 patches; MBR and SoftDevice stay protected.
 
 **Config:** none. **Buttons:** BOTH_LONG = arm/disarm; no short-press or
-very-long action. **Produces no results** (`get-result` is unused). **Requires
-`--opt-in`** (it can program flash). Works on Lite and Ultra ,  no reader
-hardware is touched. Detaching gdb leaves the mode armed so you can reconnect;
-disarm with both-buttons long. For big transfers, `set remotetimeout 60` in gdb.
+very-long action. Arm/disarm also works without a button: `standalone trigger`/
+`standalone disarm` (STANDALONE_TRIGGER/STANDALONE_DISARM), which is what the
+web terminal's `hw gdb arm`/`hw gdb disarm` use. **Produces no results**
+(`get-result` is unused). **Requires `--opt-in`** (it can program flash).
+Works on Lite and Ultra ,  no reader hardware is touched. Detaching gdb (or
+the web terminal's `hw gdb exit`) leaves the mode armed so you can reconnect;
+disarm with both-buttons long or `hw gdb disarm`. For big transfers, `set
+remotetimeout 60` in gdb.
+
+**In-browser client:** `phreakbyte.html`'s terminal tab has `hw gdb` ,  a small
+RSP client built straight into the page (`terminal.js`), so BLE users can
+arm, read/write memory, erase/write/flash-done, and run `monitor` commands
+with no arm-none-eabi-gdb and no bridge script. It has no breakpoints or
+stepping; for those, use real gdb via USB or `gdb_ble_bridge.py` above.
 
 **Monitor commands** (gdb `monitor <cmd>`, served over the same link):
 - `monitor help` ,  list the commands.

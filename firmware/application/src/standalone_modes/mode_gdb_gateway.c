@@ -9,7 +9,9 @@
  * (gdb `load`/`dump`/`x`/`set`). No SWD, no external connections, no execution
  * control (no breakpoints/step) -- the firmware keeps running while gdb pokes.
  *
- * Arm/disarm through the normal standalone workflow (both-button long press).
+ * Arm/disarm through the normal standalone workflow: a both-buttons long
+ * press, or the host commands STANDALONE_TRIGGER/STANDALONE_DISARM (no
+ * button needed -- app_standalone_trigger() arms in software if disarmed).
  * Arming requires the host opt-in flag because the gateway can program
  * arbitrary flash (writes_slot is set purely to force that gate).
  *

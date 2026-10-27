@@ -72,6 +72,13 @@ class Parser{
 let device=null, tx=null, rx=null, pending=null, parser=new Parser(), lastSeq=null, wake=null, wantConn=false, retry=null;
 let events=[];
 
+// Set by terminal.js while the gdb_gateway standalone mode is armed: once
+// armed, NUS carries raw GDB RSP bytes instead of the framed CLI protocol
+// (firmware/application/src/utils/gdb_rsp.c), so feeding them to `parser`
+// would just discard them byte-by-byte looking for the 0x11 sync. When set,
+// onNotify hands raw notification bytes straight to this sink instead.
+let rawRspSink=null;
+
 function setStatus(kind, title, sub){
   $("lamp").className="lamp "+kind;
   $("st").textContent=title; $("stsub").textContent=sub||"";
@@ -150,6 +157,7 @@ function onPayload(p){
 /* ---- Bluetooth ---- */
 function onNotify(e){
   const v=new Uint8Array(e.target.value.buffer);
+  if(rawRspSink){ rawRspSink(v); return; }
   for(const f of parser.feed(Array.from(v))){
     if(f.cmd===CMD_EVENT) onPayload(f.data);
     else if(pending && f.cmd===pending.cmd){ const p=pending; pending=null; p.resolve(f); }
@@ -191,6 +199,7 @@ async function connect(){
 }
 function onDrop(){
   $("btn").textContent="Connect";
+  rawRspSink=null;   // the gdb session, if any, died with the link
   if(pending){ pending.reject(new Error("connection lost")); pending=null; }
   if(wantConn && $("oRe").checked){ setStatus("wait","Connection lost","Reconnecting…"); alertUser({level:3},"connection to the canary was lost"); scheduleRetry(); }
   else setStatus("","Not connected","");

@@ -19,10 +19,13 @@
  * on_exit -> gdb_rsp_leave(). While entered, the active link (USB-CDC or BLE
  * NUS) is parsed as GDB RSP instead of the framed CLI protocol; replies go
  * out the same link they came in on (usb_main.c / ble_main.c pick the
- * transport, same as the normal CLI's auto_response_data). The mode is
- * armed/disarmed through the normal standalone workflow (both-button long
- * press), so the gateway never self-disarms; detaching gdb just leaves the
- * link idle, ready to reconnect, until the mode is disarmed. */
+ * transport, same as the normal CLI's auto_response_data). Arming/disarming
+ * is the normal standalone workflow: a both-buttons long press
+ * (app_standalone_on_button), or the host commands STANDALONE_TRIGGER/
+ * STANDALONE_DISARM (app_standalone_trigger()/_disarm(), app_standalone.c)
+ * -- the latter is how the web terminal's `hw gdb arm`/`disarm` work with no
+ * button press at all. Detaching gdb just leaves the link idle, ready to
+ * reconnect, until the mode is disarmed. */
 void gdb_rsp_enter(void);
 void gdb_rsp_leave(void);
 

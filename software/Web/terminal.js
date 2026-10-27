@@ -4,7 +4,8 @@
  * / cli_hf_mf.py command grammar (hw / hw slot / hw settings / hf 14a / hf mf),
  * running in-browser over the same request()/CU plumbing fullcmd.js uses.
  * Loaded after canary.js and fullcmd.js: reuses their globals (request(),
- * connected(), need(), $(), hexBytes(), bhex(), stname(), OK_STATUSES, CU).
+ * connected(), need(), $(), hexBytes(), bhex(), stname(), OK_STATUSES, CU,
+ * rawWrite(), rawRspSink -- the last two by `hw gdb`, see below).
  *
  * THIS IS A SUBSET, NOT THE WHOLE CLI. The real CLI is ~195 commands across
  * hw/hf/lf/slot/standalone/data/emv, several of which (hf mf nested/darkside/
@@ -762,6 +763,208 @@ hwLog.command("clear", "Erase the stored debug log", [], async () => {
 // `hw u2f set-attestation` needs a local PEM/DER key+cert file and a crypto
 // library this terminal doesn't have -- the whole `hw u2f` group isn't
 // registered rather than left as an empty stub.
+
+/* ---- hw gdb --------------------------------------------------------
+ * A GDB Remote Serial Protocol client for the gdb_gateway standalone mode,
+ * built straight into the terminal -- no arm-none-eabi-gdb, no local bridge.
+ * app_standalone_trigger() (CMD_TRIGGER/7006, used by `hw gdb arm` below)
+ * software-arms the mode via transition_arm() the same way a both-buttons
+ * long-press does (app_standalone.c), so this needs no physical button.
+ * Once armed, the active link -- BLE here -- speaks RSP instead of the
+ * framed CLI protocol (gdb_rsp.c), so everything below bypasses `request()`
+ * and talks raw $...#cksum packets over rawWrite()/rawRspSink.
+ * Memory/flash only: no breakpoints or stepping (that needs a real gdb
+ * front-end -- see software/script/gdb_ble_bridge.py for that path). */
+const hwGdb = hw.subgroup("gdb", "GDB RSP client for the gdb_gateway standalone mode (memory/flash, no breakpoints)");
+
+const RSP_TIMEOUT_MS = 5000;
+let rspBuf = [], rspWaiter = null;
+
+function rspOnBytes(v){
+  for(const b of v) rspBuf.push(b);
+  while(rspBuf.length && rspBuf[0] !== 0x24 /* $ */) rspBuf.shift();   // drop acks/junk before '$'
+  if(rspBuf.length < 4) return;
+  const hashAt = rspBuf.indexOf(0x23 /* # */, 1);
+  if(hashAt < 0 || rspBuf.length < hashAt+3) return;
+  const payload = rspBuf.slice(1, hashAt);
+  rspBuf = rspBuf.slice(hashAt+3);
+  if(rspWaiter){ const w=rspWaiter; rspWaiter=null; w.resolve(payload); }
+}
+
+function rspAsciiFrame(bodyBytes){
+  let cs=0; for(const b of bodyBytes) cs=(cs+b)&0xFF;
+  const hx="0123456789abcdef", c1=hx[(cs>>4)&0xF], c2=hx[cs&0xF];
+  return new Uint8Array([0x24, ...bodyBytes, 0x23, c1.charCodeAt(0), c2.charCodeAt(0)]);
+}
+const rspAscii = s => Array.from(s, c => c.charCodeAt(0));
+
+// gdb's binary escaping (vFlashWrite payload): $, #, 0x7d and 0x2a are sent
+// as 0x7d followed by byte^0x20 -- mirrors unescape() in gdb_rsp.c.
+function rspEscape(bytes){
+  const out=[];
+  for(const b of bytes){
+    if(b===0x24||b===0x23||b===0x7d||b===0x2a) out.push(0x7d, b^0x20);
+    else out.push(b);
+  }
+  return out;
+}
+
+function rspSend(bodyBytes){
+  return new Promise((resolve,reject)=>{
+    const t=setTimeout(()=>{ rspWaiter=null; reject(new Error("no RSP reply (armed? try 'hw gdb arm' first)")); }, RSP_TIMEOUT_MS);
+    rspWaiter = {resolve:p=>{clearTimeout(t); resolve(p);}};
+    rawWrite(rspAsciiFrame(bodyBytes)).catch(e=>{ clearTimeout(t); rspWaiter=null; reject(e); });
+  });
+}
+function rspEnter(){ rspBuf=[]; rawRspSink=rspOnBytes; }
+function rspLeave(){ if(rawRspSink===rspOnBytes) rawRspSink=null; }
+function rspActive(){ return rawRspSink===rspOnBytes; }
+function hexAddr(s){   // addresses are always hex here; parseInt(…,16) ignores an optional "0x"
+  const v = parseInt(s, 16);
+  if(!Number.isFinite(v)) throw new ArgError("bad address: "+s);
+  return v>>>0;
+}
+const numArg = s => s.toLowerCase().startsWith("0x") ? parseInt(s,16) : parseInt(s,10);   // length args: decimal, or 0x-hex
+
+hwGdb.command("arm", "Select and arm gdb_gateway (software arm, same path as a both-buttons long-press)", [], async () => {
+  need();
+  const f0 = okOrThrow(await request(CMD_GET_MODE));
+  if(f0.data[1] !== MODE_GDB){
+    okOrThrow(await request(CMD_SET_MODE, [MODE_GDB, FLAG_OPTIN]));
+  }
+  okOrThrow(await request(CMD_TRIGGER));   // arms if disarmed (app_standalone_trigger)
+  const f1 = okOrThrow(await request(CMD_GET_MODE));
+  if(f1.data[0] === 0) return [" - Arm rejected (status ok but still disarmed) -- opt-in flag missing?"];
+  return [" - gdb_gateway armed. The active link now speaks GDB RSP.", "   Use 'hw gdb enter' to start, 'hw gdb disarm' when done."];
+});
+
+hwGdb.command("disarm", "Disarm gdb_gateway (leaves RSP mode on the terminal side first)", [], async () => {
+  rspLeave();
+  need();
+  okOrThrow(await request(CMD_DISARM));
+  return [" - Disarm requested. The device saves state and returns to the framed CLI protocol."];
+});
+
+hwGdb.command("enter", "Switch this terminal into raw RSP mode and confirm the device answers", [], async () => {
+  need();
+  if(rspActive()) return [" - Already in RSP mode."];
+  rspEnter();
+  try{
+    const p = await rspSend(rspAscii("?"));
+    return [" - RSP mode active (device replied: "+String.fromCharCode(...p)+")."];
+  }catch(e){
+    rspLeave();
+    return [" - "+e.message, "   Run 'hw gdb arm' first if you haven't."];
+  }
+});
+
+hwGdb.command("exit", "Leave raw RSP mode on the terminal side (does not disarm the device)", [], async () => {
+  rspLeave();
+  return [" - Back to the framed CLI protocol. Device is still armed; use 'hw gdb disarm' to fully exit."];
+});
+
+hwGdb.command("mem-read", "Read memory: hw gdb mem-read <addr> <len>", [
+  {positional:true, dest:"args", required:true},
+], async (a) => {
+  if(!rspActive()) throw new ArgError("not in RSP mode; run 'hw gdb enter' first");
+  const [addrS, lenS] = a.args;
+  if(addrS===undefined || lenS===undefined) throw new ArgError("usage: mem-read <addr> <len>");
+  const addr = hexAddr(addrS), len = numArg(lenS);
+  const p = await rspSend(rspAscii("m"+addr.toString(16)+","+len.toString(16)));
+  const s = String.fromCharCode(...p);
+  if(s[0]==="E") return [" - error: "+s];
+  const bytes = []; for(let i=0;i+1<s.length;i+=2) bytes.push(parseInt(s.substr(i,2),16));
+  const lines = [" - 0x"+addr.toString(16)+" ("+bytes.length+" bytes):"];
+  for(let off=0; off<bytes.length; off+=16){
+    const chunk = bytes.slice(off, off+16);
+    const hexs = chunk.map(b=>b.toString(16).padStart(2,"0")).join(" ");
+    const text = chunk.map(b => (b>=0x20&&b<0x7F) ? String.fromCharCode(b) : ".").join("");
+    lines.push("   "+(addr+off).toString(16).padStart(8,"0")+"  "+hexs.padEnd(47)+"  "+text);
+  }
+  return lines;
+});
+
+hwGdb.command("mem-write", "Write memory: hw gdb mem-write <addr> <hex-bytes>", [
+  {positional:true, dest:"args", required:true},
+], async (a) => {
+  if(!rspActive()) throw new ArgError("not in RSP mode; run 'hw gdb enter' first");
+  const [addrS, hexS] = a.args;
+  if(addrS===undefined || hexS===undefined) throw new ArgError("usage: mem-write <addr> <hex-bytes>");
+  const addr = hexAddr(addrS), clean = hexS.replace(/[^0-9a-fA-F]/g,"");
+  if(clean.length % 2) throw new ArgError("hex-bytes must be an even number of hex digits");
+  const p = await rspSend(rspAscii("M"+addr.toString(16)+","+(clean.length/2).toString(16)+":"+clean));
+  const s = String.fromCharCode(...p);
+  return [s==="OK" ? " - OK" : " - error: "+s];
+});
+
+hwGdb.command("flash-erase", "Erase a flash range (0xC7000-0x100000 only): hw gdb flash-erase <addr> <len>", [
+  {positional:true, dest:"args", required:true},
+], async (a) => {
+  if(!rspActive()) throw new ArgError("not in RSP mode; run 'hw gdb enter' first");
+  const [addrS, lenS] = a.args;
+  if(addrS===undefined || lenS===undefined) throw new ArgError("usage: flash-erase <addr> <len>");
+  const addr = hexAddr(addrS), len = numArg(lenS);
+  const p = await rspSend(rspAscii("vFlashErase:"+addr.toString(16)+","+len.toString(16)));
+  const s = String.fromCharCode(...p);
+  return [s==="OK" ? " - Erase OK" : " - error: "+s];
+});
+
+hwGdb.command("flash-write", "Stream bytes into an erased flash range: hw gdb flash-write <addr> <hex-bytes>", [
+  {positional:true, dest:"args", required:true},
+], async (a) => {
+  if(!rspActive()) throw new ArgError("not in RSP mode; run 'hw gdb enter' first");
+  const [addrS, hexS] = a.args;
+  if(addrS===undefined || hexS===undefined) throw new ArgError("usage: flash-write <addr> <hex-bytes>");
+  let addr = hexAddr(addrS);
+  const clean = hexS.replace(/[^0-9a-fA-F]/g,"");
+  if(clean.length % 2) throw new ArgError("hex-bytes must be an even number of hex digits");
+  const bytes = []; for(let i=0;i<clean.length;i+=2) bytes.push(parseInt(clean.substr(i,2),16));
+  const CHUNK = 256;   // raw bytes per vFlashWrite, well under GDB_PACKET_SIZE after escaping
+  for(let off=0; off<bytes.length; off+=CHUNK){
+    const chunk = bytes.slice(off, off+CHUNK);
+    const body = [...rspAscii("vFlashWrite:"+(addr+off).toString(16)+":"), ...rspEscape(chunk)];
+    const p = await rspSend(body);
+    const s = String.fromCharCode(...p);
+    if(s!=="OK") return [" - error at offset "+off+": "+s];
+  }
+  return [" - Wrote "+bytes.length+" bytes at 0x"+addr.toString(16)+". Run 'hw gdb flash-done' to flush."];
+});
+
+hwGdb.command("flash-done", "Flush any buffered flash-write bytes", [], async () => {
+  if(!rspActive()) throw new ArgError("not in RSP mode; run 'hw gdb enter' first");
+  const p = await rspSend(rspAscii("vFlashDone"));
+  const s = String.fromCharCode(...p);
+  return [s==="OK" ? " - Flash write finalized" : " - error: "+s];
+});
+
+hwGdb.command("monitor", "Send a 'monitor <cmd>' (help/info/unlock-app/lock/reset)", [
+  {positional:true, dest:"args", required:true},
+], async (a) => {
+  if(!rspActive()) throw new ArgError("not in RSP mode; run 'hw gdb enter' first");
+  const cmd = a.args.join(" ");
+  const hex = Array.from(cmd).map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join("");
+  const p = await rspSend(rspAscii("qRcmd,"+hex));
+  const s = String.fromCharCode(...p);
+  if(!s.length) return [" - (unknown monitor command)"];
+  let out=""; for(let i=0;i+1<s.length;i+=2) out+=String.fromCharCode(parseInt(s.substr(i,2),16));
+  return out.split("\n").filter(l=>l.length);
+});
+
+hwGdb.command("regs", "Read r0-r15, xPSR (all-zero unless halted; this terminal has no breakpoints)", [], async () => {
+  if(!rspActive()) throw new ArgError("not in RSP mode; run 'hw gdb enter' first");
+  const p = await rspSend(rspAscii("g"));
+  const s = String.fromCharCode(...p);
+  const NAMES=["r0","r1","r2","r3","r4","r5","r6","r7","r8","r9","r10","r11","r12","sp","lr","pc","xpsr"];
+  const lines=[];
+  for(let i=0;i<17;i++){
+    const w = s.substr(i*8,8);
+    if(w.length<8) break;
+    // target sends each register little-endian; reverse the byte pairs to print MSB-first.
+    const be = w.match(/../g).reverse().join("");
+    lines.push("   "+NAMES[i].padEnd(5)+"0x"+be);
+  }
+  return lines.length ? lines : [" - no register data"];
+});
 
 /* ================= hf ================= */
 const hf = ROOT.subgroup("hf", "High Frequency commands");
@@ -2034,7 +2237,8 @@ function helpFor(node){
   if(node.specs && node.specs.length){
     lines.push("flags:");
     for(const s of node.specs){
-      lines.push("  "+s.names.join(", ")+(s.takesValue?" <value>":"")+(s.required?"  (required)":""));
+      const label = s.positional ? "<"+s.dest+">" : s.names.join(", ")+(s.takesValue?" <value>":"");
+      lines.push("  "+label+(s.required?"  (required)":""));
     }
   }
   return lines;
