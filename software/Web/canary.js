@@ -8,6 +8,7 @@ const STATES = ["disarmed","armed, waiting","mode select","armed, running"];
 const MODES = {0:"none",1:"autoclone",2:"read_replay",3:"authtrace",4:"slot_cycle",5:"dict_check",6:"emul_trace",7:"relay",8:"hf14a_tap_sniff",9:"nfc_canary",10:"gdb_gateway",11:"u2f"};
 const CMD_EVENT = 7010;
 const CMD_GET_CONFIG = 7002, CMD_SET_CONFIG = 7003, CMD_GET_SIZES = 7007, CMD_RELAY_DIAG = 7008;
+const CMD_GET_DEVICE_CAPABILITIES = 1035;
 const MODE_AUTHTRACE = 3, MODE_SLOT = 4, MODE_RELAY = 7, MODE_TAP = 8;
 const MODE_AUTOCLONE = 1, MODE_READ_REPLAY = 2, MODE_DICT = 5, MODE_GDB = 10, MODE_U2F = 11;
 const ACTION_MODES = [MODE_READ_REPLAY, MODE_AUTOCLONE, MODE_DICT];  /* trigger-driven reader modes */
@@ -70,6 +71,24 @@ class Parser{
 
 /* ---- state ---- */
 let device=null, tx=null, rx=null, pending=null, parser=new Parser(), lastSeq=null, wake=null, wantConn=false, retry=null;
+// Opcodes this connected device's firmware build actually declares support
+// for (GET_DEVICE_CAPABILITIES / app_cmd.c's m_data_cmd_map dump) -- mirrors
+// chameleon_com.py's self.commands. Empty = not fetched yet / firmware too
+// old to answer it, in which case request() doesn't gate anything, same as
+// the Python CLI's `if len(self.commands):` guard.
+let deviceCommands=new Set();
+async function fetchDeviceCapabilities(){
+  deviceCommands=new Set();
+  try{
+    const f=await request(CMD_GET_DEVICE_CAPABILITIES);
+    if(f.status!==0) return;
+    for(let i=0;i+1<f.data.length;i+=2) deviceCommands.add((f.data[i]<<8)|f.data[i+1]);
+  }catch(e){ /* older firmware, or link dropped mid-fetch -- leave ungated */ }
+  // applyCapabilityGating lives in fullcmd.js (loaded after this file), but
+  // by the time this runs (after a real connect) every script has already
+  // loaded, so the cross-file reference resolves fine -- same as CU/connected.
+  if(typeof applyCapabilityGating==="function") applyCapabilityGating();
+}
 let events=[];
 
 // Set by terminal.js while the gdb_gateway standalone mode is armed: once
@@ -218,6 +237,7 @@ async function openLink(){
   $("btn").textContent="Disconnect";
   showErr("");
   readState().catch(()=>{});
+  fetchDeviceCapabilities().catch(()=>{});
   await keepAwake();
 }
 async function connect(){
@@ -242,6 +262,8 @@ async function connect(){
 function onDrop(){
   $("btn").textContent="Connect";
   rawRspSink=null;   // the gdb session, if any, died with the link
+  deviceCommands=new Set();
+  if(typeof clearCapabilityGating==="function") clearCapabilityGating();
   if(pending){ pending.reject(new Error("connection lost")); pending=null; }
   if(wantConn && $("oRe").checked){ setStatus("wait","Connection lost","Reconnecting…"); alertUser({level:3},"connection to the canary was lost"); scheduleRetry(); }
   else setStatus("","Not connected","");
@@ -296,9 +318,17 @@ async function rawWrite(bytes){
 }
 
 /* ---- fetch the device's saved log (GET_RESULT 7004, repeated until an empty chunk) ---- */
-function request(cmd,data=[]){
+function request(cmd,data=[],timeoutMs=6000){
+  // MF1 darkside/hardnested/enc-nested acquire can legitimately run tens of
+  // seconds (software/script/chameleon_cmd.py gives them up to sync_max*10);
+  // callers pass a longer timeoutMs for those instead of raising the default.
+  // Mirrors chameleon_com.py's send_cmd_sync: an empty deviceCommands means
+  // "not fetched / firmware too old to answer" and gates nothing.
+  if(deviceCommands.size && !deviceCommands.has(cmd)){
+    return Promise.reject(new Error("This device doesn't declare that it can support this command: "+cmd+". Make sure firmware is up to date and matches client"));
+  }
   return withDeviceLock(() => new Promise(async (resolve,reject)=>{
-    const t=setTimeout(()=>{ pending=null; reject(new Error("no reply over Bluetooth. If a USB serial session (the CLI, a terminal) is open, the device sends its answer there instead. Close it and try again.")); },6000);
+    const t=setTimeout(()=>{ pending=null; reject(new Error("no reply over Bluetooth. If a USB serial session (the CLI, a terminal) is open, the device sends its answer there instead. Close it and try again.")); },timeoutMs);
     pending={cmd,resolve:f=>{clearTimeout(t);resolve(f);},reject:e=>{clearTimeout(t);reject(e);}};
     try{ await rawWrite(makeFrame(cmd,data)); }
     catch(e){ clearTimeout(t); pending=null; reject(e); }
@@ -809,18 +839,48 @@ function rsessControlMsg(raw){
   let msg; try{ msg=JSON.parse(raw); }catch(e){ return; }
   if(msg.type==="peer_count" && rsessRole==="host"){ rsessPeerCount=msg.count; rsessUpdateHostStatus(); return; }
   if(rsessRole!=="peer") return;
-  if(msg.type==="host_online"){ $("relaySt").textContent="Joined (live)"; $("relaySub").textContent="Driving the host's connected device. Every tab works as if you were plugged in locally."; }
-  else if(msg.type==="host_offline"){ $("relaySt").textContent="Joined (host offline)"; $("relaySub").textContent="Waiting for the host to reconnect its device…"; }
+  if(msg.type==="host_online"){ $("relaySt").textContent="Joined (live)"; $("relaySub").textContent="Driving the host's connected device. Every tab works as if you were plugged in locally."; fetchDeviceCapabilities().catch(()=>{}); }
+  else if(msg.type==="host_offline"){ $("relaySt").textContent="Joined (host offline)"; $("relaySub").textContent="Waiting for the host to reconnect its device…"; deviceCommands=new Set(); if(typeof clearCapabilityGating==="function") clearCapabilityGating(); }
 }
 function rsessUpdateHostStatus(){
   const n=rsessPeerCount;
   $("relaySt").textContent = "Sharing · "+n+" peer"+(n===1?"":"s")+" connected";
   $("relaySub").textContent = "Join link: "+rsessLink;
 }
+// Anonymous usage stats (join counts only, no IP/origin/UA) -- same relay,
+// derived http(s) URL instead of ws(s). Shown whenever a relay + session id
+// are known, host or peer side, since nothing in the response identifies a
+// visitor. Polled, not pushed, so it's fine if the relay is briefly down.
+let rsessStatsTimer=null;
+function rsessStatsUrl(wsUrl, id){
+  const httpUrl = wsUrl.replace(/^wss:/,"https:").replace(/^ws:/,"http:");
+  return httpUrl + (httpUrl.includes("?")?"&":"?") + "session="+encodeURIComponent(id)+"&stats=1";
+}
+async function rsessFetchStats(wsUrl, id){
+  try{
+    const r = await fetch(rsessStatsUrl(wsUrl, id), {cache:"no-store"});
+    if(!r.ok) return;
+    const s = await r.json();
+    $("relayStats").textContent = "Last 24h: "+s.peerJoins24h+" peer join"+(s.peerJoins24h===1?"":"s")+
+      ", "+s.hostJoins24h+" host join"+(s.hostJoins24h===1?"":"s")+
+      " · last hour: "+s.peerJoins1h+" · host "+(s.hostOnline?"online":"offline")+" now";
+  }catch(e){}
+}
+function rsessStartStatsPolling(wsUrl, id){
+  rsessStopStatsPolling();
+  rsessFetchStats(wsUrl, id);
+  rsessStatsTimer = setInterval(()=>rsessFetchStats(wsUrl, id), 60000);
+}
+function rsessStopStatsPolling(){
+  if(rsessStatsTimer){ clearInterval(rsessStatsTimer); rsessStatsTimer=null; }
+  $("relayStats").textContent="";
+}
 function rsessOnClosed(){
-  rsessWs=null; rsessRole=null;
+  rsessWs=null; rsessRole=null; deviceCommands=new Set();
+  if(typeof clearCapabilityGating==="function") clearCapabilityGating();
   $("relaySt").textContent = "Not connected"; $("relaySub").textContent = "The remote session ended.";
   $("relayShare").style.display=""; $("relayStop").style.display="none";
+  rsessStopStatsPolling();
 }
 // Peer's forwarded raw bytes carry no reply-ness this layer understands --
 // just relay them to the real device and release the lock once the link
@@ -856,12 +916,14 @@ async function rsessShare(){
   rsessLink = location.origin+location.pathname+"?rsess="+encodeURIComponent(rsessId)+"&rsrelay="+encodeURIComponent(url);
   rsessPeerCount=0; rsessUpdateHostStatus();
   $("relayShare").style.display="none"; $("relayStop").style.display="";
+  rsessStartStatsPolling(url, rsessId);
 }
 function rsessStop(){
   if(rsessWs){ try{ rsessWs.close(); }catch(e){} }
   rsessWs=null; rsessRole=null; rsessLink=null; rsessPeerCount=0;
   $("relaySt").textContent="Local only"; $("relaySub").textContent="Not shared. No login: anyone with the join link gets full control.";
   $("relayShare").style.display=""; $("relayStop").style.display="none";
+  rsessStopStatsPolling();
 }
 $("relayShare").addEventListener("click", rsessShare);
 $("relayStop").addEventListener("click", rsessStop);
@@ -877,6 +939,7 @@ $("relayStop").addEventListener("click", rsessStop);
   document.querySelector(".status").style.display="none";   // no real device to connect to as a peer
   $("relaySt").textContent="Joining…";
   rsessConnect(url, id, "peer");
+  rsessStartStatsPolling(url, id);
 })();
 
 load(); render();

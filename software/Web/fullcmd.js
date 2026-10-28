@@ -173,9 +173,35 @@ function wire(id, resultEl, fn){
       showResult(resultEl, "Failed: "+e.message, "err");
       if(!resultEl) alert("Failed: "+e.message);
     }finally{
-      btn.disabled = false;
+      // A capability-gated button stays disabled after the click too --
+      // see applyCapabilityGating(). Everything else re-enables as before.
+      btn.disabled = btn.dataset.capGated === "1";
     }
   });
+}
+// Grey out (and tooltip-explain) every wire()-registered button whose
+// opcode(s) this connected device's firmware doesn't declare support for
+// (BUTTON_OPCODES, generated from these same wire() call bodies -- see
+// button_capabilities.js). Called after deviceCommands is populated
+// (canary.js's fetchDeviceCapabilities), both on direct BLE connect and on
+// relay peer join. A button listing more than one opcode (a ternary pick
+// between two commands) is left enabled if ANY of them is supported.
+function applyCapabilityGating(){
+  for(const [id, opNames] of Object.entries(BUTTON_OPCODES)){
+    const btn = $(id);
+    if(!btn) continue;
+    const unsupported = deviceCommands.size>0 && !opNames.some(n => CU[n]!==undefined && deviceCommands.has(CU[n]));
+    btn.disabled = unsupported;
+    btn.dataset.capGated = unsupported ? "1" : "";
+    btn.title = unsupported ? "Not supported by this device's firmware (opcode "+opNames.join(", ")+")" : "";
+  }
+}
+function clearCapabilityGating(){
+  for(const id of Object.keys(BUTTON_OPCODES)){
+    const btn = $(id);
+    if(!btn) continue;
+    btn.disabled = false; btn.dataset.capGated = ""; btn.title = "";
+  }
 }
 
 /* ---------------------------------------------------------------------
@@ -2047,7 +2073,8 @@ wire("e_scan", eCard, async () => {
     const selBody = selResp.length>=2 ? selResp.slice(0,-2) : selResp;
     const aidBytes = selCmd.length>6 ? selCmd.slice(5,-1) : [];
     result.Application = {AID: bhex(aidBytes), FCITemplate: tlvToDict(selBody)};
-    lines.push("SELECT AID OK ("+selResp.length+"b)  AID "+bhex(aidBytes));
+    const aidKnown = lookupIsoAid(aidBytes);
+    lines.push("SELECT AID OK ("+selResp.length+"b)  AID "+bhex(aidBytes)+(aidKnown ? "  ("+aidKnown[0]+": "+aidKnown[1]+")" : ""));
     if(result.Application.FCITemplate) extraData.push(...hexBytes(result.Application.FCITemplate.value));
   }
   const allRecordData=[];
