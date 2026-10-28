@@ -1492,23 +1492,29 @@ hfDes.command("bruteaid", "Brute-force the DESFire application-ID space via Sele
   if(Number.isNaN(start) || Number.isNaN(end)) throw new ArgError("--start/--end must be hex, e.g. 000000");
   if(!(start>=0 && start<=0xFFFFFF && end>=0 && end<=0xFFFFFF && start<=end)) throw new ArgError("range must be within 000000..FFFFFF and start <= end");
   const total = end-start+1;
-  const out = [" - Scanning "+total+" AID(s) "+start.toString(16).padStart(6,"0").toUpperCase()+".."+end.toString(16).padStart(6,"0").toUpperCase()];
+  // Printed live, not buffered: at the default 256-AID range each SELECT_APPLICATION
+  // is its own BLE round-trip, so returning one lump at the end would leave the
+  // terminal looking stalled for the whole scan.
+  printLines([" - Scanning "+total+" AID(s) "+start.toString(16).padStart(6,"0").toUpperCase()+".."+end.toString(16).padStart(6,"0").toUpperCase()]);
   const found = [];
   for(let aid=start; aid<=end; aid++){
     const aidBytes = [(aid>>16)&0xFF, (aid>>8)&0xFF, aid&0xFF];
     try{
       const r = await dfcSend(DFC_INS.SELECT_APPLICATION, aidBytes);
-      if(r.ok) { found.push(aid); out.push("   + AID "+aid.toString(16).padStart(6,"0").toUpperCase()+" accepted"); }
+      if(r.ok) { found.push(aid); printLines(["   + AID "+aid.toString(16).padStart(6,"0").toUpperCase()+" accepted"]); }
     }catch(e){ /* non-card-error replies are expected misses */ }
   }
-  out.push(found.length ? "Found "+found.length+" AID(s): "+found.map(a=>a.toString(16).padStart(6,"0").toUpperCase()).join(", ") : "No AIDs accepted in range");
-  return out;
+  return [found.length ? "Found "+found.length+" AID(s): "+found.map(a=>a.toString(16).padStart(6,"0").toUpperCase()).join(", ") : "No AIDs accepted in range"];
 });
 
 hfDes.command("signature", "Read the NXP originality signature (Read_Sig) -- prints the raw signature only, no ECDSA verification (needs a crypto library not available here)", [], async () => {
   await needReader();
   const r = await dfcSend(0x3C, [0x00]); // Read_Sig, native INS 0x3C
-  if(!r.ok) return [" [!] Read_Sig failed: "+dfcStatusName(r.status)];
+  // Read_Sig's own native status for "OK" is 0x90, not the usual 0x00
+  // (PM3's DesfireReadSignature treats 0x90 as success too); dfcSend's
+  // generic r.ok only knows about 0x00, so check status directly here.
+  if(!(r.status === 0x00 || r.status === 0x90) || r.data.length !== 56)
+    return [" [!] Read_Sig not available (status 0x"+r.status.toString(16).padStart(2,"0")+", "+r.data.length+" bytes). Card may require auth or not support it."];
   return [
     " Signature (56 bytes): "+bhex(r.data).toUpperCase(),
     " [!] Not verified against NXP's public keys -- the real CLI's ECDSA (secp224r1)",
