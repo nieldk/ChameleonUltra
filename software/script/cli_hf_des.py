@@ -97,9 +97,14 @@ def _des_transceive(cmd, des_cmd: int, data: bytes = b"", timeout_ms=500) -> byt
     if not rdata or len(rdata) < 2:
         raise RuntimeError(f"Empty response to command 0x{des_cmd:02X}")
     # ISO response: [...payload...] SW1 SW2
-    # DESFire status is in SW2 (SW1=0x91 for native wrapped)
+    # DESFire status is in SW2 (SW1=0x91 for native wrapped). Some commands
+    # -- Read_Sig (0x3C) in particular -- reply with plain ISO success
+    # (SW1=0x90) instead of the native 91xx framing; HfDesSignature.on_exec
+    # already special-cased status 0x90 for this reason, but that branch
+    # was unreachable because this function rejected SW1=0x90 before it
+    # ever got there.
     sw1, sw2 = rdata[-2], rdata[-1]
-    if sw1 != 0x91:
+    if sw1 not in (0x90, 0x91):
         raise RuntimeError(f"Unexpected SW1=0x{sw1:02X} SW2=0x{sw2:02X}")
     payload = rdata[:-2]
     # Return payload + DESFire status byte so callers can check for 0xAF (more frames)
