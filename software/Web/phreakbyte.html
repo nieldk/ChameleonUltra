@@ -349,6 +349,7 @@ footer { border-top:1px solid var(--border); padding:32px 0; }
     <button id="relayStop" style="display:none">Stop sharing</button>
   </div>
   <div class="msg" id="relayErr" role="alert"></div>
+  <div class="det" id="relayStats"></div>
 
   <div class="tabnav">
     <div class="tabs" id="tabs">
@@ -364,6 +365,7 @@ footer { border-top:1px solid var(--border); padding:32px 0; }
         <button class="tabbtn" data-tab="mfu">MF0 / NTAG</button>
         <button class="tabbtn" data-tab="desfire">DESFire</button>
         <button class="tabbtn" data-tab="emv">EMV</button>
+        <button class="tabbtn" data-tab="other">Other tags</button>
         <button class="tabbtn" data-tab="shell">Shell</button>
         <button class="tabbtn" data-tab="terminal">Terminal</button>
       </div>
@@ -851,6 +853,67 @@ AABBCCDDEEFF</textarea></label>
       </div>
       <div class="result" id="h4_Result"></div>
     </div>
+
+    <h2><span class="sec-num">H14</span>Key-recovery attacks (offline cracking)</h2>
+    <div class="block">
+      <div class="det">Nonce acquisition only — the device collects what an offline tool (mfoc/mfcuk/proxmark3-style darkside/nested/hardnested crackers) needs; no crypto1 math runs here. Darkside/hardnested/enc-nested can run long on-device; their reply timeouts scale with the attack's own parameters instead of the usual fixed 6s.</div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Known block<input id="h_ndblock" value="0"></label>
+        <label class="cfgf">Known key type<select id="h_ndtype"><option value="0x60">A</option><option value="0x61">B</option></select></label>
+        <label class="cfgf">Known key (12 hex)<input id="h_ndkey" value="FFFFFFFFFFFF"></label>
+        <button class="small" id="h_ntdist">Detect nt distance</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Darkside target block<input id="h_dsblock" value="0"></label>
+        <label class="cfgf">Key type<select id="h_dstype"><option value="0x60">A</option><option value="0x61">B</option></select></label>
+        <label class="cfgf">First recover<select id="h_dsfirst"><option value="1">Yes</option><option value="0">No</option></select></label>
+        <label class="cfgf">Sync max<input id="h_dssync" value="15"></label>
+        <button class="small" id="h_darkside">Darkside acquire</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Nested known block<input id="h_nkblock" value="0"></label>
+        <label class="cfgf">type<select id="h_nktype"><option value="0x60">A</option><option value="0x61">B</option></select></label>
+        <label class="cfgf">key<input id="h_nkkey" value="FFFFFFFFFFFF"></label>
+        <label class="cfgf">target block<input id="h_ntblock" value="4"></label>
+        <label class="cfgf">target type<select id="h_nttype"><option value="0x60">A</option><option value="0x61">B</option></select></label>
+        <button class="small" id="h_nested">Nested acquire</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Static-nested known block<input id="h_snkblock" value="0"></label>
+        <label class="cfgf">type<select id="h_snktype"><option value="0x60">A</option><option value="0x61">B</option></select></label>
+        <label class="cfgf">key<input id="h_snkkey" value="FFFFFFFFFFFF"></label>
+        <label class="cfgf">target block<input id="h_sntblock" value="4"></label>
+        <label class="cfgf">target type<select id="h_snttype"><option value="0x60">A</option><option value="0x61">B</option></select></label>
+        <button class="small" id="h_staticnested">Static-nested acquire</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Hardnested known block<input id="h_hnkblock" value="0"></label>
+        <label class="cfgf">type<select id="h_hnktype"><option value="0x60">A</option><option value="0x61">B</option></select></label>
+        <label class="cfgf">key<input id="h_hnkkey" value="FFFFFFFFFFFF"></label>
+        <label class="cfgf">target block<input id="h_hntblock" value="4"></label>
+        <label class="cfgf">target type<select id="h_hnttype"><option value="0x60">A</option><option value="0x61">B</option></select></label>
+        <label class="cfgf">Slow mode<select id="h_hnslow"><option value="0">No</option><option value="1">Yes</option></select></label>
+        <button class="small" id="h_hardnested">Hardnested acquire</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Enc-nested backdoor key (12 hex)<input id="h_enkey" value="A396EFA4E24F"></label>
+        <label class="cfgf">Sector count<input id="h_ensectors" value="16"></label>
+        <label class="cfgf">Starting sector<input id="h_enstart" value="0"></label>
+        <button class="small" id="h_encnested">Enc-nested acquire</button>
+      </div>
+      <div class="result" id="h_atkResult"></div>
+    </div>
+
+    <h2><span class="sec-num">H15</span>ISO14443A sniff</h2>
+    <div class="block">
+      <div class="det">Classic mode: the device emulates a tag and answers the reader itself — reader commands and the device's own emulated replies are both logged. Passive-tap mode: the device stays silent and listens in on a real card/reader exchange it's physically between.</div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Timeout ms<input id="h_sftimeout" value="5000"></label>
+        <label class="cfgf">Mode<select id="h_sftap"><option value="0">Classic (emulate)</option><option value="1">Passive tap</option></select></label>
+        <button class="small" id="h_sniff">Sniff</button>
+      </div>
+      <div id="h_sniffResult"></div>
+    </div>
   </section>
 
   <!-- ================= LF ================= -->
@@ -969,6 +1032,17 @@ AABBCCDDEEFF</textarea></label>
         <button class="small" id="l_t5_writeblk">Raw write block</button>
       </div>
       <div class="result" id="l_fxResult"></div>
+    </div>
+
+    <h2><span class="sec-num">L7</span>Raw LF sniff</h2>
+    <div class="det">Raw 125kHz ADC samples, ~0x80 = field on. Passive mode keeps this device's own LF field off, for observing another active transmitter (e.g. another Chameleon emulating) without the two fields beating against each other.</div>
+    <div class="block">
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Timeout ms<input id="l_sftimeout" value="2000"></label>
+        <label class="cfgf">Mode<select id="l_sfpassive"><option value="0">Active (own field on)</option><option value="1">Passive (field off)</option></select></label>
+        <button class="small" id="l_sniff">Sniff</button>
+      </div>
+      <div class="result" id="l_sniffResult"></div>
     </div>
   </section>
 
@@ -1174,6 +1248,76 @@ AABBCCDDEEFF</textarea></label>
     </div>
   </section>
 
+  <!-- ================= Other tags: SEOS / ST25TA / MIFARE Plus ================= -->
+  <section class="tabpanel" id="tab-other">
+    <h2><span class="sec-num">O1</span>SEOS emulation</h2>
+    <div class="block">
+      <div class="row">
+        <label class="cfgf wide">Data (hex, ≤255 bytes)<input id="o_seosdata" value=""></label>
+        <label class="cfgf wide">OID (hex)<input id="o_seosoid" value=""></label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="cfgf wide">Tag (hex)<input id="o_seostag" value=""></label>
+        <label class="cfgf wide">Diversifier (hex)<input id="o_seosdiv" value=""></label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="cfgf">Hash alg<input id="o_seoshash" value="0"></label>
+        <label class="cfgf">Encr alg<input id="o_seosencr" value="0"></label>
+      </div>
+      <div class="ctl" style="margin-top:10px">
+        <button class="ghost small" id="o_seosread">Read emu data</button>
+        <button class="small" id="o_seoswrite">Write emu data</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf wide">Auth key (32 hex = 16B)<input id="o_seosauth" value=""></label>
+        <label class="cfgf wide">PrivEnc key (32 hex)<input id="o_seosprivenc" value=""></label>
+        <label class="cfgf wide">PrivMac key (32 hex)<input id="o_seosprivmac" value=""></label>
+        <button class="small" id="o_seoskeys">Write emu keys</button>
+      </div>
+      <div class="result" id="o_seosResult"></div>
+    </div>
+
+    <h2><span class="sec-num">O2</span>ST25TA (NFC Type 4) emulation</h2>
+    <div class="block">
+      <div class="det">Reads/writes chunk at 240 bytes per call (matches chameleon_cmd.py's ST25TA_CHUNK), looping automatically for larger NDEF payloads.</div>
+      <div class="ctl" style="margin-top:10px"><button class="ghost small" id="o_stinfo">Get info</button></div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Offset<input id="o_stoffset" value="0"></label>
+        <label class="cfgf">Read length<input id="o_stlen" value="16"></label>
+        <button class="ghost small" id="o_stread">Read NDEF</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="cfgf wide">Write data (hex, from offset above)<input id="o_stwdata" value=""></label>
+        <button class="small" id="o_stwrite">Write NDEF</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="cfgf">NDEF size<input id="o_stndefsize" value="256"></label>
+        <label class="cfgf">Read access<input id="o_stra" value="0"></label>
+        <label class="cfgf">Write access<input id="o_stwa" value="0"></label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="cfgf wide">Pwd read (32 hex = 16B)<input id="o_stpwdread" value="00000000000000000000000000000000"></label>
+        <label class="cfgf wide">Pwd write (32 hex)<input id="o_stpwdwrite" value="00000000000000000000000000000000"></label>
+        <button class="small" id="o_stconfig">Set config</button>
+      </div>
+      <div class="result" id="o_stResult"></div>
+    </div>
+
+    <h2><span class="sec-num">O3</span>MIFARE Plus perso</h2>
+    <div class="block">
+      <div class="det">WritePerso only works while the card is in SL0. Addr 0x9000/0x9001/0x9003 are the three mandatory admin keys (CardMasterKey/CardConfigKey/L3SwitchKey); write all three before Commit.</div>
+      <div class="ctl" style="margin-top:10px"><button class="ghost small" id="o_mfpinfo">Get info (level / block_max)</button></div>
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf">Addr hi (hex)<input id="o_mfpaddrhi" value="90"></label>
+        <label class="cfgf">Addr lo (hex)<input id="o_mfpaddrlo" value="00"></label>
+        <label class="cfgf wide">AES key (32 hex = 16B)<input id="o_mfpkey" value=""></label>
+        <button class="small" id="o_mfpperso">Write perso</button>
+      </div>
+      <div class="ctl" style="margin-top:10px"><button class="small" id="o_mfpcommit">Commit perso (SL0 → SL3)</button></div>
+      <div class="result" id="o_mfpResult"></div>
+    </div>
+  </section>
+
   <!-- ================= SHELL (raw command console) ================= -->
   <section class="tabpanel" id="tab-shell">
     <div class="card card-amber">
@@ -1218,8 +1362,8 @@ AABBCCDDEEFF</textarea></label>
   </div>
 </footer>
 
-<script src="canary.js?v=22"></script>
-<script src="fullcmd.js?v=14"></script>
-<script src="terminal.js?v=10"></script>
+<script src="canary.js?v=24"></script>
+<script src="fullcmd.js?v=16"></script>
+<script src="terminal.js?v=11"></script>
 </body>
 </html>

@@ -47,6 +47,12 @@ const CU = {
   HF14A_SCAN_KEEP:2016, HF14A_AUTH_TRACE:2017,
   HF14A_SET_FIELD_ON:2100, HF14A_SET_FIELD_OFF:2101,
   HF14A_GET_CONFIG:2200, HF14A_SET_CONFIG:2201,
+  // Key-recovery nonce acquisition (chameleon_cmd.py mf1_*_acquire/mf1_detect_nt_dist) --
+  // these collect data for an OFFLINE cracker (mfoc/mfcuk/proxmark-style darkside,
+  // nested, hardnested), no crypto1 math reimplemented here.
+  MF1_STATIC_NESTED_ACQUIRE:2003, MF1_DARKSIDE_ACQUIRE:2004, MF1_DETECT_NT_DIST:2005,
+  MF1_NESTED_ACQUIRE:2006, MF1_HARDNESTED_ACQUIRE:2013, MF1_ENC_NESTED_ACQUIRE:2014,
+  HF14A_SNIFF:2020,
 
   EM410X_SCAN:3000, EM410X_WRITE_TO_T55XX:3001, HIDPROX_SCAN:3002, HIDPROX_WRITE_TO_T55XX:3003,
   VIKING_SCAN:3004, VIKING_WRITE_TO_T55XX:3005, EM410X_ELECTRA_WRITE_TO_T55XX:3006,
@@ -54,8 +60,11 @@ const CU = {
   IOPROX_SCAN:3010, IOPROX_WRITE_TO_T55XX:3011, IOPROX_DECODE_RAW:3012, IOPROX_COMPOSE_ID:3013,
   PAC_SCAN:3014, PAC_WRITE_TO_T55XX:3015, LF_T55XX_WRITE:3016, LF_T55XX_READ:3017,
   IDTECK_WRITE_TO_T55XX:3018, JABLOTRON_SCAN:3019, JABLOTRON_WRITE_TO_T55XX:3020,
-  FDXB_SCAN:3021, FDXB_WRITE_TO_T55XX:3022, EM4X05_SCAN:3030, LF_SEARCH:3033,
+  FDXB_SCAN:3021, FDXB_WRITE_TO_T55XX:3022, EM4X05_SCAN:3030, LF_SNIFF:3031, LF_SEARCH:3033,
   INDALA_SCAN:3035, INDALA_WRITE_TO_T55XX:3036,
+  // 3032 EM4X05_READSNIFF is a #define in firmware's data_cmd.c with no
+  // app_cmd.c dispatch case and no chameleon_cmd.py wrapper -- not actually
+  // implemented in this firmware, so no UI control for it (checked, not guessed).
 
   MF1_WRITE_EMU_BLOCK_DATA:4000, HF14A_SET_ANTI_COLL_DATA:4001,
   MF1_SET_DETECTION_ENABLE:4004, MF1_GET_DETECTION_COUNT:4005, MF1_GET_DETECTION_LOG:4006,
@@ -74,6 +83,9 @@ const CU = {
   MF0_NTAG_GET_EMULATOR_CONFIG:4037,
   MF1_GET_FIELD_OFF_DO_RESET:4039, MF1_SET_FIELD_OFF_DO_RESET:4038,
   MF1_GET_PRNG_TYPE:4040, MF1_SET_PRNG_TYPE:4041,
+  SEOS_READ_EMU_DATA:4042, SEOS_WRITE_EMU_DATA:4043, SEOS_WRITE_EMU_KEYS:4044,
+  ST25TA_GET_INFO:4045, ST25TA_READ_NDEF:4046, ST25TA_WRITE_NDEF:4047, ST25TA_SET_CONFIG:4048,
+  MFPLUS_GET_INFO:4049, MFPLUS_WRITE_PERSO:4050, MFPLUS_COMMIT_PERSO:4052,
 
   EM410X_SET_EMU_ID:5000, EM410X_GET_EMU_ID:5001, HIDPROX_SET_EMU_ID:5002, HIDPROX_GET_EMU_ID:5003,
   VIKING_SET_EMU_ID:5004, VIKING_GET_EMU_ID:5005, PAC_SET_EMU_ID:5006, PAC_GET_EMU_ID:5007,
@@ -130,6 +142,8 @@ function bhex(bytes){ return Array.from(bytes).map(x=>(x&255).toString(16).padSt
 function u16be(v){ v=v&0xFFFF; return [(v>>8)&255, v&255]; }
 function u32be(v){ v=v>>>0; return [(v>>24)&255,(v>>16)&255,(v>>8)&255,v&255]; }
 function sbyte(v){ v=parseInt(v,10)||0; return v<0 ? (256+v) : v; }
+function u64beHex(bytes, off){ let s=""; for(let i=0;i<8;i++) s+=(bytes[off+i]&255).toString(16).padStart(2,"0"); return s; }
+function lenPrefixed(bytes){ if(bytes.length>255) throw new Error("field must be ≤255 bytes (1-byte length prefix)"); return [bytes.length, ...bytes]; }
 function utf8Bytes(s){ return Array.from(new TextEncoder().encode(s||"")); }
 function bytesToUtf8(a){ return new TextDecoder().decode(new Uint8Array(a)); }
 function bytesToAscii(a){ return a.map(c=>String.fromCharCode(c)).join(""); }
@@ -1037,6 +1051,114 @@ wire("h4_send", $("h4_Result"), async () => {
   showResult($("h4_Result"), "Response pushed ("+resp.length+" byte(s)).", "ok");
 });
 
+/* ---- MF1 key-recovery attacks: nonce acquisition only, no crypto1 math here ----
+ * request()'s own BLE round-trip timeout (canary.js, fixed at 6000ms) is
+ * shorter than these commands can legitimately take -- mf1_darkside_acquire
+ * waits up to sync_max*10 on the Python side, mf1_hard_nested_acquire/
+ * mf1_static_encrypted_nested_acquire use a 30s budget there. A long-running
+ * attack can hit that 6s client-side timeout and report "no reply" even
+ * though the device is still working; this file can't fix that without
+ * changing canary.js (out of scope here). */
+const hAtk = $("h_atkResult");
+function mf1KnownArgs(blockEl, typeEl, keyEl){
+  const block = Number($(blockEl).value);
+  const type = parseInt($(typeEl).value,16);
+  const key = hexBytes($(keyEl).value,6);
+  if(key.length!==6) throw new Error("key must be 12 hex chars (6 bytes)");
+  return {block, type, key};
+}
+wire("h_ntdist", hAtk, async () => {
+  const {block,type,key} = mf1KnownArgs("h_ndblock","h_ndtype","h_ndkey");
+  const f = okOrThrow(await request(CU.MF1_DETECT_NT_DIST, [type, block, ...key]));
+  const uid=(f.data[0]<<24|f.data[1]<<16|f.data[2]<<8|f.data[3])>>>0;
+  const dist=(f.data[4]<<24|f.data[5]<<16|f.data[6]<<8|f.data[7])>>>0;
+  showResult(hAtk, "uid 0x"+uid.toString(16)+" · nt distance "+dist, "ok");
+});
+const DARKSIDE_STATUS = {0:"OK",1:"can't fix nt (PRNG unpredictable)",2:"lucky auth (default key recovered directly)",3:"no NAK sent by tag",4:"tag changed mid-attack"};
+wire("h_darkside", hAtk, async () => {
+  const block = Number($("h_dsblock").value);
+  const type = parseInt($("h_dstype").value,16);
+  const firstRecover = Number($("h_dsfirst").value);
+  const syncMax = Math.max(1, Math.min(255, Number($("h_dssync").value)||15));
+  // sync_max rounds against a tag with an unstable nonce can take a while --
+  // chameleon_cmd.py allows up to sync_max*10s; request()'s 6s default is too
+  // short for anything but a lucky first auth.
+  const f = okOrThrow(await request(CU.MF1_DARKSIDE_ACQUIRE, [type, block, firstRecover, syncMax], Math.max(6000, syncMax*10000+5000)));
+  const ds = f.data[0];
+  if(ds !== 0){ showResult(hAtk, "Darkside: "+(DARKSIDE_STATUS[ds]||"status "+ds), ds===2?"ok":""); return; }
+  // !BIIQQII: status(1) uid(4) nt1(4) par(8) ks1(8) nr(4) ar(4) = 33 bytes
+  const u32 = o => (f.data[o]<<24|f.data[o+1]<<16|f.data[o+2]<<8|f.data[o+3])>>>0;
+  showResult(hAtk,
+    "Darkside OK — feed these to an offline darkside solver:\n"+
+    "uid 0x"+u32(1).toString(16)+" · nt1 0x"+u32(5).toString(16)+"\n"+
+    "par 0x"+u64beHex(f.data,9)+" · ks1 0x"+u64beHex(f.data,17)+"\n"+
+    "nr 0x"+u32(25).toString(16)+" · ar 0x"+u32(29).toString(16), "ok");
+});
+wire("h_nested", hAtk, async () => {
+  const {block,type,key} = mf1KnownArgs("h_nkblock","h_nktype","h_nkkey");
+  const targetBlock = Number($("h_ntblock").value), targetType = parseInt($("h_nttype").value,16);
+  const f = okOrThrow(await request(CU.MF1_NESTED_ACQUIRE, [type, block, ...key, targetType, targetBlock]));
+  const rows=[];
+  for(let o=0;o+9<=f.data.length;o+=9){
+    const nt=(f.data[o]<<24|f.data[o+1]<<16|f.data[o+2]<<8|f.data[o+3])>>>0;
+    const ntEnc=(f.data[o+4]<<24|f.data[o+5]<<16|f.data[o+6]<<8|f.data[o+7])>>>0;
+    rows.push("nt 0x"+nt.toString(16).padStart(8,"0")+" · nt_enc 0x"+ntEnc.toString(16).padStart(8,"0")+" · par 0x"+f.data[o+8].toString(16));
+  }
+  showResult(hAtk, rows.length+" nonce(s):\n"+rows.join("\n"), "ok");
+});
+wire("h_staticnested", hAtk, async () => {
+  const {block,type,key} = mf1KnownArgs("h_snkblock","h_snktype","h_snkkey");
+  const targetBlock = Number($("h_sntblock").value), targetType = parseInt($("h_snttype").value,16);
+  const f = okOrThrow(await request(CU.MF1_STATIC_NESTED_ACQUIRE, [type, block, ...key, targetType, targetBlock]));
+  const uid=(f.data[0]<<24|f.data[1]<<16|f.data[2]<<8|f.data[3])>>>0;
+  const rows=[];
+  for(let o=4;o+8<=f.data.length;o+=8){
+    const nt=(f.data[o]<<24|f.data[o+1]<<16|f.data[o+2]<<8|f.data[o+3])>>>0;
+    const ntEnc=(f.data[o+4]<<24|f.data[o+5]<<16|f.data[o+6]<<8|f.data[o+7])>>>0;
+    rows.push("nt 0x"+nt.toString(16).padStart(8,"0")+" · nt_enc 0x"+ntEnc.toString(16).padStart(8,"0"));
+  }
+  showResult(hAtk, "uid 0x"+uid.toString(16)+" · "+rows.length+" nonce(s):\n"+rows.join("\n"), "ok");
+});
+wire("h_hardnested", hAtk, async () => {
+  const {block,type,key} = mf1KnownArgs("h_hnkblock","h_hnktype","h_hnkkey");
+  const targetBlock = Number($("h_hntblock").value), targetType = parseInt($("h_hnttype").value,16);
+  const slow = Number($("h_hnslow").value);
+  // struct.pack('!BBB6sBB', slow, type_known, block_known, key_known, type_target, block_target)
+  // Hardnested can run 30s+ on-device; 6s default would time out mid-attack.
+  const f = okOrThrow(await request(CU.MF1_HARDNESTED_ACQUIRE, [slow, type, block, ...key, targetType, targetBlock], 35000));
+  showResult(hAtk, "Raw nonce data, "+f.data.length+" byte(s) (feed to an offline hardnested solver):\n"+bhex(f.data), "ok");
+});
+wire("h_encnested", hAtk, async () => {
+  const backdoorKey = hexBytes($("h_enkey").value,6);
+  if(backdoorKey.length!==6) throw new Error("backdoor key must be 12 hex chars (6 bytes)");
+  const sectorCount = Number($("h_ensectors").value), startSector = Number($("h_enstart").value);
+  // Scales with sectorCount -- give it room past the 6s default.
+  const f = await request(CU.MF1_ENC_NESTED_ACQUIRE, [...backdoorKey, sectorCount, startSector], Math.max(6000, sectorCount*5000+5000));
+  if(f.status === 0x01){ showResult(hAtk, "No tag found.", "err"); return; }
+  okOrThrow(f);
+  // Raw bytes only -- Python's own parsing (reconstruct_full_nt) runs the
+  // weak-PRNG successor function to unroll each partial nonce, which is
+  // attack-specific crypto1 math not ported here. Feed this to the same tool.
+  const uid=(f.data[0]<<24|f.data[1]<<16|f.data[2]<<8|f.data[3])>>>0;
+  showResult(hAtk, "uid 0x"+uid.toString(16)+" · "+(f.data.length-4)+" raw byte(s) of a/b nonce pairs:\n"+bhex(f.data.slice(4)), "ok");
+});
+
+const hSniff = $("h_sniffResult");
+wire("h_sniff", hSniff, async () => {
+  const timeout = Math.max(1, Math.min(30000, Number($("h_sftimeout").value)||5000));
+  const tap = Number($("h_sftap").value);
+  const f = await request(CU.HF14A_SNIFF, [...u16be(timeout), tap]);
+  if(!OK_STATUSES.has(f.status)){ showResult(hSniff, "No capture: "+stname(f.status), "err"); return; }
+  const fr = parseFrames(f.data);
+  const ns = extractNonces(fr);
+  let html = '<div class="det">'+fr.length+" frames.</div>";
+  for(const n of ns){
+    html += '<div class="nonce">Classic auth key'+n.key+' block '+n.block+' · uid '+n.uid+' · nt '+n.nt+' · nr '+n.nr+' · ar '+n.ar+(n.at?' · at '+n.at:'')+'</div>';
+  }
+  html += '<details><summary>Frames</summary><pre>'+fr.map((f2,i)=>String(i).padStart(3)+"  "+(f2.tx?"card→rdr":"rdr→card")+"  "+String(f2.bits).padStart(4)+"b  "+hex(f2.data).padEnd(40)+"  "+frameLabel(f2,fr[i-1])).join("\n")+'</pre></details>';
+  hSniff.innerHTML = html;
+});
+
 /* =======================================================================
  * LF tab
  * ===================================================================== */
@@ -1204,6 +1326,21 @@ wire("l_t5_writeblk", lFx, async () => {
   const payload = [block, ...word, usePwd, ...pwd, page1, 0 /* dl_mode: fixed */];
   okOrThrow(await request(CU.LF_T55XX_WRITE, payload));
   showResult(lFx, "T55xx block "+block+" written.", "ok");
+});
+
+wire("l_sniff", $("l_sniffResult"), async () => {
+  // request()'s 6000ms timeout (canary.js) can be shorter than a long capture.
+  const timeout = Math.max(1, Math.min(10000, Number($("l_sftimeout").value)||2000));
+  const passive = Number($("l_sfpassive").value);
+  const f = await request(CU.LF_SNIFF, [...u16be(timeout), passive]);
+  if(!OK_STATUSES.has(f.status)){ showResult($("l_sniffResult"), "No capture: "+stname(f.status), "err"); return; }
+  const d = f.data;
+  let min=255, max=0, sum=0;
+  for(const b of d){ if(b<min) min=b; if(b>max) max=b; sum+=b; }
+  const mean = d.length ? (sum/d.length) : 0;
+  showResult($("l_sniffResult"),
+    d.length+" ADC sample(s) · min "+min+" · max "+max+" · mean "+mean.toFixed(1)+
+    "\n(raw, ~0x80 = field on, lower = gap/no field — first 64 bytes: "+bhex(d.slice(0,64))+(d.length>64?" …":"")+")", "ok");
 });
 
 /* =======================================================================
@@ -1697,6 +1834,104 @@ wire("f_dump", fDump, async () => {
     }
   }
   showResult(fDump, lines.join("\n"), "ok");
+});
+
+/* =======================================================================
+ * Other tags tab: SEOS emulation, ST25TA (NFC Type 4) emulation, MIFARE Plus perso.
+ * Payload layouts cross-checked against app_cmd.c's cmd_processor_seos_,
+ * cmd_processor_st25ta_, cmd_processor_mfplus_ (not just chameleon_cmd.py).
+ * ===================================================================== */
+const oSeos = $("o_seosResult");
+wire("o_seosread", oSeos, async () => {
+  const f = okOrThrow(await request(CU.SEOS_READ_EMU_DATA));
+  let o=0;
+  const next = () => { const len=f.data[o]; const v=f.data.slice(o+1,o+1+len); o+=1+len; return v; };
+  const data=next(), oid=next(), tag=next(), diversifier=next();
+  const hashAlg=f.data[o], encrAlg=f.data[o+1];
+  showResult(oSeos,
+    "data ("+data.length+"B): "+bhex(data)+"\n"+
+    "oid: "+bhex(oid)+"\ntag: "+bhex(tag)+"\ndiversifier: "+bhex(diversifier)+"\n"+
+    "hash_alg: "+hashAlg+" · encr_alg: "+encrAlg, "ok");
+  $("o_seosdata").value=bhex(data); $("o_seosoid").value=bhex(oid);
+  $("o_seostag").value=bhex(tag); $("o_seosdiv").value=bhex(diversifier);
+  $("o_seoshash").value=String(hashAlg); $("o_seosencr").value=String(encrAlg);
+});
+wire("o_seoswrite", oSeos, async () => {
+  const data=hexBytes($("o_seosdata").value), oid=hexBytes($("o_seosoid").value),
+        tag=hexBytes($("o_seostag").value), diversifier=hexBytes($("o_seosdiv").value);
+  const hashAlg=Number($("o_seoshash").value), encrAlg=Number($("o_seosencr").value);
+  const payload=[...lenPrefixed(data), ...lenPrefixed(oid), ...lenPrefixed(tag), ...lenPrefixed(diversifier), hashAlg, encrAlg];
+  if(payload.length>4096) throw new Error("payload too large (>4096 bytes)");
+  okOrThrow(await request(CU.SEOS_WRITE_EMU_DATA, payload));
+  showResult(oSeos, "SEOS emulation data written.", "ok");
+});
+wire("o_seoskeys", oSeos, async () => {
+  const auth=hexBytes($("o_seosauth").value,16), privenc=hexBytes($("o_seosprivenc").value,16), privmac=hexBytes($("o_seosprivmac").value,16);
+  // cmd_processor_seos_write_emu_keys (app_cmd.c) requires exactly 16*3 bytes.
+  if(auth.length!==16||privenc.length!==16||privmac.length!==16) throw new Error("auth/privenc/privmac must each be 32 hex chars (16 bytes)");
+  okOrThrow(await request(CU.SEOS_WRITE_EMU_KEYS, [...auth,...privenc,...privmac]));
+  showResult(oSeos, "SEOS emulation keys written.", "ok");
+});
+
+const oSt = $("o_stResult");
+wire("o_stinfo", oSt, async () => {
+  const f = okOrThrow(await request(CU.ST25TA_GET_INFO));
+  const ndefSize=(f.data[0]<<8)|f.data[1];
+  const cc=f.data.slice(2,17), pwdRead=f.data.slice(17,33), pwdWrite=f.data.slice(33,49);
+  showResult(oSt, "ndef_size: "+ndefSize+"\ncc: "+bhex(cc)+"\npwd_read: "+bhex(pwdRead)+"\npwd_write: "+bhex(pwdWrite), "ok");
+  $("o_stndefsize").value=String(ndefSize); $("o_stpwdread").value=bhex(pwdRead); $("o_stpwdwrite").value=bhex(pwdWrite);
+});
+const ST25TA_CHUNK = 240; // matches chameleon_cmd.py's ST25TA_CHUNK
+wire("o_stread", oSt, async () => {
+  let offset=Number($("o_stoffset").value)||0, length=Number($("o_stlen").value)||0;
+  const out=[];
+  while(length>0){
+    const n=Math.min(length, ST25TA_CHUNK);
+    const f = okOrThrow(await request(CU.ST25TA_READ_NDEF, [...u16be(offset), n]));
+    out.push(...f.data); offset+=n; length-=n;
+  }
+  showResult(oSt, out.length+" byte(s): "+bhex(out), "ok");
+});
+wire("o_stwrite", oSt, async () => {
+  let offset=Number($("o_stoffset").value)||0;
+  const data=hexBytes($("o_stwdata").value);
+  for(let i=0;i<data.length;i+=ST25TA_CHUNK){
+    const chunk=data.slice(i,i+ST25TA_CHUNK);
+    okOrThrow(await request(CU.ST25TA_WRITE_NDEF, [...u16be(offset+i), ...chunk]));
+  }
+  okOrThrow(await request(CU.SLOT_DATA_CONFIG_SAVE)); // HFSt25taELoad.on_exec calls this too
+  showResult(oSt, data.length+" byte(s) written.", "ok");
+});
+wire("o_stconfig", oSt, async () => {
+  const ndefSize=Number($("o_stndefsize").value)||0;
+  const readAccess=Number($("o_stra").value), writeAccess=Number($("o_stwa").value);
+  const pwdRead=hexBytes($("o_stpwdread").value,16), pwdWrite=hexBytes($("o_stpwdwrite").value,16);
+  if(pwdRead.length!==16||pwdWrite.length!==16) throw new Error("passwords must each be 32 hex chars (16 bytes)");
+  okOrThrow(await request(CU.ST25TA_SET_CONFIG, [...u16be(ndefSize), readAccess, writeAccess, ...pwdRead, ...pwdWrite]));
+  okOrThrow(await request(CU.SLOT_DATA_CONFIG_SAVE)); // HFSt25taEConfig.on_exec calls this too
+  showResult(oSt, "ST25TA config set.", "ok");
+});
+
+const oMfp = $("o_mfpResult");
+wire("o_mfpinfo", oMfp, async () => {
+  const f = okOrThrow(await request(CU.MFPLUS_GET_INFO));
+  const level=f.data[0];
+  const blockMax=f.data[1]|(f.data[2]<<8); // little-endian, unlike the rest of this file -- matches chameleon_cmd.py exactly
+  showResult(oMfp, "Security level: SL"+level+(level===0?" (not personalized)":level===3?" (AES)":"")+"\nblock_max: "+blockMax, "ok");
+});
+wire("o_mfpperso", oMfp, async () => {
+  const addrHi=sbyte($("o_mfpaddrhi").value), addrLo=sbyte($("o_mfpaddrlo").value);
+  const key=hexBytes($("o_mfpkey").value,16);
+  if(key.length!==16) throw new Error("MIFARE Plus key must be 32 hex chars (16 bytes AES)");
+  okOrThrow(await request(CU.MFPLUS_WRITE_PERSO, [addrHi, addrLo, ...key]));
+  okOrThrow(await request(CU.SLOT_DATA_CONFIG_SAVE)); // HFMfPlusWritePerso.on_exec calls this too
+  showResult(oMfp, "WritePerso sent for addr 0x"+addrHi.toString(16).padStart(2,"0")+addrLo.toString(16).padStart(2,"0")+".", "ok");
+});
+wire("o_mfpcommit", oMfp, async () => {
+  if(!confirm("Commit perso: switches the card from SL0 to SL3. Make sure all three mandatory admin keys (0x9000/0x9001/0x9003) are written first — this can't be undone.")) return;
+  okOrThrow(await request(CU.MFPLUS_COMMIT_PERSO));
+  okOrThrow(await request(CU.SLOT_DATA_CONFIG_SAVE)); // HFMfPlusCommitPerso.on_exec calls this too
+  showResult(oMfp, "Perso committed — card is now SL3.", "ok");
 });
 
 /* =========================================================================

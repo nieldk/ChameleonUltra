@@ -8,14 +8,21 @@
  * rawWrite(), rawRspSink -- the last two by `hw gdb`, see below).
  *
  * THIS IS A SUBSET, NOT THE WHOLE CLI. The real CLI is ~195 commands across
- * hw/hf/lf/slot/standalone/data/emv, several of which (hf mf nested/darkside/
- * hardnested/autopwn/senested, the DESFire/SEOS/MF+ groups, most of lf) are
- * nontrivial algorithm ports (PRNG/crypto1 recovery, etc.) and are NOT here.
- * Unported groups/commands simply aren't registered: they're absent from
- * `help`/tab-complete and running them reports an unknown command, same as
- * any other command this terminal doesn't have. Commands this file DOES
- * implement mirror the Python CLI's flags and output text as closely as
- * the two environments allow.
+ * hw/hf/lf/slot/standalone/data/emv. `hf mf nested/darkside/hardnested/
+ * senested`, `hf seos`, `hf st25ta` and `hf mfplus` ARE here now -- but only
+ * as far as the device protocol goes (nonce/perso acquisition, one round).
+ * None of this terminal does actual crypto1 key recovery (darkside's
+ * decrypt, hardnested's/nested's PRNG-successor unrolling) -- that math runs
+ * in external tools on the Python side (a `darkside` binary, hardnested's
+ * nonce-file solver) this environment doesn't have; raw acquired data is
+ * printed for you to feed to those yourself. `hf mf autopwn` (orchestrates
+ * all of the above plus dictionary/fchk/nested in sequence) and most of
+ * `lf`'s per-tag-type decode tables are still not ported. Unported groups/
+ * commands simply aren't registered: they're absent from `help`/tab-complete
+ * and running them reports an unknown command, same as any other command
+ * this terminal doesn't have. Commands this file DOES implement mirror the
+ * Python CLI's flags and output text as closely as the two environments
+ * allow.
  * ------------------------------------------------------------------- */
 
 (function(){
@@ -1513,6 +1520,333 @@ hfDes.command("signature", "Read the NXP originality signature (Read_Sig) -- pri
 // hf des chk/auth-trace/divkey/parse need host-side crypto/auth state this
 // JS terminal doesn't implement -- not registered.
 
+/* ================= hf 14a sniff ================= */
+// Flags match HF14ASniff (chameleon_cli_unit.py) exactly; -o/--trace (write a
+// pm3 .trace file) isn't ported -- this terminal has no filesystem.
+hf14a.command("sniff", "Capture ISO14443A reader frames while CU acts as a tag", [
+  {names:["--timeout"], takesValue:true, dest:"timeout"},
+  {names:["--tap"], takesValue:false, dest:"tap"},
+], async (a) => {
+  await needReader();
+  const timeout = Math.max(1, Math.min(30000, a.timeout!==undefined ? Number(a.timeout) : 5000));
+  const f = await request(CU.HF14A_SNIFF, [...u16be(timeout), a.tap?1:0], Math.max(6000, timeout+3000));
+  if(!OK_STATUSES.has(f.status)) return [" [!] No capture: "+stname(f.status)];
+  const fr = parseFrames(f.data);
+  const lines = [" - "+fr.length+" frame(s) captured"];
+  for(const n of extractNonces(fr)){
+    lines.push("   auth key"+n.key+" block "+n.block+" uid "+n.uid+" nt "+n.nt+" nr "+n.nr+" ar "+n.ar+(n.at?" at "+n.at:""));
+  }
+  fr.forEach((f2,i) => lines.push("   "+String(i).padStart(3)+"  "+(f2.tx?"card->rdr":"rdr->card")+"  "+String(f2.bits).padStart(4)+"b  "+hex(f2.data)));
+  return lines;
+});
+
+/* ================= hf mf: key-recovery attacks (nonce acquisition only) =====
+ * No crypto1 math runs here -- see the file header. Flags are copied from
+ * cli_hf_mf.py's parsers, confirmed by reading each command's args_parser(),
+ * not guessed. darkside in particular is NOT a flat opcode wrapper in the
+ * real CLI: HFMFDarkside.recover_key hardcodes block 0x03/key A, loops up to
+ * 255 acquisition rounds, and shells out to an external `darkside` binary to
+ * decrypt each round -- so it takes no flags at all. This command does the
+ * same single acquisition call (block 0x03, type A, first_recover=true,
+ * sync_max=30, matching recover_key's own call) and prints the raw round for
+ * your own offline solver, rather than attempting the retry loop or binary. */
+function mf1KeytypeArgs(a){
+  if(a.a && a.b) throw new ArgError("-a and -b are mutually exclusive");
+  return a.b ? 0x61 : 0x60;
+}
+function mf1TargetKeytypeArgs(a){
+  if(a.ta && a.tb) throw new ArgError("--ta/--tA and --tb/--tB are mutually exclusive");
+  return a.tb ? 0x61 : 0x60;
+}
+function fmtNtRows(data, stride, uidAt){
+  const u32 = (o) => (data[o]<<24|data[o+1]<<16|data[o+2]<<8|data[o+3])>>>0;
+  const lines = [];
+  let o = 0;
+  if(uidAt !== undefined){ lines.push(" - uid: 0x"+u32(uidAt).toString(16)); o = uidAt+4; }
+  for(; o+stride<=data.length; o+=stride){
+    lines.push("   nt 0x"+u32(o).toString(16).padStart(8,"0")+" nt_enc 0x"+u32(o+4).toString(16).padStart(8,"0")+
+      (stride>8 ? " par 0x"+data[o+8].toString(16) : ""));
+  }
+  return lines;
+}
+hfMf.command("nested", "Mifare Classic nested recover key (nonce acquisition; auto-picks static/weak-PRNG method, same as the real CLI's first step)", [
+  {names:["--blk","--known-block"], takesValue:true, dest:"blk", required:true},
+  {names:["-a","-A"], takesValue:false, dest:"a"},
+  {names:["-b","-B"], takesValue:false, dest:"b"},
+  {names:["-k","--key"], takesValue:true, dest:"key", required:true},
+  {names:["--tblk","--target-block"], takesValue:true, dest:"tblk", required:true},
+  {names:["--ta","--tA"], takesValue:false, dest:"ta"},
+  {names:["--tb","--tB"], takesValue:false, dest:"tb"},
+], async (a) => {
+  await needReader();
+  const keytype = mf1KeytypeArgs(a), targetKeytype = mf1TargetKeytypeArgs(a);
+  const key = hexBytes(a.key, 6);
+  if(key.length!==6) throw new ArgError("key must be 12 hex chars (6 bytes)");
+  // recover_a_key's own first step (cli_hf_mf.py): detect PRNG, refuse hard.
+  const prng = okOrThrow(await request(CU.MF1_DETECT_PRNG)).data[0];
+  const lines = [" - NT vulnerable: "+["StaticNested","Nested","HardNested"][prng]];
+  if(prng === 2) return [...lines, " [!] Use hf mf hardnested"];
+  const args = [keytype, Number(a.blk), ...key, targetKeytype, Number(a.tblk)];
+  if(prng === 0){
+    const f = okOrThrow(await request(CU.MF1_STATIC_NESTED_ACQUIRE, args));
+    return [...lines, ...fmtNtRows(f.data, 8, 0)];
+  }
+  const f = okOrThrow(await request(CU.MF1_NESTED_ACQUIRE, args));
+  return [...lines, ...fmtNtRows(f.data, 9)];
+});
+const DARKSIDE_STATUS_T = {0:"OK",1:"can't fix nt (PRNG unpredictable)",2:"lucky auth (default key recovered directly)",3:"no NAK sent by tag",4:"tag changed mid-attack"};
+hfMf.command("darkside", "Mifare Classic darkside recover key (single acquisition round against block 0x03 key A, matching the real CLI's fixed target; no retry loop or external solver here)", [], async () => {
+  await needReader();
+  // sync_max=30, as recover_key's own call -- can run up to 300s on-device.
+  const f = okOrThrow(await request(CU.MF1_DARKSIDE_ACQUIRE, [0x60, 0x03, 1, 30], 305000));
+  const ds = f.data[0];
+  if(ds !== 0) return [" - Darkside: "+(DARKSIDE_STATUS_T[ds]||"status "+ds)];
+  // !BIIQQII: status(1) uid(4) nt1(4) par(8) ks1(8) nr(4) ar(4) = 33 bytes
+  const u32 = (o) => (f.data[o]<<24|f.data[o+1]<<16|f.data[o+2]<<8|f.data[o+3])>>>0;
+  return [
+    " - Darkside OK -- feed to an offline darkside solver:",
+    "   uid 0x"+u32(1).toString(16)+" nt1 0x"+u32(5).toString(16),
+    "   par 0x"+u64beHex(f.data,9)+" ks1 0x"+u64beHex(f.data,17),
+    "   nr 0x"+u32(25).toString(16)+" ar 0x"+u32(29).toString(16),
+  ];
+});
+hfMf.command("hardnested", "Mifare Classic hardnested recover key (single acquisition round; the real CLI's multi-attempt MSB-tracking loop + nonce-file hand-off to an external solver is not reproduced here)", [
+  {names:["--blk","--known-block"], takesValue:true, dest:"blk", required:true},
+  {names:["-a","-A"], takesValue:false, dest:"a"},
+  {names:["-b","-B"], takesValue:false, dest:"b"},
+  {names:["-k","--key"], takesValue:true, dest:"key", required:true},
+  {names:["--tblk","--target-block"], takesValue:true, dest:"tblk", required:true},
+  {names:["--ta","--tA"], takesValue:false, dest:"ta"},
+  {names:["--tb","--tB"], takesValue:false, dest:"tb"},
+  {names:["--slow"], takesValue:false, dest:"slow"},
+], async (a) => {
+  await needReader();
+  const keytype = mf1KeytypeArgs(a), targetKeytype = mf1TargetKeytypeArgs(a);
+  const key = hexBytes(a.key, 6);
+  if(key.length!==6) throw new ArgError("key must be 12 hex chars (6 bytes)");
+  // struct.pack('!BBB6sBB', slow, type_known, block_known, key_known, type_target, block_target)
+  const f = okOrThrow(await request(CU.MF1_HARDNESTED_ACQUIRE,
+    [a.slow?1:0, keytype, Number(a.blk), ...key, targetKeytype, Number(a.tblk)], 35000));
+  return [" - "+f.data.length+" raw byte(s) (feed to an offline hardnested solver):", "   "+bhex(f.data)];
+});
+hfMf.command("senested", "Mifare Classic static encrypted nested recover key via backdoor", [
+  {names:["-k","--key"], takesValue:true, dest:"key"},
+  {names:["-s","--sectors"], takesValue:true, dest:"sectors"},
+  {names:["--starting-sector"], takesValue:true, dest:"start"},
+], async (a) => {
+  await needReader();
+  // Defaults match HFMFStaticEncryptedNested's set_defaults exactly.
+  const key = hexBytes(a.key !== undefined ? a.key : "A396EFA4E24F", 6);
+  if(key.length!==6) throw new ArgError("key must be 12 hex chars (6 bytes)");
+  const sectors = a.sectors !== undefined ? Number(a.sectors) : 16;
+  const start = a.start !== undefined ? Number(a.start) : 0;
+  const f = await request(CU.MF1_ENC_NESTED_ACQUIRE, [...key, sectors, start], Math.max(6000, sectors*5000+5000));
+  if(f.status === 0x01) return [" [!] No tag found."];
+  okOrThrow(f);
+  const uid = (f.data[0]<<24|f.data[1]<<16|f.data[2]<<8|f.data[3])>>>0;
+  // reconstruct_full_nt's PRNG-successor unrolling isn't ported -- see header.
+  return [" - uid 0x"+uid.toString(16), " - "+(f.data.length-4)+" raw byte(s) of a/b nonce pairs (feed to an offline senested solver):", "   "+bhex(f.data.slice(4))];
+});
+
+/* ================= hf seos ================= */
+// Flags match HFSeosEView/ELoad/Keys (chameleon_cli_unit.py ~6201-6360).
+// eload's HF14A anti-collision flags (--uid/--atqa/--sak/--ats, via
+// HF14AAntiCollArgsUnit) aren't ported -- this terminal has no shared
+// anti-coll arg mixin, and that's slot config, not SEOS data proper.
+const hfSeos = hf.subgroup("seos", "SEOS emulation commands");
+hfSeos.command("eview", "View SEOS emulator data", [], async () => {
+  need();
+  const f = okOrThrow(await request(CU.SEOS_READ_EMU_DATA));
+  let o=0;
+  const next = () => { const len=f.data[o]; const v=f.data.slice(o+1,o+1+len); o+=1+len; return v; };
+  const data=next(), oid=next(), tag=next(), diversifier=next();
+  return [
+    " - Data: "+bhex(data), " - OID: "+bhex(oid), " - Tag: "+bhex(tag), " - Diversifier: "+bhex(diversifier),
+  ];
+});
+hfSeos.command("eload", "Load SEOS emulator data (fields left out keep their current value)", [
+  {names:["-d","--data"], takesValue:true, dest:"data"},
+  {names:["-o","--oid"], takesValue:true, dest:"oid"},
+  {names:["-t","--tag"], takesValue:true, dest:"tag"},
+  {names:["--diversifier"], takesValue:true, dest:"diversifier"},
+], async (a) => {
+  need();
+  if(a.data===undefined && a.oid===undefined && a.tag===undefined && a.diversifier===undefined)
+    throw new ArgError("no changes requested -- pass at least one of -d/-o/-t/--diversifier");
+  const cur = okOrThrow(await request(CU.SEOS_READ_EMU_DATA));
+  let o=0;
+  const next = () => { const len=cur.data[o]; const v=cur.data.slice(o+1,o+1+len); o+=1+len; return v; };
+  const curData=next(), curOid=next(), curTag=next(), curDiv=next();
+  const hashAlg=cur.data[o], encrAlg=cur.data[o+1]; // not configurable, per the real CLI
+  const data = a.data!==undefined ? hexBytes(a.data) : curData;
+  const oid = a.oid!==undefined ? hexBytes(a.oid) : curOid;
+  const tag = a.tag!==undefined ? hexBytes(a.tag) : curTag;
+  const diversifier = a.diversifier!==undefined ? hexBytes(a.diversifier) : curDiv;
+  if(data.length<2||data.length>255) throw new ArgError("data must be 2-255 bytes");
+  if(oid.length<1||oid.length>32) throw new ArgError("oid must be 1-32 bytes");
+  if(tag.length<1||tag.length>2) throw new ArgError("tag must be 1-2 bytes");
+  if(diversifier.length<1||diversifier.length>16) throw new ArgError("diversifier must be 1-16 bytes");
+  const payload=[...lenPrefixed(data), ...lenPrefixed(oid), ...lenPrefixed(tag), ...lenPrefixed(diversifier), hashAlg, encrAlg];
+  okOrThrow(await request(CU.SEOS_WRITE_EMU_DATA, payload));
+  return [" - SEOS emulation data loaded."];
+});
+hfSeos.command("keys", "Load SEOS emulation keys (16 bytes each)", [
+  {names:["-a","--auth"], takesValue:true, dest:"auth", required:true},
+  {names:["-e","--privenc"], takesValue:true, dest:"privenc", required:true},
+  {names:["-m","--privmac"], takesValue:true, dest:"privmac", required:true},
+], async (a) => {
+  need();
+  const auth=hexBytes(a.auth,16), privenc=hexBytes(a.privenc,16), privmac=hexBytes(a.privmac,16);
+  if(auth.length!==16) throw new ArgError("auth must be 16 bytes (32 hex chars)");
+  if(privenc.length!==16) throw new ArgError("privenc must be 16 bytes (32 hex chars)");
+  if(privmac.length!==16) throw new ArgError("privmac must be 16 bytes (32 hex chars)");
+  okOrThrow(await request(CU.SEOS_WRITE_EMU_KEYS, [...auth,...privenc,...privmac]));
+  return [" - SEOS emulation keys loaded."];
+});
+
+/* ================= hf st25ta ================= */
+// Flags match HFSt25taInfo/EView/ELoad/EConfig (cli_hf_st25ta.py). eload
+// mirrors the real command's framing exactly: body written at offset 2,
+// length prefix written separately at offset 0 (ST25TA_CHUNK/4046 wire
+// layout) -- not a flat offset+data passthrough. -f/--file and eview's
+// -o/--output aren't ported (no filesystem).
+const hfSt25ta = hf.subgroup("st25ta", "ST25TA (NFC Type 4) emulation commands");
+const ST25TA_READ_ACCESS = {free:0x00, locked:0x80, forbidden:0xFE};
+const ST25TA_WRITE_ACCESS = {free:0x00, locked:0x80, forbidden:0xFF};
+function st25taAccessName(v, table){ return Object.keys(table).find(k=>table[k]===v) || ("unknown (0x"+v.toString(16).padStart(2,"0")+")"); }
+async function st25taInfo(){
+  const f = okOrThrow(await request(CU.ST25TA_GET_INFO));
+  const ndefSize=(f.data[0]<<8)|f.data[1];
+  return {ndefSize, cc:f.data.slice(2,17), pwdRead:f.data.slice(17,33), pwdWrite:f.data.slice(33,49)};
+}
+hfSt25ta.command("info", "Show ST25TA emulator configuration", [], async () => {
+  need();
+  const info = await st25taInfo();
+  const lenBytes = okOrThrow(await request(CU.ST25TA_READ_NDEF, [...u16be(0), 2])).data;
+  const msgLen = (lenBytes[0]<<8)|lenBytes[1];
+  return [
+    " - NDEF file size: "+info.ndefSize+" bytes", " - NDEF message: "+msgLen+" bytes",
+    " - File type: 0x"+info.cc[7].toString(16).padStart(2,"0"),
+    " - Read access: "+st25taAccessName(info.cc[13], ST25TA_READ_ACCESS),
+    " - Write access: "+st25taAccessName(info.cc[14], ST25TA_WRITE_ACCESS),
+    " - Read password: "+bhex(info.pwdRead), " - Write password: "+bhex(info.pwdWrite),
+  ];
+});
+async function st25taReadChunked(offset, length){
+  const out=[];
+  while(length>0){
+    const n=Math.min(length, ST25TA_CHUNK);
+    const f = okOrThrow(await request(CU.ST25TA_READ_NDEF, [...u16be(offset), n]));
+    out.push(...f.data); offset+=n; length-=n;
+  }
+  return out;
+}
+hfSt25ta.command("eview", "View NDEF data from ST25TA emulator memory", [
+  {names:["--full"], takesValue:false, dest:"full"},
+], async (a) => {
+  need();
+  const info = await st25taInfo();
+  let data;
+  if(a.full){
+    data = await st25taReadChunked(0, info.ndefSize);
+  } else {
+    const len = await st25taReadChunked(0, 2);
+    const msgLen = Math.min(((len[0]<<8)|len[1]), info.ndefSize-2);
+    data = msgLen ? await st25taReadChunked(2, msgLen) : [];
+  }
+  return [" - "+data.length+" byte(s)"+(data.length?": "+bhex(data):"")];
+});
+hfSt25ta.command("eload", "Load an NDEF message into ST25TA emulator memory", [
+  {names:["-d","--data"], takesValue:true, dest:"data"},
+], async (a) => {
+  need();
+  if(a.data===undefined) throw new ArgError("no changes requested -- pass -d/--data");
+  const msg = hexBytes(a.data);
+  const info = await st25taInfo();
+  if(msg.length+2 > info.ndefSize) throw new ArgError("message needs "+(msg.length+2)+" bytes, NDEF file is "+info.ndefSize+" (use econfig --size)");
+  // Body first, length last -- matches HFSt25taELoad.on_exec exactly.
+  for(let i=0;i<msg.length;i+=ST25TA_CHUNK){
+    const chunk = msg.slice(i,i+ST25TA_CHUNK);
+    okOrThrow(await request(CU.ST25TA_WRITE_NDEF, [...u16be(2+i), ...chunk]));
+  }
+  okOrThrow(await request(CU.ST25TA_WRITE_NDEF, [...u16be(0), (msg.length>>8)&255, msg.length&255]));
+  okOrThrow(await request(CU.SLOT_DATA_CONFIG_SAVE)); // HFSt25taELoad.on_exec calls this too
+  return [" - NDEF message loaded ("+msg.length+" bytes)."];
+});
+hfSt25ta.command("econfig", "Configure ST25TA emulator size, access rights and passwords (fields left out keep their current value)", [
+  {names:["--size"], takesValue:true, dest:"size"},
+  {names:["--read-access"], takesValue:true, dest:"readAccess", choices:Object.keys(ST25TA_READ_ACCESS)},
+  {names:["--write-access"], takesValue:true, dest:"writeAccess", choices:Object.keys(ST25TA_WRITE_ACCESS)},
+  {names:["--read-pwd"], takesValue:true, dest:"readPwd"},
+  {names:["--write-pwd"], takesValue:true, dest:"writePwd"},
+], async (a) => {
+  need();
+  if([a.size,a.readAccess,a.writeAccess,a.readPwd,a.writePwd].every(v=>v===undefined))
+    throw new ArgError("no changes requested");
+  const info = await st25taInfo();
+  const size = a.size!==undefined ? Number(a.size) : info.ndefSize;
+  if(size<2||size>7680) throw new ArgError("size must be 2-7680");
+  const readAcc = a.readAccess!==undefined ? ST25TA_READ_ACCESS[a.readAccess] : info.cc[13];
+  const writeAcc = a.writeAccess!==undefined ? ST25TA_WRITE_ACCESS[a.writeAccess] : info.cc[14];
+  const pwdRead = a.readPwd!==undefined ? hexBytes(a.readPwd,16) : info.pwdRead;
+  const pwdWrite = a.writePwd!==undefined ? hexBytes(a.writePwd,16) : info.pwdWrite;
+  if(pwdRead.length!==16||pwdWrite.length!==16) throw new ArgError("passwords must be 16 bytes (32 hex chars)");
+  okOrThrow(await request(CU.ST25TA_SET_CONFIG, [...u16be(size), readAcc, writeAcc, ...pwdRead, ...pwdWrite]));
+  okOrThrow(await request(CU.SLOT_DATA_CONFIG_SAVE)); // HFSt25taEConfig.on_exec calls this too
+  return [" - ST25TA config updated."];
+});
+
+/* ================= hf mfplus ================= */
+// Flags match HFMfPlusInfo/WritePerso/CommitPerso (cli_hf_mfplus.py). -a/
+// --addr's alias/sector-pair/raw-hex parsing ports _parse_addr() verbatim --
+// NOT the same shape as this page's own GUI (addrHi/addrLo fields), because
+// the real CLI command doesn't take raw address bytes.
+const hfMfplus = hf.subgroup("mfplus", "MIFARE Plus SL0/SL3 perso commands");
+const MFPLUS_ADDR_ALIASES = {master:[0x90,0x00], config:[0x90,0x01], l3switch:[0x90,0x03]};
+function mfplusParseAddr(s){
+  s = (s||"").trim();
+  if(MFPLUS_ADDR_ALIASES[s.toLowerCase()]) return MFPLUS_ADDR_ALIASES[s.toLowerCase()];
+  if(s.includes(":")){
+    const [sectorStr, keytypeStr] = s.split(":",2);
+    const sector = parseInt(sectorStr,10), keytype = keytypeStr.trim().toUpperCase()==="A" ? 0 : 1;
+    const keyNum = 0x4000 + sector*2 + keytype;
+    return [(keyNum>>8)&255, keyNum&255];
+  }
+  const keyNum = parseInt(s,16);
+  if(!Number.isFinite(keyNum)) throw new ArgError("bad --addr: "+s);
+  return [(keyNum>>8)&255, keyNum&255];
+}
+hfMfplus.command("info", "Show MIFARE Plus emulator state", [], async () => {
+  need();
+  const f = okOrThrow(await request(CU.MFPLUS_GET_INFO));
+  const level = f.data[0], blockMax = f.data[1]|(f.data[2]<<8); // little-endian, matches chameleon_cmd.py
+  const lines = [" - Security level: "+({0:"SL0 (not personalized)",3:"SL3 (AES)"}[level] || ("unknown ("+level+")")),
+    " - Blocks: "+blockMax];
+  if(level===0) lines.push(" - Use 'hf mfplus wrp' to write admin keys, then 'hf mfplus commitp' to switch to SL3.");
+  return lines;
+});
+hfMfplus.command("wrp", "WritePerso: write one AES key into the MIFARE Plus key table (SL0 only)", [
+  {names:["-a","--addr"], takesValue:true, dest:"addr", required:true},
+  {names:["-k","--key"], takesValue:true, dest:"key", required:true},
+], async (a) => {
+  need();
+  const [addrHi, addrLo] = mfplusParseAddr(a.addr);
+  const key = hexBytes(a.key, 16);
+  if(key.length!==16) throw new ArgError("key must be 16 bytes (32 hex chars, AES)");
+  okOrThrow(await request(CU.MFPLUS_WRITE_PERSO, [addrHi, addrLo, ...key]));
+  okOrThrow(await request(CU.SLOT_DATA_CONFIG_SAVE));
+  return [" - WritePerso 0x"+addrHi.toString(16).padStart(2,"0")+addrLo.toString(16).padStart(2,"0")+" OK"];
+});
+hfMfplus.command("commitp", "CommitPerso: switch SL0 -> SL3 (requires the three admin keys written first; cannot be undone)", [
+  {names:["--force"], takesValue:false, dest:"force"},
+], async (a) => {
+  need();
+  if(!a.force) return [" - Pass --force to confirm: this switches SL0 -> SL3 and can't be undone."];
+  okOrThrow(await request(CU.MFPLUS_COMMIT_PERSO));
+  okOrThrow(await request(CU.SLOT_DATA_CONFIG_SAVE));
+  return [" - Perso committed -- card is now SL3."];
+});
+
 /* ================= emv ================= */
 const emv = ROOT.subgroup("emv", "EMV contactless payment card commands");
 
@@ -1759,6 +2093,26 @@ lf.command("search", "Search for any supported LF tag -- tries every decoder in 
   if(!OK_STATUSES.has(f.status)) return ["No known LF tag found"];
   const type = (f.data[0]<<8)|f.data[1];
   return ["- "+tagTypeName(type)+" : "+bhex(f.data.slice(2))];
+});
+
+/* ================= lf sniff ================= */
+// Flags match LFSniff (cli_lf.py); --out/--hex aren't ported (no filesystem;
+// this always prints a hex preview, same as this page's own LF tab).
+lf.command("sniff", "Capture raw LF field ADC samples (125kHz, 8us/sample)", [
+  {names:["--timeout"], takesValue:true, dest:"timeout"},
+  {names:["--passive"], takesValue:false, dest:"passive"},
+], async (a) => {
+  await needReader();
+  const timeout = Math.max(1, Math.min(10000, a.timeout!==undefined ? Number(a.timeout) : 2000));
+  const f = await request(CU.LF_SNIFF, [...u16be(timeout), a.passive?1:0], Math.max(6000, timeout+3000));
+  if(!OK_STATUSES.has(f.status) || !f.data.length) return [" [!] No samples captured"];
+  const d = f.data;
+  let min=255, max=0, sum=0;
+  for(const b of d){ if(b<min) min=b; if(b>max) max=b; sum+=b; }
+  return [
+    " - "+d.length+" ADC sample(s), min "+min+" max "+max+" mean "+(sum/d.length).toFixed(1),
+    " - first 64 bytes: "+bhex(d.slice(0,64))+(d.length>64?" ...":""),
+  ];
 });
 
 const lfEm = lf.subgroup("em", "EM commands");
