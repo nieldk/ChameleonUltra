@@ -8,6 +8,7 @@ Step 1 of the split: foundation extracted, commands still here."""
 from cli_core import *  # noqa: F401,F403 - foundation: bases, groups, helpers, imports
 import cli_core
 from fdxb_country import ISO3166_NUMERIC
+from aid_database import lookup_iso_aid
 from canary_cmd import canary_cmd_name
 import hf14a_info
 # re-export everything cli_core defined so command bodies resolve names
@@ -3228,7 +3229,10 @@ def _known_aid(aid: bytes) -> str:
         bytes.fromhex('d27600002545'): 'NDEF Type 4',
         bytes.fromhex('315041592e5359532e4444463031'): 'PPSE (2PAY.SYS.DDF01)',
     }
-    return table.get(aid, '')
+    if aid in table:
+        return table[aid]
+    known = lookup_iso_aid(aid)
+    return f'{known[0]}: {known[1]}' if known else ''
 
 
 def _known_bertag(tag: int) -> str:
@@ -4104,13 +4108,8 @@ def _emv_decode_apdu(data: bytes) -> str:
     lc = data[4] if len(data) > 4 else 0
     body = data[5:5 + lc] if len(data) > 5 else b''
     if cla == 0x00 and ins == 0xA4 and p1 == 0x04 and body:
-        known = {
-            bytes.fromhex('325041592e5359532e4444463031'): 'PPSE (2PAY.SYS.DDF01)',
-            bytes.fromhex('a0000000031010'): 'Visa Credit/Debit',
-            bytes.fromhex('a0000000041010'): 'Mastercard Debit',
-            bytes.fromhex('a000000025010402'): 'Amex',
-        }
-        return 'SELECT AID  ' + known.get(body.lower(), body.hex().upper())
+        name = _known_aid(body)
+        return 'SELECT AID  ' + (name if name else body.hex().upper())
     if cla == 0x80 and ins == 0xA8:
         return 'GET PROCESSING OPTIONS (GPO)'
     if cla == 0x00 and ins == 0xB2:

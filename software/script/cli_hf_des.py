@@ -8,6 +8,7 @@ import re
 import argparse
 import time
 
+from aid_database import lookup_desfire_aid
 from cli_core import (
     _decode_14a_frame_col,
     ArgumentParserNoExit,
@@ -2125,7 +2126,9 @@ class HfDesBruteAid(ReaderRequiredUnit):
                     resp = _des_transceive(self.cmd, 0x5A, aid_bytes)
                     if resp[-1] == 0x00:
                         found.append(aid)
-                        print(f"   {CG}+ AID {aid:06X} accepted{C0}")
+                        known = lookup_desfire_aid(aid_bytes)
+                        tag = f" -- {known[0]}: {known[1]}" if known else ""
+                        print(f"   {CG}+ AID {aid:06X} accepted{tag}{C0}")
                 except RuntimeError:
                     pass
                 if n % 16 == 0 or n == total:
