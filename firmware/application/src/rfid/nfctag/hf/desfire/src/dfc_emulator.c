@@ -291,11 +291,12 @@ bool dfc_emulator_transaction_snapshot_mirror_write(
 
 bool dfc_emulator_abort_transaction_snapshot(DfcEmulator* emulator) {
     if(!emulator->transaction_snapshot_active) return false;
-
     size_t app_index = emulator->transaction_snapshot_app_index;
     bool valid = emulator->transaction_snapshot_pool_length <=
                  emulator->transaction_snapshot_pool_capacity;
-    for(size_t index = 0; index < (emulator->credential->num_files)-1; index++) {
+    size_t file_count = emulator->credential->num_files;
+    if(file_count > DFC_MAX_FILES) file_count = DFC_MAX_FILES;
+    for(size_t index = 0; index < file_count; index++) {
         const DfcFile* file = &emulator->credential->files[index];
         if(file->app_index != app_index || !file->transaction_pending ||
            !transaction_file_has_data(file) ||
