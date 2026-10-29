@@ -290,6 +290,7 @@ bool dfc_emulator_transaction_snapshot_mirror_write(
 }
 
 bool dfc_emulator_abort_transaction_snapshot(DfcEmulator* emulator) {
+    if (file_index >= DFC_MAX_FILES) return false;
     if(!emulator->transaction_snapshot_active) return false;
 
     size_t app_index = emulator->transaction_snapshot_app_index;
