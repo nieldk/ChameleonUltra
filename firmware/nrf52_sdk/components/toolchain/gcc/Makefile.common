@@ -276,7 +276,9 @@ endef
 	$(call run,$(CXX),$(CFLAGS) $(CXXFLAGS),Compiling)
 
 # Create object files from assembly source files
-%.S.o %.s.o.o:
+%.S.o:
+	$(call run,$(CC) -x assembler-with-cpp,$(ASMFLAGS),Assembling)
+%.s.o.o:
 	$(call run,$(CC) -x assembler-with-cpp,$(ASMFLAGS),Assembling)
 
 ifeq ($(PASS_LINKER_INPUT_VIA_FILE),1)
