@@ -780,9 +780,12 @@ hwLog.command("clear", "Erase the stored debug log", [], async () => {
  * Once armed, the active link -- BLE here -- speaks RSP instead of the
  * framed CLI protocol (gdb_rsp.c), so everything below bypasses `request()`
  * and talks raw $...#cksum packets over rawWrite()/rawRspSink.
- * Memory/flash only: no breakpoints or stepping (that needs a real gdb
- * front-end -- see software/script/gdb_ble_bridge.py for that path). */
-const hwGdb = hw.subgroup("gdb", "GDB RSP client for the gdb_gateway standalone mode (memory/flash, no breakpoints)");
+ * Memory/flash, plus hardware breakpoints (FPB, CONFIG_GDB_GATEWAY_EXEC in
+ * gdb_rsp.c) via break/unbreak/continue below. No single-step: the firmware
+ * doesn't offer hardware step (an escaping USB/SoftDevice IRQ would drop the
+ * link), and gdb's own software step needs a full gdb front-end -- see
+ * software/script/gdb_ble_bridge.py for that path. */
+const hwGdb = hw.subgroup("gdb", "GDB RSP client for the gdb_gateway standalone mode (memory/flash, hardware breakpoints)");
 
 const RSP_TIMEOUT_MS = 5000;
 let rspBuf = [], rspWaiter = null;
@@ -816,11 +819,14 @@ function rspEscape(bytes){
   return out;
 }
 
-function rspSend(bodyBytes){
+function rspSend(bodyBytes, timeoutMs=RSP_TIMEOUT_MS){
   // withDeviceLock (canary.js): serializes against request() and against
   // any remote-session peer's forwarded traffic on the same physical link.
+  // 'c' (continue) replies with just a bare ack, no framed packet, until a
+  // breakpoint fires -- callers pass a much longer timeoutMs for that case;
+  // the eventual unsolicited "$S05#.." stop reply resolves this same waiter.
   return withDeviceLock(() => new Promise((resolve,reject)=>{
-    const t=setTimeout(()=>{ rspWaiter=null; reject(new Error("no RSP reply (armed? try 'hw gdb arm' first)")); }, RSP_TIMEOUT_MS);
+    const t=setTimeout(()=>{ rspWaiter=null; reject(new Error("no RSP reply (armed? try 'hw gdb arm' first)")); }, timeoutMs);
     rspWaiter = {resolve:p=>{clearTimeout(t); resolve(p);}};
     rawWrite(rspAsciiFrame(bodyBytes)).catch(e=>{ clearTimeout(t); rspWaiter=null; reject(e); });
   }));
@@ -893,6 +899,30 @@ hwGdb.command("mem-read", "Read memory: hw gdb mem-read <addr> <len>", [
   return lines;
 });
 
+hwGdb.command("disassemble", "Disassemble Thumb/Thumb-2 code: hw gdb disassemble <addr> [count=10]", [
+  {positional:true, dest:"args", required:true},
+], async (a) => {
+  if(!rspActive()) throw new ArgError("not in RSP mode; run 'hw gdb enter' first");
+  const [addrS, countS] = a.args;
+  if(addrS===undefined) throw new ArgError("usage: disassemble <addr> [count]");
+  const addr = hexAddr(addrS);
+  const count = countS===undefined ? 10 : numArg(countS);
+  if(!(count>0 && count<=256)) throw new ArgError("count must be 1-256");
+  // 32-bit Thumb-2 instructions are at most 4 bytes; over-fetch a bit so the
+  // last requested instruction isn't cut short by exactly hitting the buffer end.
+  const fetchLen = Math.min(count*4 + 4, 0x400);
+  const p = await rspSend(rspAscii("m"+addr.toString(16)+","+fetchLen.toString(16)));
+  const s = String.fromCharCode(...p);
+  if(s[0]==="E") return [" - error: "+s];
+  const bytes = []; for(let i=0;i+1<s.length;i+=2) bytes.push(parseInt(s.substr(i,2),16));
+  if(!bytes.length) return [" - no bytes read"];
+  const insns = disassembleThumb(bytes, addr, count);
+  return insns.map(ins => {
+    const hexs = ins.bytes.map(b=>b.toString(16).padStart(2,"0")).join(" ").padEnd(11);
+    return "   "+ins.addr.toString(16).padStart(8,"0")+":  "+hexs+"  "+ins.text;
+  });
+});
+
 hwGdb.command("mem-write", "Write memory: hw gdb mem-write <addr> <hex-bytes>", [
   {positional:true, dest:"args", required:true},
 ], async (a) => {
@@ -959,7 +989,51 @@ hwGdb.command("monitor", "Send a 'monitor <cmd>' (help/info/unlock-app/lock/rese
   return out.split("\n").filter(l=>l.length);
 });
 
-hwGdb.command("regs", "Read r0-r15, xPSR (all-zero unless halted; this terminal has no breakpoints)", [], async () => {
+hwGdb.command("break", "Set a hardware breakpoint (FPB, up to 6 live) at an address: hw gdb break <addr>", [
+  {positional:true, dest:"args", required:true},
+], async (a) => {
+  if(!rspActive()) throw new ArgError("not in RSP mode; run 'hw gdb enter' first");
+  const [addrS] = a.args;
+  if(addrS===undefined) throw new ArgError("usage: break <addr>");
+  const addr = hexAddr(addrS);
+  // "Z0,<addr>,<kind>" -- kind is advisory (instruction length) and unused by
+  // the FPB path (do_bp in gdb_rsp.c); 2 is the usual Thumb length.
+  const p = await rspSend(rspAscii("Z0,"+addr.toString(16)+",2"));
+  const s = String.fromCharCode(...p);
+  if(s==="OK") return [" - Breakpoint set at 0x"+addr.toString(16)+". Run 'hw gdb continue' to run to it."];
+  if(!s.length) return [" - rejected: no free FPB slot (max 6), or this address isn't code"];
+  return [" - error: "+s];
+});
+
+hwGdb.command("unbreak", "Clear a breakpoint previously set with 'break': hw gdb unbreak <addr>", [
+  {positional:true, dest:"args", required:true},
+], async (a) => {
+  if(!rspActive()) throw new ArgError("not in RSP mode; run 'hw gdb enter' first");
+  const [addrS] = a.args;
+  if(addrS===undefined) throw new ArgError("usage: unbreak <addr>");
+  const addr = hexAddr(addrS);
+  const p = await rspSend(rspAscii("z0,"+addr.toString(16)+",2"));
+  const s = String.fromCharCode(...p);
+  return [s==="OK" ? " - Breakpoint cleared at 0x"+addr.toString(16) : " - error: "+s];
+});
+
+hwGdb.command("continue", "Resume (or start) execution; blocks until a breakpoint fires -- set one first with 'break'", [], async () => {
+  if(!rspActive()) throw new ArgError("not in RSP mode; run 'hw gdb enter' first");
+  try{
+    // No timeout worth enforcing here beyond a sanity cap: the firmware is
+    // free-running until a breakpoint fires, which may be an arbitrarily
+    // long time (or never, if nothing hits it).
+    const p = await rspSend(rspAscii("c"), 15*60*1000);
+    const s = String.fromCharCode(...p);
+    const m = s.match(/^S([0-9a-fA-F]{2})$/);
+    if(m) return [" - Halted (signal "+parseInt(m[1],16)+"). Run 'hw gdb regs' to inspect, 'hw gdb continue' to resume."];
+    return [" - "+(s.length ? s : "(no reply)")];
+  }catch(e){
+    return [" - "+e.message, "   Still running: no breakpoint fired within 15 minutes."];
+  }
+});
+
+hwGdb.command("regs", "Read r0-r15, xPSR (all-zero while running; real values once halted by 'continue' hitting a breakpoint)", [], async () => {
   if(!rspActive()) throw new ArgError("not in RSP mode; run 'hw gdb enter' first");
   const p = await rspSend(rspAscii("g"));
   const s = String.fromCharCode(...p);
@@ -1501,7 +1575,12 @@ hfDes.command("bruteaid", "Brute-force the DESFire application-ID space via Sele
     const aidBytes = [(aid>>16)&0xFF, (aid>>8)&0xFF, aid&0xFF];
     try{
       const r = await dfcSend(DFC_INS.SELECT_APPLICATION, aidBytes);
-      if(r.ok) { found.push(aid); printLines(["   + AID "+aid.toString(16).padStart(6,"0").toUpperCase()+" accepted"]); }
+      if(r.ok) {
+        found.push(aid);
+        const known = lookupDesfireAid(aidBytes);
+        const tag = known ? " -- "+known[0]+": "+known[1] : "";
+        printLines(["   + AID "+aid.toString(16).padStart(6,"0").toUpperCase()+" accepted"+tag]);
+      }
     }catch(e){ /* non-card-error replies are expected misses */ }
   }
   return [found.length ? "Found "+found.length+" AID(s): "+found.map(a=>a.toString(16).padStart(6,"0").toUpperCase()).join(", ") : "No AIDs accepted in range"];
@@ -1937,9 +2016,11 @@ emv.command("scan", "Full EMV contactless card scan (PPSE/SELECT AID/GPO/READ RE
     extraData.push(...ppseBody);
   }
   if(pairs.length>=2){
-    const [, selResp] = pairs[1];
+    const [selCmd, selResp] = pairs[1];
     const selBody = selResp.length>=2 ? selResp.slice(0,-2) : selResp;
-    out.push(" SELECT AID OK ("+selResp.length+"b)");
+    const aidBytes = selCmd.length>6 ? selCmd.slice(5,-1) : [];
+    const aidKnown = lookupIsoAid(aidBytes);
+    out.push(" SELECT AID OK ("+selResp.length+"b)"+(aidKnown ? "  "+aidKnown[0]+": "+aidKnown[1] : ""));
     extraData.push(...selBody);
   }
   if(pairs.length>=3){
