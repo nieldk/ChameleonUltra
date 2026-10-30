@@ -287,10 +287,24 @@ hw.command("status", "Show a one-shot summary of connection, firmware and hardwa
   return lines;
 });
 
+// The chip reboots as part of these, but the BLE stack's gattserverdisconnected
+// event can lag the actual reboot by a second or more -- device.gatt.connected
+// (what connected()/need() check) reads stale-true in that window, so a command
+// typed right after a bare "Reset successful!" can hang on a dead link instead
+// of failing fast. Poll for the real drop before reporting success.
+async function waitForDisconnect(timeoutMs){
+  const t0=(performance||Date).now();
+  while(connected() && (performance||Date).now()-t0 < timeoutMs) await new Promise(r=>setTimeout(r,150));
+  return !connected();
+}
+
 hw.command("reset", "Reboot the device. Plain restart only -- slots and settings are untouched.", [], async () => {
   need();
   try{ await request(CU.RESET_DEVICE); }catch(e){} // device closes the link as part of the reset
-  return [" - Reset successful! Please reconnect."];
+  const dropped = await waitForDisconnect(3000);
+  return dropped ? [" - Reset successful. Disconnected -- reconnect (or wait for auto-reconnect) before the next command."]
+                 : [" - Reset requested, but this link still looks connected after 3s -- it may be stale.",
+                    "   Don't run another command yet; reload the page if the next one hangs."];
 });
 
 hw.command("factory_reset", "Wipe all slot data and custom settings and return to factory settings", [
@@ -299,7 +313,10 @@ hw.command("factory_reset", "Wipe all slot data and custom settings and return t
   need();
   if(!a.force) return ["If you are you really sure, read the command documentation to see how to proceed."];
   try{ await request(CU.WIPE_FDS); }catch(e){} // device closes the link as part of the wipe
-  return [" - Reset successful! Please reconnect."];
+  const dropped = await waitForDisconnect(3000);
+  return dropped ? [" - Reset successful. Disconnected -- reconnect (or wait for auto-reconnect) before the next command."]
+                 : [" - Reset requested, but this link still looks connected after 3s -- it may be stale.",
+                    "   Don't run another command yet; reload the page if the next one hangs."];
 });
 
 hw.command("dfu", "Restart application to bootloader/DFU mode", [], async () => {
@@ -847,17 +864,38 @@ hwGdb.command("arm", "Select and arm gdb_gateway (software arm, same path as a b
   if(f0.data[1] !== MODE_GDB){
     okOrThrow(await request(CMD_SET_MODE, [MODE_GDB, FLAG_OPTIN]));
   }
+  // CMD_TRIGGER's own ack is the last framed-protocol reply this link will
+  // ever give: arming runs gdb_rsp_enter() synchronously inside the same BLE
+  // event that delivered this request (on_enter(), mode_gdb_gateway.c), and
+  // from that point ble_main.c/usb_main.c route every subsequent byte to the
+  // RSP parser, not data_frame_receive() -- confirmed by testing: a follow-up
+  // CMD_GET_MODE here always times out even though the arm itself succeeded,
+  // which is why this used to show a confusing "error:" on a successful arm.
   okOrThrow(await request(CMD_TRIGGER));   // arms if disarmed (app_standalone_trigger)
-  const f1 = okOrThrow(await request(CMD_GET_MODE));
-  if(f1.data[0] === 0) return [" - Arm rejected (status ok but still disarmed) -- opt-in flag missing?"];
   return [" - gdb_gateway armed. The active link now speaks GDB RSP.", "   Use 'hw gdb enter' to start, 'hw gdb disarm' when done."];
 });
 
-hwGdb.command("disarm", "Disarm gdb_gateway (leaves RSP mode on the terminal side first)", [], async () => {
-  rspLeave();
+hwGdb.command("disarm", "Disarm gdb_gateway: monitor reset over RSP (device reboots and comes back disarmed -- app_standalone_init() forces that on every boot)", [], async () => {
   need();
-  okOrThrow(await request(CMD_DISARM));
-  return [" - Disarm requested. The device saves state and returns to the framed CLI protocol."];
+  // A bare framed CMD_DISARM can't work once armed: the DEVICE is still
+  // routing every incoming byte to gdb_rsp_rx() (see the note in 'arm' above)
+  // regardless of what rspLeave() does to the client's own local state, so
+  // cmd_handler_standalone_disarm() never runs -- confirmed by testing. The
+  // way back is the same link, speaking what it actually listens for: enter
+  // RSP if not already in it, then 'monitor reset' (gdb_rsp.c's only monitor
+  // command that clears standalone arm state -- there is no monitor "disarm").
+  const wasActive = rspActive();
+  if(!wasActive) rspEnter();
+  try{
+    if(!wasActive) await rspSend(rspAscii("?"));
+    const hex = Array.from("reset").map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join("");
+    await rspSend(rspAscii("qRcmd,"+hex));
+    rspLeave();
+    return [" - Reset requested over RSP. The device reboots and comes back disarmed.", "   Reconnect once it's back (both-buttons long-press works too, any time, with no protocol involved)."];
+  }catch(e){
+    rspLeave();
+    return [" - "+e.message, "   If RSP won't respond either, long-press both buttons on the device -- that's a GPIO handler, not a link command, and disarms regardless of what the link is doing."];
+  }
 });
 
 hwGdb.command("enter", "Switch this terminal into raw RSP mode and confirm the device answers", [], async () => {
@@ -869,7 +907,8 @@ hwGdb.command("enter", "Switch this terminal into raw RSP mode and confirm the d
     return [" - RSP mode active (device replied: "+String.fromCharCode(...p)+")."];
   }catch(e){
     rspLeave();
-    return [" - "+e.message, "   Run 'hw gdb arm' first if you haven't."];
+    return [" - "+e.message, "   Run 'hw gdb arm' first if you haven't.",
+            "   If you already have and it's still not answering, long-press both buttons on the device to disarm and recover -- a framed command can't reach it while armed."];
   }
 });
 
