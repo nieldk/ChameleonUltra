@@ -863,6 +863,16 @@ hwGdb.command("disarm", "Disarm gdb_gateway (leaves RSP mode on the terminal sid
 hwGdb.command("enter", "Switch this terminal into raw RSP mode and confirm the device answers", [], async () => {
   need();
   if(rspActive()) return [" - Already in RSP mode."];
+  // Guard: don't speak raw RSP bytes at a device that isn't actually armed into
+  // gdb_gateway -- e.g. a stock/non-Phreakbyte device, or this build with
+  // gdb_gateway excluded at compile time (standalone_modes.mk). Without this,
+  // 'enter' would blindly write a raw byte onto the normal framed link and only
+  // find out something's wrong after a multi-second RSP timeout.
+  const f = okOrThrow(await request(CMD_GET_MODE));
+  if(f.data[1] !== MODE_GDB || f.data[0] === 0){
+    return [" - Device is not armed into gdb_gateway (mode: "+(MODES[f.data[1]]||f.data[1])+", state: "+(STATES[f.data[0]]||f.data[0])+").",
+            "   Run 'hw gdb arm' first -- refusing to enter RSP mode on a link that isn't speaking it."];
+  }
   rspEnter();
   try{
     const p = await rspSend(rspAscii("?"));
