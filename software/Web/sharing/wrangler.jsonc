@@ -2,6 +2,13 @@
   "name": "phreakbyte-rsess-relay",
   "main": "src/index.js",
   "compatibility_date": "2026-10-01",
+  // Used by the connection log to flag a join whose Origin header matches
+  // your own site ("sameOrigin"). Not secret -- update and redeploy if the
+  // site ever moves. LOG_KEY (gates reading the log back) is a secret, set
+  // separately: wrangler secret put LOG_KEY
+  "vars": {
+    "ALLOWED_ORIGIN": "https://sec1.dk"
+  },
   "durable_objects": {
     "bindings": [
       { "name": "RSESS_ROOM", "class_name": "RsessRoom" }
