@@ -41,6 +41,24 @@ static tag_specific_type_t m_tag_type = TAG_TYPE_UNDEFINED;
 const nrfx_pwm_t m_broadcast = NRFX_PWM_INSTANCE(0);
 const nrf_pwm_sequence_t *m_pwm_seq = NULL;
 
+static void pwm_init(void);
+// PWM base clock currently programmed (set by pwm_init)
+static nrf_pwm_clk_t m_pwm_base_clock = NRF_PWM_CLK_125kHz;
+
+static nrf_pwm_clk_t pwm_base_for_type(tag_specific_type_t type) {
+    return IS_1MHZ_BASE_TYPE(type) ? NRF_PWM_CLK_1MHz : NRF_PWM_CLK_125kHz;
+}
+
+// The slot type can change while sensing is armed (hw slot type, econfig); re-init
+// the PWM when the loaded type needs a different base clock. Call only while the
+// PWM is stopped.
+static void lf_pwm_sync_base_clock(void) {
+    if (m_pwm_base_clock != pwm_base_for_type(m_tag_type)) {
+        nrfx_pwm_uninit(&m_broadcast);
+        pwm_init();
+    }
+}
+
 static void lf_field_lost(void) {
     // Open the incident interruption, so that the next event can be in and out normally
     g_is_tag_emulating = false;  // Reset the flag in the emulation
@@ -97,6 +115,7 @@ static void lpcomp_event_handler(nrf_lpcomp_event_t event) {
     // PWM has fully released LF_MOD, so ANT_NO_MOD() and the settle delay are
     // effective. NRFX_PWM_FLAG_LOOP kept the pin owned by the peripheral,
     // making the field check always read "present" due to self-drive on LF_RSSI.
+    lf_pwm_sync_base_clock();
     nrfx_pwm_simple_playback(&m_broadcast, m_pwm_seq, 10, NRFX_PWM_FLAG_STOP);
 
     NRF_LOG_INFO("LF FIELD DETECTED");
@@ -123,6 +142,7 @@ static void pwm_handler(nrfx_pwm_evt_type_t event_type) {
     bsp_delay_ms(2);  // let peak detector drain: ~2 ms time constant on LF_RSSI
     if (is_lf_field_exists()) {
         // Field still present — play another finite burst then check again.
+        lf_pwm_sync_base_clock();
         nrfx_pwm_simple_playback(&m_broadcast, m_pwm_seq, 10, NRFX_PWM_FLAG_STOP);
     } else {
         // Field gone — clean up.
@@ -144,7 +164,8 @@ static void pwm_init(void) {
     // subcarrier period, so pwm_init uses 1MHz base with counter_top=16.
     // FDX-B (134.2kHz) also uses the 1MHz base.
     // See tag_base_type.h IS_1MHZ_BASE_TYPE for the list of qualifying types.
-    cfg.base_clock = IS_1MHZ_BASE_TYPE(m_tag_type) ? NRF_PWM_CLK_1MHz : NRF_PWM_CLK_125kHz;
+    cfg.base_clock = pwm_base_for_type(m_tag_type);
+    m_pwm_base_clock = cfg.base_clock;
     cfg.count_mode = NRF_PWM_MODE_UP;
     cfg.load_mode = NRF_PWM_LOAD_WAVE_FORM;
     cfg.step_mode = NRF_PWM_STEP_AUTO;
