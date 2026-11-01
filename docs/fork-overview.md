@@ -71,6 +71,13 @@ FDX-B is also an emulation slot type (`TAG_TYPE_FDXB`): `fdxb_modulator()` in
 `lf/tests/` holds a host test that round-trips the modulator through the
 decoder (`make -C firmware/application/src/rfid/nfctag/lf/tests test`).
 
+Known limit: the emulation loads the antenna through a fixed switched load
+(LF_MOD drives the load MOSFET), so modulation depth is set by the hardware and
+cannot be raised in firmware. The antenna is tuned for 125 kHz, so one Chameleon
+reading another's FDX-B emulation at 134.2 kHz couples weakly and the result
+varies between units. A raw `lf sniff` capture of the emulation shows the
+intended 238 µs bit period (118 µs half-bit).
+
 ## DESFire EV3 slot types
 
 `TAG_TYPE_DESFIRE_EV3_2K/4K/8K` (1306–1308) sit beside the EV1/EV2 types. The
