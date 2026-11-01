@@ -268,6 +268,8 @@ static void nfc_tag_desfire_state_handler(uint8_t *p_data, uint16_t szDataBits) 
     DfcVirtualPiccStatus st = dfc_virtual_picc_iso_dep_exchange(
                                   m_session, m_rx_buf, m_rx_len,
                                   m_resp_buf, sizeof(m_resp_buf), &resp_len);
+    uint16_t dbg_cmd_len = m_rx_len;
+    uint8_t dbg_cmd0 = m_rx_buf[0];
     m_rx_len = 0;
 
     /* 64 MHz core, so cycles / 64 is microseconds. This is the number that
@@ -276,6 +278,8 @@ static void nfc_tag_desfire_state_handler(uint8_t *p_data, uint16_t szDataBits) 
     if (us > m_max_handler_us) m_max_handler_us = (uint16_t)(us > 0xFFFF ? 0xFFFF : us);
 
     if (st != DfcVirtualPiccStatusOk || resp_len == 0) {
+        NRF_LOG_WARNING("DESFire exch fail: st=%d resp=%u cmd0=%02X len=%u",
+                        (int)st, (unsigned)resp_len, dbg_cmd0, (unsigned)dbg_cmd_len);
         m_engine_errors++;
         m_resp_len = 0;
         send_rblock(false);

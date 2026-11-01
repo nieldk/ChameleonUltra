@@ -230,14 +230,19 @@ unsigned desfire_random_starvations(void) {
 }
 
 /* The reserve only ever runs dry, never permanently fails -- the next
- * desfire_random_pump() may refill it from the hardware TRNG. There is no
- * terminal backend failure to classify, so every shortfall is retryable and
- * there is no sticky state for begin() to clear. */
+ * desfire_random_pump() may refill it from the hardware TRNG, so a shortfall is
+ * always retryable. dfc_port.h requires the classification to describe the
+ * current operation only: cleared in begin(), set by a failed fill, and true
+ * nowhere else. Reporting true unconditionally makes the engine discard the
+ * result of every exchange as a randomness failure. */
+static volatile bool m_random_failure_retryable;
+
 void dfc_random_operation_begin(void) {
+    m_random_failure_retryable = false;
 }
 
 bool dfc_random_failure_is_retryable(void) {
-    return true;
+    return m_random_failure_retryable;
 }
 
 bool dfc_random_fill(uint8_t *buf, size_t len) {
@@ -259,6 +264,7 @@ bool dfc_random_fill(uint8_t *buf, size_t len) {
      * rests on RndB being unguessable to the reader, which rand() is not. The
      * counter makes the shortfall visible rather than silent. */
     m_starvations++;
+    m_random_failure_retryable = true;
     return false;
 }
 
