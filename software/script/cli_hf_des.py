@@ -1094,25 +1094,28 @@ class HfDesELoad(SlotIndexArgsAndGoUnit):
         # Label the slot by the credential's generation AND storage tier so
         # `hw slot list` matches what einfo/edump report; the engine still drives
         # behaviour from the credential itself.
-        _ev = cred.generation == 2  # 2 == EV2
-        if cred.storage > 4096:
-            dfc_tag_type = (
-                TagSpecificType.DESFIRE_EV2_8K
-                if _ev
-                else TagSpecificType.DESFIRE_EV1_8K
-            )
-        elif cred.storage > 2048:
-            dfc_tag_type = (
-                TagSpecificType.DESFIRE_EV2_4K
-                if _ev
-                else TagSpecificType.DESFIRE_EV1_4K
-            )
-        else:
-            dfc_tag_type = (
-                TagSpecificType.DESFIRE_EV2_2K
-                if _ev
-                else TagSpecificType.DESFIRE_EV1_2K
-            )
+        # generation 1/2/3 -> EV1/EV2/EV3; storage picks the 2K/4K/8K tier
+        _tier = 2 if cred.storage > 4096 else 1 if cred.storage > 2048 else 0
+        _types = {
+            2: (
+                TagSpecificType.DESFIRE_EV2_2K,
+                TagSpecificType.DESFIRE_EV2_4K,
+                TagSpecificType.DESFIRE_EV2_8K,
+            ),
+            3: (
+                TagSpecificType.DESFIRE_EV3_2K,
+                TagSpecificType.DESFIRE_EV3_4K,
+                TagSpecificType.DESFIRE_EV3_8K,
+            ),
+        }.get(
+            cred.generation,
+            (
+                TagSpecificType.DESFIRE_EV1_2K,
+                TagSpecificType.DESFIRE_EV1_4K,
+                TagSpecificType.DESFIRE_EV1_8K,
+            ),
+        )
+        dfc_tag_type = _types[_tier]
         self.cmd.set_slot_tag_type(self.slot_num, dfc_tag_type)
         # NB: do NOT seed the slot with default DESFire data here. If the
         # credential load below is refused (e.g. the tag is emulating in an RF

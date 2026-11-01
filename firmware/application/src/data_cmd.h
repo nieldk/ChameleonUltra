@@ -285,6 +285,8 @@
 #define DATA_CMD_IDTECK_GET_EMU_ID              (5013)
 #define DATA_CMD_INDALA_SET_EMU_ID              (5014)
 #define DATA_CMD_INDALA_GET_EMU_ID              (5015)
+#define DATA_CMD_FDXB_SET_EMU_ID                (5016)
+#define DATA_CMD_FDXB_GET_EMU_ID                (5017)
 
 #define DATA_CMD_EM4X05_SCAN                    (3030)
 #define DATA_CMD_EM4X05_READSNIFF               (3032)

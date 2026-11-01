@@ -10,7 +10,7 @@
 #include "utils/diphase.h"
 
 /*
- * FDX-B animal transponder (ISO 11784 / 11785), read-only.
+ * FDX-B animal transponder (ISO 11784 / 11785): read and emulate.
  *
  * Carrier   : 134.2 kHz  (NOT 125 kHz -- see lf_fdxb_data.c)
  * Bit rate  : RF/32
@@ -38,11 +38,29 @@
 #define FDXB_READ_TIME3_BASE        (0x40)  /* 2T   = 64 cycles */
 #define FDXB_READ_JITTER_TIME_BASE  (0x06)
 
+/* Emulation: the tag clock is not locked to the reader carrier, so the bit
+ * period is set in absolute time.  One bit = 32 cycles of 134.2 kHz
+ * = 238.4 us.  The PWM runs from a 1 MHz base clock (see IS_1MHZ_BASE_TYPE),
+ * where one half-bit is 119 ticks = 119 us (bit = 238 us, -0.2 %).
+ * nRF52 PWM up-mode: period = counter_top ticks. */
+#define FDXB_HALF_BIT_TICKS (119)
+/* 2 half-bits per bit * 2 passes; see fdxb_modulator(). */
+#define FDXB_PWM_SIZE       (FDXB_RAW_SIZE * 2 * 2)
+
 #define NRF_LOG_MODULE_NAME fdxb_protocol
 #include "nrf_log.h"
 #include "nrf_log_ctrl.h"
 #include "nrf_log_default_backends.h"
 NRF_LOG_MODULE_REGISTER();
+
+static nrf_pwm_values_wave_form_t m_fdxb_pwm_seq_vals[FDXB_PWM_SIZE] = {};
+
+static nrf_pwm_sequence_t const m_fdxb_pwm_seq = {
+    .values.p_wave_form = m_fdxb_pwm_seq_vals,
+    .length = NRF_PWM_VALUES_LENGTH(m_fdxb_pwm_seq_vals),
+    .repeats = 0,
+    .end_delay = 0,
+};
 
 typedef struct {
     uint8_t data[FDXB_DATA_SIZE];
@@ -284,6 +302,47 @@ uint8_t fdxb_t55xx_writer(uint8_t *fdxb_data, uint32_t *blks) {
     return 5;  // config + 4 data blocks (full 128-bit encoded frame)
 }
 
+/*
+ * Inverted differential biphase modulator (inverse of diphase_feed()):
+ *   - level flips at every bit boundary
+ *   - bit 0: extra flip at mid-bit; bit 1: none
+ *
+ * The 128-bit frame is encoded twice with the level carried across, so the
+ * looped sequence has a boundary transition whatever the zero-bit parity
+ * (same approach as jablotron.c).
+ *
+ * Constant level: compare 0 = low, counter_top + 1 = high (avoids the
+ * compare == counter_top glitch, see pac.c).
+ */
+static const nrf_pwm_sequence_t *fdxb_modulator(fdxb_codec *d, uint8_t *buf) {
+    uint64_t hi, lo;
+    if (!fdxb_raw_frame(buf, &hi, &lo)) {
+        return NULL;
+    }
+
+    bool level = false;
+    int out = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < FDXB_RAW_SIZE; i++) {
+            bool bit = (i < 64) ? ((hi >> (63 - i)) & 1) : ((lo >> (127 - i)) & 1);
+
+            level = !level;
+            m_fdxb_pwm_seq_vals[out].channel_0 = level ? (FDXB_HALF_BIT_TICKS + 1) : 0;
+            m_fdxb_pwm_seq_vals[out].counter_top = FDXB_HALF_BIT_TICKS;
+            out++;
+
+            if (!bit) {
+                level = !level;
+            }
+            m_fdxb_pwm_seq_vals[out].channel_0 = level ? (FDXB_HALF_BIT_TICKS + 1) : 0;
+            m_fdxb_pwm_seq_vals[out].counter_top = FDXB_HALF_BIT_TICKS;
+            out++;
+        }
+    }
+
+    return &m_fdxb_pwm_seq;
+}
+
 static bool fdxb_decoder_feed(fdxb_codec *d, uint16_t interval) {
     bool bits[2] = {0};
     int8_t bitlen = 0;
@@ -310,10 +369,7 @@ const protocol fdxb = {
     .alloc = (codec_alloc)fdxb_alloc,
     .free = (codec_free)fdxb_free,
     .get_data = (codec_get_data)fdxb_get_data,
-    /* Decode only.  Emulation would need a 134.2 kHz modulator and is not
-     * part of this test -- fdxb is never added to the emulation tag table,
-     * so this NULL is not reachable from the tag_emulation path. */
-    .modulator = NULL,
+    .modulator = (modulator)fdxb_modulator,
     .decoder =
     {
         .start = (decoder_start)fdxb_decoder_start,

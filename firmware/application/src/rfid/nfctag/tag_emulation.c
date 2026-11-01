@@ -105,6 +105,7 @@ static tag_base_handler_map_t tag_base_map[] = {
     {TAG_SENSE_LF, TAG_TYPE_VIKING,      lf_tag_data_loadcb,           lf_tag_viking_data_savecb,    lf_tag_viking_data_factory,    &m_tag_data_lf},
     {TAG_SENSE_LF, TAG_TYPE_PAC,         lf_tag_data_loadcb,           lf_tag_pac_data_savecb,       lf_tag_pac_data_factory,       &m_tag_data_lf},
     {TAG_SENSE_LF, TAG_TYPE_JABLOTRON,   lf_tag_data_loadcb,           lf_tag_jablotron_data_savecb, lf_tag_jablotron_data_factory, &m_tag_data_lf},
+    {TAG_SENSE_LF, TAG_TYPE_FDXB,        lf_tag_data_loadcb,           lf_tag_fdxb_data_savecb,      lf_tag_fdxb_data_factory,      &m_tag_data_lf},
     {TAG_SENSE_LF, TAG_TYPE_IDTECK,      lf_tag_data_loadcb,           lf_tag_idteck_data_savecb,    lf_tag_idteck_data_factory,    &m_tag_data_lf},
     {TAG_SENSE_LF, TAG_TYPE_INDALA,      lf_tag_data_loadcb,           lf_tag_indala_data_savecb,    lf_tag_indala_data_factory,    &m_tag_data_lf},
     // MF1 tag emulation
@@ -140,6 +141,9 @@ static tag_base_handler_map_t tag_base_map[] = {
     {TAG_SENSE_HF, TAG_TYPE_DESFIRE_EV2_2K, nfc_tag_desfire_data_loadcb, nfc_tag_desfire_data_savecb, nfc_tag_desfire_data_factory, &m_tag_data_hf},
     {TAG_SENSE_HF, TAG_TYPE_DESFIRE_EV2_4K, nfc_tag_desfire_data_loadcb, nfc_tag_desfire_data_savecb, nfc_tag_desfire_data_factory, &m_tag_data_hf},
     {TAG_SENSE_HF, TAG_TYPE_DESFIRE_EV2_8K, nfc_tag_desfire_data_loadcb, nfc_tag_desfire_data_savecb, nfc_tag_desfire_data_factory, &m_tag_data_hf},
+    {TAG_SENSE_HF, TAG_TYPE_DESFIRE_EV3_2K, nfc_tag_desfire_data_loadcb, nfc_tag_desfire_data_savecb, nfc_tag_desfire_data_factory, &m_tag_data_hf},
+    {TAG_SENSE_HF, TAG_TYPE_DESFIRE_EV3_4K, nfc_tag_desfire_data_loadcb, nfc_tag_desfire_data_savecb, nfc_tag_desfire_data_factory, &m_tag_data_hf},
+    {TAG_SENSE_HF, TAG_TYPE_DESFIRE_EV3_8K, nfc_tag_desfire_data_loadcb, nfc_tag_desfire_data_savecb, nfc_tag_desfire_data_factory, &m_tag_data_hf},
 #endif
 };
 

@@ -602,7 +602,8 @@ LF 200 HIDProx · 201 ioProx · 310 IDTECK · 311 Indala
 HF 1000 MIFARE_Mini · 1001 MIFARE_1024 (1K) · 1002 MIFARE_2048 (2K) · 1003 MIFARE_4096 (4K)
 HF 1100 NTAG_213 · 1101 NTAG_215 · 1102 NTAG_216 · 1103 MF0ICU1 · 1105 MF0UL11 · 1106 MF0UL21
 HF 1300 DESFire EV1 2K · 1301 DESFire EV1 4K · 1302 DESFire EV1 8K
-HF 1303 DESFire EV2 2K · 1304 DESFire EV2 4K · 1305 DESFire EV2 8K</pre>
+HF 1303 DESFire EV2 2K · 1304 DESFire EV2 4K · 1305 DESFire EV2 8K
+HF 1306 DESFire EV3 2K · 1307 DESFire EV3 4K · 1308 DESFire EV3 8K</pre>
       </details>
       <div class="det">The DESFire tab needs the active slot's HF type set to one of the DESFire codes above. On a slot that's never held DESFire data, "Set slot tag type" alone is <b>not</b> enough — the device only reloads existing flash data, and there is none yet. You also need this slot to be the <i>active</i> slot (Set active slot) before "Set slot data default", since that's the step that only writes live if the slot is already active. See DESFire tab → F0 for a one-click helper that does this in the right order.</div>
       <div class="result" id="s_typeResult"></div>
@@ -1155,6 +1156,9 @@ AABBCCDDEEFF</textarea></label>
           <option value="1303">1303 DESFire EV2 2K</option>
           <option value="1304">1304 DESFire EV2 4K</option>
           <option value="1305">1305 DESFire EV2 8K</option>
+          <option value="1306">1306 DESFire EV3 2K</option>
+          <option value="1307">1307 DESFire EV3 4K</option>
+          <option value="1308">1308 DESFire EV3 8K</option>
         </select></label>
         <button class="small" id="f_prepare">Prepare slot</button>
       </div>

@@ -1377,6 +1377,28 @@ class ChameleonCMD:
         return resp
 
     @expect_response(Status.SUCCESS)
+    def fdxb_set_emu_id(self, frame: bytes):
+        """
+        Set the FDX-B frame emulated by the active slot.
+
+        :param frame: 13-byte destuffed FDX-B frame (64-bit payload + CRC-16 + 24-bit trailer)
+        :return:
+        """
+        if len(frame) != 13:
+            raise ValueError("The frame bytes length must equal 13")
+        data = struct.pack('13s', frame)
+        return self.device.send_cmd_sync(Command.FDXB_SET_EMU_ID, data)
+
+    @expect_response(Status.SUCCESS)
+    def fdxb_get_emu_id(self):
+        """
+        Get the emulated FDX-B frame (13 bytes)
+        """
+        resp = self.device.send_cmd_sync(Command.FDXB_GET_EMU_ID)
+        resp.parsed = resp.data[:13]
+        return resp
+
+    @expect_response(Status.SUCCESS)
     def jablotron_set_emu_id(self, id: bytes):
         """
         Set the card number emulated by Jablotron.

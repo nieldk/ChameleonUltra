@@ -243,6 +243,8 @@ class Command(enum.IntEnum):
     IDTECK_GET_EMU_ID = 5013
     INDALA_SET_EMU_ID = 5014
     INDALA_GET_EMU_ID = 5015
+    FDXB_SET_EMU_ID = 5016
+    FDXB_GET_EMU_ID = 5017
     EM4X05_SCAN = 3030
     EM4X05_READSNIFF = 3032
     LF_SNIFF = 3031
@@ -443,6 +445,9 @@ class TagSpecificType(enum.IntEnum):
     DESFIRE_EV2_2K = 1303
     DESFIRE_EV2_4K = 1304
     DESFIRE_EV2_8K = 1305
+    DESFIRE_EV3_2K = 1306
+    DESFIRE_EV3_4K = 1307
+    DESFIRE_EV3_8K = 1308
 
     # ST25TA series          2000
     ST25TA = 2000
@@ -556,6 +561,12 @@ class TagSpecificType(enum.IntEnum):
             return "DESFire EV2 4K"
         elif self == TagSpecificType.DESFIRE_EV2_8K:
             return "DESFire EV2 8K"
+        elif self == TagSpecificType.DESFIRE_EV3_2K:
+            return "DESFire EV3 2K"
+        elif self == TagSpecificType.DESFIRE_EV3_4K:
+            return "DESFire EV3 4K"
+        elif self == TagSpecificType.DESFIRE_EV3_8K:
+            return "DESFire EV3 8K"
         elif self == TagSpecificType.HF14A_4:
             return "ISO14443-4"
         elif self < TagSpecificType.OLD_TAG_TYPES_END:

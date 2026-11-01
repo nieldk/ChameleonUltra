@@ -65,6 +65,19 @@ BLE reader/tag relay: `ble_relay.[ch]`, `nfc_relay_tag.[ch]`, `mode_relay.c`.
 changes (`lf_125khz_radio`, `lf_em4x05_data`, `lf_reader_*`, `lf_t55xx_data`,
 `t55xx.h`, `tag_base_type.h`).
 
+FDX-B is also an emulation slot type (`TAG_TYPE_FDXB`): `fdxb_modulator()` in
+`fdxb.c` drives the PWM (1 MHz base, 119 µs half-bit, 238 µs bit = 32 cycles of
+134.2 kHz), set per slot with `lf fdxb econfig`. Command IDs 5016/5017.
+`lf/tests/` holds a host test that round-trips the modulator through the
+decoder (`make -C firmware/application/src/rfid/nfctag/lf/tests test`).
+
+## DESFire EV3 slot types
+
+`TAG_TYPE_DESFIRE_EV3_2K/4K/8K` (1306–1308) sit beside the EV1/EV2 types. The
+engine already emulated EV3 from the credential; the slot type is the label, and
+`hf des eload` now sets it from the credential generation (1/2/3) and storage
+tier. Previously an EV3 credential was labelled EV1.
+
 ## DFU behaviour & versioning
 
 * Firmware downgrade prevention removed — see the downgrade section of

@@ -612,6 +612,45 @@ class LFFdxbClone(LFFdxbWriteT55xx):
         print(f" - FDX-B clone complete: {data_bytes.hex().upper()}")
 
 
+@lf_fdxb.command("econfig")
+class LFFdxbEconfig(SlotIndexArgsAndGoUnit, DeviceRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        # same field/--id arguments as 'lf fdxb write'
+        parser = LFFdxbWriteT55xx.args_parser(self)
+        parser.description = (
+            "Get or set the emulated FDX-B frame on a slot. "
+            "Provide --country/--national or --id to set; omit to read back."
+        )
+        self.add_slot_args(parser)
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        if (
+            args.id is not None
+            or args.country is not None
+            or args.national is not None
+        ):
+            frame = LFFdxbWriteT55xx._resolve_frame(self, args)
+            if not _fdxb_crc_ok(frame):
+                calc = _fdxb_crc16(frame[0:8])
+                print(
+                    f" [!] CRC-16 in frame does not match data (expected 0x{calc:04x}); "
+                    f"emulating anyway, readers may reject it"
+                )
+            slotinfo = self.cmd.get_slot_info()
+            selected = SlotNumber.from_fw(self.cmd.get_active_slot())
+            lf_tag_type = TagSpecificType(slotinfo[selected - 1]["lf"])
+            if lf_tag_type != TagSpecificType.FDXB:
+                print(f"{color_string((CR, 'WARNING'))}: Slot type not set to FDXB.")
+            self.cmd.fdxb_set_emu_id(frame)
+            print(" - Set FDX-B frame success.")
+        else:
+            frame = self.cmd.fdxb_get_emu_id()
+            print(" - Get FDX-B frame success.")
+            _print_fdxb(frame)
+            print(f"Raw frame: {frame.hex().upper()}")
+
+
 def _print_em410x(id_bytes):
     for line in lf_info.em410x_lines(
             bytes(id_bytes[:5]), hl=lambda x: color_string((CG, x)),

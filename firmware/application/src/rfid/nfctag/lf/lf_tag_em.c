@@ -9,6 +9,7 @@
 #include "nrfx_lpcomp.h"
 #include "nrfx_pwm.h"
 #include "protocols/em410x.h"
+#include "protocols/fdxb.h"
 #include "protocols/hidprox.h"
 #include "protocols/indala.h"
 #include "protocols/idteck.h"
@@ -141,8 +142,9 @@ static void pwm_init(void) {
     // their hardcoded counter_top values (8-64 range) produce the correct
     // absolute timing. PSK1 protocols need finer resolution for the 16us
     // subcarrier period, so pwm_init uses 1MHz base with counter_top=16.
-    // See tag_base_type.h IS_PSK1_TYPE for the list of qualifying types.
-    cfg.base_clock = IS_PSK1_TYPE(m_tag_type) ? NRF_PWM_CLK_1MHz : NRF_PWM_CLK_125kHz;
+    // FDX-B (134.2kHz) also uses the 1MHz base.
+    // See tag_base_type.h IS_1MHZ_BASE_TYPE for the list of qualifying types.
+    cfg.base_clock = IS_1MHZ_BASE_TYPE(m_tag_type) ? NRF_PWM_CLK_1MHz : NRF_PWM_CLK_125kHz;
     cfg.count_mode = NRF_PWM_MODE_UP;
     cfg.load_mode = NRF_PWM_LOAD_WAVE_FORM;
     cfg.step_mode = NRF_PWM_STEP_AUTO;
@@ -287,6 +289,15 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         jablotron.free(codec);
         NRF_LOG_INFO("load lf jablotron data finish.");
         return LF_JABLOTRON_TAG_ID_SIZE;
+    }
+
+    if (type == TAG_TYPE_FDXB && buffer->length >= LF_FDXB_TAG_ID_SIZE) {
+        m_tag_type = type;
+        void *codec = fdxb.alloc();
+        m_pwm_seq = fdxb.modulator(codec, buffer->buffer);
+        fdxb.free(codec);
+        NRF_LOG_INFO("load lf fdxb data finish.");
+        return LF_FDXB_TAG_ID_SIZE;
     }
 
     if (type == TAG_TYPE_IDTECK && buffer->length >= LF_IDTECK_TAG_ID_SIZE) {
@@ -461,6 +472,18 @@ int lf_tag_jablotron_data_savecb(tag_specific_type_t type, tag_data_buffer_t *bu
 bool lf_tag_jablotron_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
     // default id: 5 bytes (top bit must be 0)
     uint8_t tag_id[5] = {0x01, 0xB6, 0x69, 0x00, 0x00};
+    return lf_tag_data_factory(slot, tag_type, tag_id, sizeof(tag_id));
+}
+
+int lf_tag_fdxb_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
+    return m_tag_type == TAG_TYPE_FDXB ? LF_FDXB_TAG_ID_SIZE : 0;
+}
+
+bool lf_tag_fdxb_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
+    // default frame: country 999 (ISO 11784 test code), national ID 1, animal flag, CRC-16 in bytes 8-9
+    uint8_t tag_id[LF_FDXB_TAG_ID_SIZE] = {
+        0x01, 0x00, 0x00, 0x00, 0xC0, 0xF9, 0x00, 0x80, 0x44, 0x2E, 0x00, 0x00, 0x00,
+    };
     return lf_tag_data_factory(slot, tag_type, tag_id, sizeof(tag_id));
 }
 

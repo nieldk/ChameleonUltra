@@ -103,6 +103,9 @@ typedef enum {
     TAG_TYPE_DESFIRE_EV2_2K,
     TAG_TYPE_DESFIRE_EV2_4K,
     TAG_TYPE_DESFIRE_EV2_8K,
+    TAG_TYPE_DESFIRE_EV3_2K,
+    TAG_TYPE_DESFIRE_EV3_4K,
+    TAG_TYPE_DESFIRE_EV3_8K,
 
     // ST25TA series             2000
     TAG_TYPE_ST25TA = 2000,
@@ -127,13 +130,17 @@ typedef enum {
     }
 
 #define TAG_SPECIFIC_TYPE_LF_VALUES \
-    TAG_TYPE_EM410X, TAG_TYPE_EM410X_ELECTRA, TAG_TYPE_PAC, TAG_TYPE_HID_PROX, TAG_TYPE_IOPROX, TAG_TYPE_VIKING, TAG_TYPE_JABLOTRON, TAG_TYPE_IDTECK, TAG_TYPE_INDALA
+    TAG_TYPE_EM410X, TAG_TYPE_EM410X_ELECTRA, TAG_TYPE_FDXB, TAG_TYPE_PAC, TAG_TYPE_HID_PROX, TAG_TYPE_IOPROX, TAG_TYPE_VIKING, TAG_TYPE_JABLOTRON, TAG_TYPE_IDTECK, TAG_TYPE_INDALA
 
 // Tag types that use PSK1 modulation for emulation. These require the PWM
 // base clock to be set to 1MHz (see lf_tag_em.c pwm_init) so the 16us
 // subcarrier period can be expressed with a counter_top valid under the
 // nRF52 PWM spec. Legacy ASK/FSK types keep the default 125kHz base.
 #define IS_PSK1_TYPE(t) ((t) == TAG_TYPE_IDTECK || (t) == TAG_TYPE_INDALA)
+
+// Tag types whose PWM sequence needs the 1MHz base clock: PSK1 (16us subcarrier)
+// and FDX-B (134.2kHz bit rate, 119us half-bit; 125kHz ticks are too coarse).
+#define IS_1MHZ_BASE_TYPE(t) (IS_PSK1_TYPE(t) || (t) == TAG_TYPE_FDXB)
 
 #define TAG_SPECIFIC_TYPE_HF_VALUES                                   \
     TAG_TYPE_MIFARE_Mini, TAG_TYPE_MIFARE_1024, TAG_TYPE_MIFARE_2048, \
@@ -146,7 +153,8 @@ typedef enum {
         TAG_TYPE_DESFIRE_EV1_2K,                                         \
         TAG_TYPE_DESFIRE_EV1_4K, TAG_TYPE_DESFIRE_EV1_8K,                \
         TAG_TYPE_DESFIRE_EV2_2K, TAG_TYPE_DESFIRE_EV2_4K,                \
-        TAG_TYPE_DESFIRE_EV2_8K
+        TAG_TYPE_DESFIRE_EV2_8K, TAG_TYPE_DESFIRE_EV3_2K,                \
+        TAG_TYPE_DESFIRE_EV3_4K, TAG_TYPE_DESFIRE_EV3_8K
 
 typedef struct {
     tag_specific_type_t tag_hf;

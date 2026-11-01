@@ -1409,6 +1409,12 @@ class HWSlotList(DeviceRequiredUnit):
                     card_id = jablotron_card_id(id)
                     print(f"      {'ID:':40}{color_string((CY, id.hex().upper()))}")
                     print(f"      {'Card:':40}{color_string((CG, str(card_id)))}")
+                if lf_tag_type == TagSpecificType.FDXB:
+                    frame = self.cmd.fdxb_get_emu_id()
+                    v = int.from_bytes(frame[0:8], "little")
+                    print(f"      {'Country:':40}{color_string((CG, (v >> 38) & 0x3FF))}")
+                    print(f"      {'National ID:':40}{color_string((CG, v & ((1 << 38) - 1)))}")
+                    print(f"      {'Frame:':40}{color_string((CY, frame.hex().upper()))}")
                 if lf_tag_type == TagSpecificType.PAC:
                     id = self.cmd.pac_get_emu_id()
                     id_ascii = ''.join(chr(b) if 0x20 <= b < 0x7f else '.' for b in id)

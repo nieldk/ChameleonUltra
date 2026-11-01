@@ -12,6 +12,7 @@
 #define LF_VIKING_TAG_ID_SIZE 4
 #define LF_PAC_TAG_ID_SIZE 8
 #define LF_JABLOTRON_TAG_ID_SIZE 5
+#define LF_FDXB_TAG_ID_SIZE 13
 #define LF_IDTECK_TAG_ID_SIZE 8
 #define LF_INDALA_TAG_ID_SIZE 8
 
@@ -29,6 +30,8 @@ int lf_tag_pac_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer);
 bool lf_tag_pac_data_factory(uint8_t slot, tag_specific_type_t tag_type);
 int lf_tag_jablotron_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer);
 bool lf_tag_jablotron_data_factory(uint8_t slot, tag_specific_type_t tag_type);
+int lf_tag_fdxb_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer);
+bool lf_tag_fdxb_data_factory(uint8_t slot, tag_specific_type_t tag_type);
 int lf_tag_idteck_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer);
 bool lf_tag_idteck_data_factory(uint8_t slot, tag_specific_type_t tag_type);
 int lf_tag_indala_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer);
