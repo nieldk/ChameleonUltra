@@ -999,6 +999,18 @@ static void run_button_function_by_settings(settings_button_function_t sbf) {
             app_standalone_disarm();
             break;
 
+        case SettingsButtonStandaloneToggle:
+            app_standalone_on_button(STANDALONE_BTN_BOTH_LONG);
+            break;
+
+        case SettingsButtonStandaloneAction:
+            app_standalone_on_button(STANDALONE_BTN_BOTH_SHORT);
+            break;
+
+        case SettingsButtonStandaloneClear:
+            app_standalone_on_button(STANDALONE_BTN_BOTH_VLONG);
+            break;
+
         case SettingsButtonShowBattery:
             show_battery();
             break;

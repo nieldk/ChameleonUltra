@@ -728,6 +728,9 @@ class ButtonPressFunction(enum.IntEnum):
     BATTERY = 4
     FIELDGEN = 5
     STANDALONE_DISARM = 6
+    STANDALONE_TOGGLE = 7
+    STANDALONE_ACTION = 8
+    STANDALONE_CLEAR = 9
 
     def __str__(self):
         if self == ButtonPressFunction.NONE:
@@ -744,6 +747,12 @@ class ButtonPressFunction(enum.IntEnum):
             return "Toggle NFC Field Generator"
         elif self == ButtonPressFunction.STANDALONE_DISARM:
             return "Disarm active standalone mode"
+        elif self == ButtonPressFunction.STANDALONE_TOGGLE:
+            return "Arm / disarm standalone mode (same as A+B long)"
+        elif self == ButtonPressFunction.STANDALONE_ACTION:
+            return "Run armed standalone mode (same as A+B short)"
+        elif self == ButtonPressFunction.STANDALONE_CLEAR:
+            return "Clear standalone results (same as A+B very long)"
         return "None"
 
 

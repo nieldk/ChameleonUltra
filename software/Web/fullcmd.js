@@ -427,7 +427,7 @@ wire("d_setsleep", dBeh, async () => {
   showResult(dBeh, "Sleep timeout set.", "ok");
 });
 
-const BUTTON_FN_NAMES = {0:"Disabled",1:"Cycle slot +",2:"Cycle slot -",3:"Clone IC UID",4:"Show battery",5:"NFC field generator",6:"Disarm standalone mode"};
+const BUTTON_FN_NAMES = {0:"Disabled",1:"Cycle slot +",2:"Cycle slot -",3:"Clone IC UID",4:"Show battery",5:"NFC field generator",6:"Disarm standalone mode",7:"Standalone arm / disarm",8:"Standalone run",9:"Standalone clear results"};
 wire("d_getbtn", $("d_btnResult"), async () => {
   const type = $("d_btnSel").value.charCodeAt(0); // 'A' or 'B'
   const isLong = $("d_btnPress").value === "long";

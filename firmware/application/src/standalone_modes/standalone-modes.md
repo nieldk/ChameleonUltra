@@ -39,6 +39,32 @@ stored results.
 | **Both, long** | Arm ⇄ disarm. |
 | **Both, very-long** | Discard all stored results for this mode. |
 
+### Single-button alternative (clones, or if A+B resets the device)
+
+On some clones pressing A and B together triggers a hardware reset, so the
+chords above can't be used. Each chord action can instead be bound to one button
+with `hw settings btnpress`; short and long press of A and B are set separately:
+
+| Function | Same as | Use |
+|----------|---------|-----|
+| `STANDALONE_TOGGLE` | A+B long | arm / disarm |
+| `STANDALONE_ACTION` | A+B short | run the armed mode |
+| `STANDALONE_CLEAR`  | A+B very long | discard stored results |
+| `STANDALONE_DISARM` | (disarm only) | disarm |
+
+Example: keep the slot buttons for slot cycling and put the standalone actions
+on the long presses:
+
+```
+hw settings btnpress -a -l -f STANDALONE_TOGGLE   # A long: arm / disarm
+hw settings btnpress -b -l -f STANDALONE_ACTION   # B long: run
+hw settings store
+```
+
+The functions do nothing while no standalone mode is selected. A button bound to
+one of them no longer does its previous job (cycling slots, battery, clone), so
+rebind it when you stop using standalone modes.
+
 ## LED feedback (all modes)
 
 The slot LEDs signal state and confirm each action landed ,  watch them before

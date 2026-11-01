@@ -1146,7 +1146,7 @@ Get or set button press function of Button A and Button B
 - `-b`, `-B` — Button B
 - `-s`, `--short` — Short-press (default)
 - `-l`, `--long` — Long-press
-- `-f`, `--function` — Function: NONE (No Function), NEXTSLOT (Select next slot), PREVSLOT (Select previous slot), CLONE (Read then simulate the ID/UID card number), BATTERY (Show Battery Level), FIELDGEN (Toggle NFC Field Generator), STANDALONE_DISARM (Disarm active standalone mode) (choices: NONE, NEXTSLOT, PREVSLOT, CLONE, BATTERY, FIELDGEN, STANDALONE_DISARM)
+- `-f`, `--function` — Function: NONE (No Function), NEXTSLOT (Select next slot), PREVSLOT (Select previous slot), CLONE (Read then simulate the ID/UID card number), BATTERY (Show Battery Level), FIELDGEN (Toggle NFC Field Generator), STANDALONE_DISARM (Disarm active standalone mode), STANDALONE_TOGGLE (Arm / disarm standalone mode (same as A+B long)), STANDALONE_ACTION (Run armed standalone mode (same as A+B short)), STANDALONE_CLEAR (Clear standalone results (same as A+B very long)) (choices: NONE, NEXTSLOT, PREVSLOT, CLONE, BATTERY, FIELDGEN, STANDALONE_DISARM, STANDALONE_TOGGLE, STANDALONE_ACTION, STANDALONE_CLEAR)
 
 #### `hw settings reset`
 
