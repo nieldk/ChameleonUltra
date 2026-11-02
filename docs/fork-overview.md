@@ -49,6 +49,14 @@ flash and are pulled later.
 * Standalone `hf14a_tap_sniff` mode and Proxmark3 `.trace` export — see
   [hf14a-sniff-pm3-trace.md](hf14a-sniff-pm3-trace.md).
 
+## Logic analyser
+
+`hw logic`: timestamped chip-select and field-LED edges plus an RC522 register
+log with values, plotted or exported as VCD. Hooks in `rc522.c` and
+`hw_connect.h`, engine in `logic_analyzer.[ch]`, `common/logic_hook.h`,
+client `cli_hw_logic.py`. Command IDs 3037-3040. See
+[logic-analyzer.md](logic-analyzer.md).
+
 ## HF relay
 
 BLE reader/tag relay: `ble_relay.[ch]`, `nfc_relay_tag.[ch]`, `mode_relay.c`.

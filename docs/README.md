@@ -14,3 +14,4 @@ from upstream you should follow these docs, not the wiki.
 | UF2 bootloader: what can be flashed how, and recovery | [flashing-and-bootloader.md](flashing-and-bootloader.md) |
 | Persistent debug log (`hw log`, `LOG.TXT` on the UF2 drive) | [debug-log.md](debug-log.md) |
 | HF-14A sniff → Proxmark3 `.trace` export (live + standalone) | [hf14a-sniff-pm3-trace.md](hf14a-sniff-pm3-trace.md) |
+| Logic analyser: field/chip-select edges and RC522 register log (`hw logic`) | [logic-analyzer.md](logic-analyzer.md) |
