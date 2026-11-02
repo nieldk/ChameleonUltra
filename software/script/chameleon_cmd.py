@@ -920,6 +920,44 @@ class ChameleonCMD:
         timeout_s = (timeout_ms // 1000) + 2
         return self.device.send_cmd_sync(Command.LF_SNIFF, payload, timeout=timeout_s)
 
+    @expect_response(Status.SUCCESS)
+    def logic_arm(self, sources: list, prescaler: int = 4, merge_ticks: int = 0):
+        """
+        Start edge capture. sources: up to 4 bytes, 0..2 named net or 0x40|pin raw.
+        Tick rate = 16 MHz >> prescaler.
+        merge_ticks: drop CS-style pulses (fall within N ticks of a rise). parsed = (init_levels, tick_hz).
+        """
+        payload = struct.pack('!BB', prescaler, len(sources)) + bytes(sources)
+        if merge_ticks:
+            payload += struct.pack('!H', merge_ticks)
+        resp = self.device.send_cmd_sync(Command.LOGIC_ARM, payload)
+        if resp.status == Status.SUCCESS:
+            resp.parsed = struct.unpack('!BI', resp.data[:5])
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def logic_read(self, offset: int, count: int):
+        """parsed = (running, overflow, init_levels, total, [(ts, channel, level), ...])"""
+        resp = self.device.send_cmd_sync(Command.LOGIC_READ, struct.pack('!HH', offset, count))
+        if resp.status == Status.SUCCESS:
+            running, overflow, init, total = struct.unpack('!BBBH', resp.data[:5])
+            events = []
+            body = resp.data[5:]
+            for i in range(0, len(body) - 4, 5):
+                ts, ev = struct.unpack('!IB', body[i:i + 5])
+                events.append((ts, ev & 0x7F, ev >> 7))
+            resp.parsed = (bool(running), bool(overflow), init, total, events)
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def logic_stop(self):
+        """parsed = (overflow, total, handler_calls, [capture per channel])"""
+        resp = self.device.send_cmd_sync(Command.LOGIC_STOP)
+        if resp.status == Status.SUCCESS:
+            overflow, total, calls, *cc = struct.unpack('!BHH4I', resp.data[:21])
+            resp.parsed = (bool(overflow), total, calls, cc)
+        return resp
+
     @expect_response(Status.LF_TAG_OK)
     def em4x05_scan(self, pwd: int = 0):
         """

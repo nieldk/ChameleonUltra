@@ -7,6 +7,7 @@
 #include "nrf_lpcomp.h"
 #include "nrf_saadc.h"
 #include "device_info.h"
+#include "logic_hook.h"
 
 typedef enum {
     CHAMELEON_ULTRA,
@@ -96,8 +97,8 @@ extern uint32_t g_reader_power;
 
 
 // Operational Definitions for General Field Lights
-#define TAG_FIELD_LED_ON()     nrf_gpio_pin_clear(LED_FIELD);
-#define TAG_FIELD_LED_OFF()    nrf_gpio_pin_set(LED_FIELD);
+#define TAG_FIELD_LED_ON()     do { logic_hook(LOGIC_SRC_FIELD_LED, 0); nrf_gpio_pin_clear(LED_FIELD); } while (0);
+#define TAG_FIELD_LED_OFF()    do { logic_hook(LOGIC_SRC_FIELD_LED, 1); nrf_gpio_pin_set(LED_FIELD); } while (0);
 
 
 void hw_connect_init(void);

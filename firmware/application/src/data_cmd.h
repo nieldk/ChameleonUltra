@@ -156,6 +156,11 @@
 #endif
 #define DATA_CMD_INDALA_SCAN                    (3035)
 #define DATA_CMD_INDALA_WRITE_TO_T55XX          (3036)
+#if defined(PROJECT_CHAMELEON_ULTRA)
+#define DATA_CMD_LOGIC_ARM                      (3037)  // in: prescaler(1) n(1) src(n)
+#define DATA_CMD_LOGIC_READ                     (3038)  // in: offset(2) count(2)
+#define DATA_CMD_LOGIC_STOP                     (3039)
+#endif
 
 //
 // ******************************************************************

@@ -14,6 +14,7 @@
 #include "nrf_pwr_mgmt.h"
 #include "app_util_platform.h"
 #include "nrfx_ppi.h"
+#include "logic_analyzer.h"
 #include "settings.h"
 #include "delayed_reset.h"
 #include "logflash.h"
@@ -2850,6 +2851,75 @@ static data_frame_tx_t *cmd_processor_lf_sniff(uint16_t cmd, uint16_t status, ui
     return data_frame_make(cmd, STATUS_LF_TAG_OK, (uint16_t)outlen, sniff_buf);
 }
 
+/* Logic analyser: arm, do work in other commands, then read/stop. */
+static data_frame_tx_t *cmd_processor_logic_arm(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    /* in: prescaler(1) n(1) src(n) [merge_ticks(2)] */
+    if (length < 2 || (length != (uint16_t)(2 + data[1]) && length != (uint16_t)(4 + data[1]))) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint8_t prescaler = data[0];
+    uint16_t merge = 0;
+    if (length == (uint16_t)(4 + data[1])) {
+        merge = ((uint16_t)data[2 + data[1]] << 8) | data[3 + data[1]];
+    }
+    int rc = logic_start(&data[2], data[1], prescaler, merge);
+    if (rc == LOGIC_ERR_PARAM) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    if (rc != LOGIC_OK) {
+        return data_frame_make(cmd, STATUS_DEVICE_MODE_ERROR, 0, NULL);
+    }
+    logic_info_t info;
+    logic_get_info(&info);
+    struct {
+        uint8_t  init_levels;
+        uint32_t tick_hz;
+    } PACKED payload;
+    payload.init_levels = info.init_levels;
+    payload.tick_hz     = U32HTONL(16000000UL >> prescaler);
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(payload), (uint8_t *)&payload);
+}
+
+static data_frame_tx_t *cmd_processor_logic_read(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length != 4) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint16_t offset = ((uint16_t)data[0] << 8) | data[1];
+    uint16_t count  = ((uint16_t)data[2] << 8) | data[3];
+    if (count > 96) {
+        count = 96;
+    }
+    static uint8_t buf[5 + 96 * LOGIC_EV_BYTES];
+    logic_info_t info;
+    logic_get_info(&info);
+    uint16_t n = logic_read(offset, count, &buf[5]);
+    buf[0] = info.running ? 1 : 0;
+    buf[1] = info.overflow ? 1 : 0;
+    buf[2] = info.init_levels;
+    buf[3] = (uint8_t)(info.count >> 8);
+    buf[4] = (uint8_t)info.count;
+    return data_frame_make(cmd, STATUS_SUCCESS, (uint16_t)(5 + n * LOGIC_EV_BYTES), buf);
+}
+
+static data_frame_tx_t *cmd_processor_logic_stop(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    logic_stop();
+    logic_info_t info;
+    logic_get_info(&info);
+    struct {
+        uint8_t  overflow;
+        uint16_t count;
+        uint16_t calls;
+        uint32_t cc[LOGIC_MAX_CHANNELS];
+    } PACKED out;
+    out.overflow = info.overflow ? 1 : 0;
+    out.count    = U16HTONS(info.count);
+    out.calls    = U16HTONS(info.calls);
+    for (uint8_t i = 0; i < LOGIC_MAX_CHANNELS; i++) {
+        out.cc[i] = U32HTONL(info.cc[i]);
+    }
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(out), (uint8_t *)&out);
+}
+
 /* ========================================================================
  * HF14A AUTH TRACE — full anticoll + Crypto1 auth flow, every frame returned.
  *
@@ -4812,6 +4882,9 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_IOPROX_COMPOSE_ID,            NULL,                        cmd_processor_ioprox_compose_id,             NULL                   },
     {    DATA_CMD_EM4X05_SCAN,                  before_reader_run,           cmd_processor_em4x05_scan,                   NULL                   },
     {    DATA_CMD_LF_SNIFF,                     before_reader_run,           cmd_processor_lf_sniff,                      NULL                   },
+    {    DATA_CMD_LOGIC_ARM,                    NULL,                        cmd_processor_logic_arm,                     NULL                   },
+    {    DATA_CMD_LOGIC_READ,                   NULL,                        cmd_processor_logic_read,                    NULL                   },
+    {    DATA_CMD_LOGIC_STOP,                   NULL,                        cmd_processor_logic_stop,                    NULL                   },
     {    DATA_CMD_HF14A_SNIFF,                  NULL,                        cmd_processor_hf14a_sniff,                   NULL                   },
     {    DATA_CMD_HF14A_AUTH_TRACE,             before_hf_reader_run,        cmd_processor_hf14a_auth_trace,              after_hf_reader_run    },
     {    DATA_CMD_HF14A_PASSIVE_RECV,           before_reader_run,           cmd_processor_hf14a_passive_recv,            NULL                   },

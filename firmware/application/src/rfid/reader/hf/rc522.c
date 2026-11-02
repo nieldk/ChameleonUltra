@@ -21,8 +21,8 @@
 NRF_LOG_MODULE_REGISTER();
 
 
-#define RC522_DOSEL nrf_gpio_pin_clear(HF_SPI_SELECT)
-#define RC522_UNSEL nrf_gpio_pin_set(HF_SPI_SELECT)
+#define RC522_DOSEL do { logic_hook(LOGIC_SRC_HF_CS, 0); nrf_gpio_pin_clear(HF_SPI_SELECT); } while (0)
+#define RC522_UNSEL do { logic_hook(LOGIC_SRC_HF_CS, 1); nrf_gpio_pin_set(HF_SPI_SELECT); } while (0)
 
 bool g_is_reader_antenna_on = false;
 

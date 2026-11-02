@@ -52,6 +52,7 @@ SRC_FILES += \
   $(PROJ_DIR)/heap_guard.c \
   $(PROJ_DIR)/app_main.c \
   $(PROJ_DIR)/app_cmd.c \
+  $(PROJ_DIR)/logic_analyzer.c \
   $(PROJ_DIR)/ble_main.c \
   $(PROJ_DIR)/rfid_main.c \
   $(PROJ_DIR)/settings.c \
@@ -473,6 +474,7 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
     ${PROJ_DIR}/rfid/reader/lf \
 
   CFLAGS += -DPROJECT_CHAMELEON_ULTRA
+  CFLAGS += -DCONFIG_LOGIC_HOOKS
 
 # DESFire EV1 tag emulation. Crypto comes from tiny-DES-c and tiny-AES-c behind
 # an mbedTLS-compatible shim, so no mbedTLS or OpenSSL dependency is added.
