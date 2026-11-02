@@ -31,4 +31,8 @@ void     logic_stop(void);
 void     logic_get_info(logic_info_t *info);
 uint16_t logic_read(uint16_t offset, uint16_t max_events, uint8_t *out);
 
+/* SPI log: packed entries, see logic_spi_slow() */
+uint16_t logic_spi_read(uint16_t offset, uint16_t max_bytes, uint8_t *out);
+void     logic_spi_info(uint16_t *total, bool *overflow, uint16_t *drops);
+
 #endif

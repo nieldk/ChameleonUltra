@@ -950,6 +950,15 @@ class ChameleonCMD:
         return resp
 
     @expect_response(Status.SUCCESS)
+    def logic_spi_read(self, offset: int, count: int):
+        """parsed = (overflow, dropped, total_bytes, data) of the packed RC522 SPI log"""
+        resp = self.device.send_cmd_sync(Command.LOGIC_SPI_READ, struct.pack('!HH', offset, count))
+        if resp.status == Status.SUCCESS:
+            over, drops, total = struct.unpack('!BHH', resp.data[:5])
+            resp.parsed = (bool(over), drops, total, bytes(resp.data[5:]))
+        return resp
+
+    @expect_response(Status.SUCCESS)
     def logic_stop(self):
         """parsed = (overflow, total, handler_calls, [capture per channel])"""
         resp = self.device.send_cmd_sync(Command.LOGIC_STOP)

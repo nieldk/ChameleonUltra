@@ -29,6 +29,17 @@ static uint8_t           m_hook_ch[2];
 static uint16_t          m_merge;
 volatile uint8_t         g_logic_hook_mask;
 
+#define LOGIC_SPI_BUF     4096
+#define LOGIC_SPI_MAXDATA 24
+#define LOGIC_SPI_CC      5
+volatile uint8_t         g_logic_spi_on;
+static uint8_t           m_spi[LOGIC_SPI_BUF];
+static uint16_t          m_spi_len;
+static int16_t           m_spi_last = -1;
+static bool              m_spi_over;
+static uint16_t          m_spi_drop;
+static volatile uint8_t  m_spi_busy;
+
 static bool is_hook_src(uint8_t src) {
     return src == LOGIC_SRC_HF_CS || src == LOGIC_SRC_FIELD_LED;
 }
@@ -38,6 +49,10 @@ static uint32_t hook_pin(uint8_t src) {
 }
 
 static bool resolve_pin(uint8_t src, uint32_t *pin) {
+    if (src == LOGIC_SRC_SPI) {
+        *pin = 0;
+        return true;
+    }
     if (is_hook_src(src)) {
         *pin = hook_pin(src);
         return true;
@@ -55,6 +70,75 @@ static bool resolve_pin(uint8_t src, uint32_t *pin) {
 static NRF_GPIO_Type *pin_port(uint32_t pin, uint32_t *idx) {
     *idx = pin;
     return nrf_gpio_pin_port_decode(idx);
+}
+
+/*
+ * Entry: ts u32 BE, hdr (bit7 read, bit6 burst, bits0-5 reg), then
+ *   single: val, rep (extra identical reads folded in)
+ *   burst:  len (true length), data[min(len, LOGIC_SPI_MAXDATA)]
+ */
+void logic_spi_slow(uint8_t reg, uint8_t rw, const uint8_t *d, uint8_t len, uint8_t burst) {
+    if (__atomic_exchange_n(&m_spi_busy, 1, __ATOMIC_ACQUIRE)) {
+        m_spi_drop++;
+        return;
+    }
+    NRF_TIMER4->TASKS_CAPTURE[LOGIC_SPI_CC] = 1;
+    uint32_t ts = NRF_TIMER4->CC[LOGIC_SPI_CC];
+    uint8_t hdr = (uint8_t)((rw ? 0x80 : 0) | (burst ? 0x40 : 0) | (reg & 0x3F));
+    uint8_t n = burst ? (len < LOGIC_SPI_MAXDATA ? len : LOGIC_SPI_MAXDATA) : 0;
+    uint16_t need = burst ? (uint16_t)(6 + n) : 7;
+
+    if (!burst && rw && m_spi_last >= 0) {
+        uint8_t *e = &m_spi[m_spi_last];
+        if (e[4] == hdr && e[5] == d[0] && e[6] < 255) {
+            e[6]++;
+            goto out;
+        }
+    }
+    if (m_spi_len + need > LOGIC_SPI_BUF) {
+        m_spi_over = true;
+        goto out;
+    }
+    uint8_t *e = &m_spi[m_spi_len];
+    m_spi_last = (int16_t)m_spi_len;
+    e[0] = (uint8_t)(ts >> 24);
+    e[1] = (uint8_t)(ts >> 16);
+    e[2] = (uint8_t)(ts >> 8);
+    e[3] = (uint8_t)ts;
+    e[4] = hdr;
+    if (burst) {
+        e[5] = len;
+        for (uint8_t i = 0; i < n; i++) {
+            e[6 + i] = d[i];
+        }
+    } else {
+        e[5] = d[0];
+        e[6] = 0;
+    }
+    m_spi_len += need;
+out:
+    __atomic_store_n(&m_spi_busy, 0, __ATOMIC_RELEASE);
+}
+
+uint16_t logic_spi_read(uint16_t offset, uint16_t max_bytes, uint8_t *out) {
+    uint16_t total = m_spi_len;
+    if (offset >= total) {
+        return 0;
+    }
+    uint16_t n = total - offset;
+    if (n > max_bytes) {
+        n = max_bytes;
+    }
+    for (uint16_t i = 0; i < n; i++) {
+        out[i] = m_spi[offset + i];
+    }
+    return n;
+}
+
+void logic_spi_info(uint16_t *total, bool *overflow, uint16_t *drops) {
+    *total    = m_spi_len;
+    *overflow = m_spi_over;
+    *drops    = m_spi_drop;
 }
 
 static void store_event(uint8_t ch, uint32_t ts, uint8_t level) {
@@ -94,6 +178,7 @@ static void logic_evt(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action) {
 }
 
 void logic_stop(void) {
+    g_logic_spi_on = 0;
     if (m_running) {
         for (uint8_t i = 0; i < m_nch; i++) {
             m_cc[i] = NRF_TIMER4->CC[i];
@@ -105,6 +190,10 @@ void logic_stop(void) {
         }
         if (m_stage[i] == 3) {
             g_logic_hook_mask = 0;
+            m_stage[i] = 0;
+            continue;
+        }
+        if (m_stage[i] == 4) {
             m_stage[i] = 0;
             continue;
         }
@@ -140,6 +229,11 @@ int logic_start(const uint8_t *src, uint8_t n, uint8_t prescaler, uint16_t merge
 
     m_nch = n;
     g_logic_hook_mask = 0;
+    g_logic_spi_on = 0;
+    m_spi_len = 0;
+    m_spi_last = -1;
+    m_spi_over = false;
+    m_spi_drop = 0;
     m_merge = merge_ticks;
     m_count = 0;
     m_calls = 0;
@@ -161,7 +255,13 @@ int logic_start(const uint8_t *src, uint8_t n, uint8_t prescaler, uint16_t merge
     nrfx_gpiote_in_config_t cfg = NRFX_GPIOTE_CONFIG_IN_SENSE_TOGGLE(true);
     cfg.is_watcher = true;
 
+    bool want_spi = false;
     for (uint8_t i = 0; i < n; i++) {
+        if (src[i] == LOGIC_SRC_SPI) {
+            want_spi = true;
+            m_stage[i] = 4;
+            continue;
+        }
         if (is_hook_src(src[i])) {
             m_hook_ch[src[i]] = i;
             m_stage[i] = 3;
@@ -199,6 +299,7 @@ int logic_start(const uint8_t *src, uint8_t n, uint8_t prescaler, uint16_t merge
     }
 
     NRF_TIMER4->TASKS_START = 1;
+    g_logic_spi_on = want_spi;
     m_running = true;
     return LOGIC_OK;
 

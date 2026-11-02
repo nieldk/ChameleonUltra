@@ -160,6 +160,7 @@
 #define DATA_CMD_LOGIC_ARM                      (3037)  // in: prescaler(1) n(1) src(n)
 #define DATA_CMD_LOGIC_READ                     (3038)  // in: offset(2) count(2)
 #define DATA_CMD_LOGIC_STOP                     (3039)
+#define DATA_CMD_LOGIC_SPI_READ                 (3040)  // in: offset(2) count(2)
 #endif
 
 //

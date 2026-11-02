@@ -56,6 +56,7 @@ static hf14a_config_t hf14aconfig = { 0, 0, 0, 0 };
 * @retval :Value in the register
 */
 uint8_t read_register_single(uint8_t Address) {
+    const uint8_t reg = Address;
     RC522_DOSEL;
 
     Address = (uint8_t)(((Address << 1) & 0x7E) | 0x80);
@@ -71,11 +72,13 @@ uint8_t read_register_single(uint8_t Address) {
     Address = NRF_SPI0->RXD;
 
     RC522_UNSEL;
+    logic_spi(reg, 1, &Address, 1, 0);
 
     return Address;
 }
 
 void read_register_buffer(uint8_t Address, uint8_t *pInBuffer, uint8_t len) {
+    const uint8_t reg = Address;
     RC522_DOSEL;
 
     Address = (((Address << 1) & 0x7E) | 0x80);
@@ -95,6 +98,7 @@ void read_register_buffer(uint8_t Address, uint8_t *pInBuffer, uint8_t len) {
     } while (++i < len);
 
     RC522_UNSEL;
+    logic_spi(reg, 1, pInBuffer, len ? len : 1, 1);
 }
 
 /**
@@ -103,6 +107,7 @@ void read_register_buffer(uint8_t Address, uint8_t *pInBuffer, uint8_t len) {
 *           value: The value to be written
 */
 void ONCE_OPT write_register_single(uint8_t Address, uint8_t value) {
+    const uint8_t reg = Address;
     RC522_DOSEL;
 
     Address = ((Address << 1) & 0x7E);
@@ -120,9 +125,11 @@ void ONCE_OPT write_register_single(uint8_t Address, uint8_t value) {
     (void)NRF_SPI0->RXD;
 
     RC522_UNSEL;
+    logic_spi(reg, 0, &value, 1, 0);
 }
 
 void write_register_buffer(uint8_t Address, uint8_t *values, uint8_t len) {
+    const uint8_t reg = Address;
     RC522_DOSEL;
 
     Address = ((Address << 1) & 0x7E);
@@ -142,6 +149,7 @@ void write_register_buffer(uint8_t Address, uint8_t *values, uint8_t len) {
     } while (++i < len);
 
     RC522_UNSEL;
+    logic_spi(reg, 0, values, len ? len : 1, 1);
 }
 
 /**

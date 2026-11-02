@@ -2901,6 +2901,28 @@ static data_frame_tx_t *cmd_processor_logic_read(uint16_t cmd, uint16_t status, 
     return data_frame_make(cmd, STATUS_SUCCESS, (uint16_t)(5 + n * LOGIC_EV_BYTES), buf);
 }
 
+static data_frame_tx_t *cmd_processor_logic_spi_read(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length != 4) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint16_t offset = ((uint16_t)data[0] << 8) | data[1];
+    uint16_t count  = ((uint16_t)data[2] << 8) | data[3];
+    if (count > 480) {
+        count = 480;
+    }
+    static uint8_t buf[5 + 480];
+    uint16_t total, drops;
+    bool over;
+    logic_spi_info(&total, &over, &drops);
+    uint16_t n = logic_spi_read(offset, count, &buf[5]);
+    buf[0] = over ? 1 : 0;
+    buf[1] = (uint8_t)(drops >> 8);
+    buf[2] = (uint8_t)drops;
+    buf[3] = (uint8_t)(total >> 8);
+    buf[4] = (uint8_t)total;
+    return data_frame_make(cmd, STATUS_SUCCESS, (uint16_t)(5 + n), buf);
+}
+
 static data_frame_tx_t *cmd_processor_logic_stop(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     logic_stop();
     logic_info_t info;
@@ -4885,6 +4907,7 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_LOGIC_ARM,                    NULL,                        cmd_processor_logic_arm,                     NULL                   },
     {    DATA_CMD_LOGIC_READ,                   NULL,                        cmd_processor_logic_read,                    NULL                   },
     {    DATA_CMD_LOGIC_STOP,                   NULL,                        cmd_processor_logic_stop,                    NULL                   },
+    {    DATA_CMD_LOGIC_SPI_READ,               NULL,                        cmd_processor_logic_spi_read,                NULL                   },
     {    DATA_CMD_HF14A_SNIFF,                  NULL,                        cmd_processor_hf14a_sniff,                   NULL                   },
     {    DATA_CMD_HF14A_AUTH_TRACE,             before_hf_reader_run,        cmd_processor_hf14a_auth_trace,              after_hf_reader_run    },
     {    DATA_CMD_HF14A_PASSIVE_RECV,           before_reader_run,           cmd_processor_hf14a_passive_recv,            NULL                   },
