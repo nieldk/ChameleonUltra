@@ -13,13 +13,13 @@
  *
  * Use case: walk up to a reader/card pair you don't control a host
  * connection to (or don't want to leave a laptop next to), trigger N
- * captures with the button chord, walk back to the bench, pull all
+ * captures with the ACTION button, walk back to the bench, pull all
  * session traces over BLE/USB afterward.
  *
- * Button mapping while armed (chord-only):
- *   BOTH_SHORT  run one tap-sniff capture at the configured timeout
- *   BOTH_LONG   arm/disarm (handled by framework)
- *   BOTH_VLONG  discard all stored sessions
+ * Buttons while armed (bound via `hw settings btnpress`):
+ *   ACTION  run one tap-sniff capture at the configured timeout
+ *   TOGGLE  arm/disarm (handled by framework)
+ *   CLEAR   discard all stored sessions
  *
  * Capability flags:
  *   writes_tag  = false  - never touches the target's or CU's tag memory

@@ -13,10 +13,10 @@
  * walk back to the bench, pull all session traces over BLE/USB for
  * offline analysis with Proxmark3-compatible decoders.
  *
- * Button mapping while armed (chord-only):
- *   BOTH_SHORT  run one auth session at the configured (type, block, key)
- *   BOTH_LONG   arm/disarm (handled by framework)
- *   BOTH_VLONG  discard all stored sessions
+ * Buttons while armed (bound via `hw settings btnpress`):
+ *   ACTION  run one auth session at the configured (type, block, key)
+ *   TOGGLE  arm/disarm (handled by framework)
+ *   CLEAR   discard all stored sessions
  *
  * Capability flags:
  *   writes_tag  = false  - we never write target memory

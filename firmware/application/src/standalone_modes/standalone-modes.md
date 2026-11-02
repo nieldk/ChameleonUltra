@@ -1,7 +1,7 @@
 # Standalone Modes
 
 Standalone modes let the ChameleonUltra work **without a host** ,  no laptop, no
-app, just the device and its two buttons. You configure a mode over the CLI
+app, just the device and its buttons. You configure a mode over the CLI
 once, **arm** it, then walk away. The device runs the mode on button presses,
 saves results to flash, and you pull them back at the bench later.
 
@@ -21,36 +21,31 @@ modes they included.
 
 1. **Select** the mode: `standalone set-mode <name>`
 2. **Configure** it (options are per-mode): `standalone config <name> [flags]`
-3. **Arm** it: `standalone trigger` (from the CLI), or press **both buttons,
-   long** on the device.
-4. **Walk away.** Press **both buttons, short** to run one capture/action.
-5. **Disarm** to save results: `standalone disarm`, or **both buttons, long**.
+3. **Arm** it: `standalone trigger` (from the CLI), or the button bound to
+   `STANDALONE_TOGGLE` (see below).
+4. **Walk away.** Press the `STANDALONE_ACTION` button to run one capture/action.
+5. **Disarm** to save results: `standalone disarm`, or the `STANDALONE_TOGGLE` button.
 6. **Retrieve**: `standalone get-result` (over USB/BLE).
 
 `standalone status` shows the current mode, armed state, and stored-result
 count. `standalone ls` lists the modes. `standalone clear-result` discards
 stored results.
 
-## Buttons while armed (chord = press both together)
+## Buttons
 
-| Chord | Meaning |
-|-------|---------|
-| **Both, short** | Run the mode's action (one capture / advance slot). |
-| **Both, long** | Arm ⇄ disarm. |
-| **Both, very-long** | Discard all stored results for this mode. |
-
-### Single-button alternative (clones, or if A+B resets the device)
-
-On some clones pressing A and B together triggers a hardware reset, so the
-chords above can't be used. Each chord action can instead be bound to one button
+Standalone is driven by single-button presses. Bind each function to a button
 with `hw settings btnpress`; short and long press of A and B are set separately:
 
-| Function | Same as | Use |
-|----------|---------|-----|
-| `STANDALONE_TOGGLE` | A+B long | arm / disarm |
-| `STANDALONE_ACTION` | A+B short | run the armed mode |
-| `STANDALONE_CLEAR`  | A+B very long | discard stored results |
-| `STANDALONE_DISARM` | (disarm only) | disarm |
+| Function | Use |
+|----------|-----|
+| `STANDALONE_TOGGLE` | arm / disarm |
+| `STANDALONE_ACTION` | run the armed mode (one capture / advance slot) |
+| `STANDALONE_CLEAR`  | discard stored results for this mode |
+| `STANDALONE_DISARM` | disarm only |
+
+The standalone functions are not bound by default. The same actions are
+available from the host: `standalone trigger` (arms if disarmed, then runs the
+action), `standalone disarm`, `standalone clear-result`.
 
 Example: keep the slot buttons for slot cycling and put the standalone actions
 on the long presses:
@@ -89,17 +84,17 @@ real card and records every frame (REQA…ATS, auth, `nt`, `nr‖ar`, `at`).
 ```
 standalone set-mode authtrace
 standalone config authtrace --key-type A --block 4 --key FFFFFFFFFFFF --timeout 1000
-standalone trigger                 # arm  (or: both-buttons long on device)
-#  → walk to the card, press both-short per auth attempt (green flash = captured)
-standalone disarm                  # or both-buttons long ,  saves results
+standalone trigger                 # arm  (or: STANDALONE_TOGGLE button)
+#  → walk to the card, press the ACTION button per auth attempt (green flash = captured)
+standalone disarm                  # or STANDALONE_TOGGLE button ,  saves results
 standalone get-result              # pull the traces
 ```
 
 **Config** (16-byte blob; the CLI sets it via the flags): `--key-type A|B`,
 `--block <0-255>` (e.g. `4` = first non-MAD sector key A), `--key <12 hex>`
 (candidate sector key), `--timeout <100-30000>` (per-session tag-poll, ms).
-**Buttons:** BOTH_SHORT = run one auth session · BOTH_LONG = arm/disarm ·
-BOTH_VLONG = discard all sessions.
+**Buttons:** ACTION = run one auth session · TOGGLE = arm/disarm ·
+CLEAR = discard all sessions.
 No `--opt-in` needed (never writes target memory or slots).
 
 ## `emultrace` ,  card-side auth capture  *(Lite + Ultra)*
@@ -119,7 +114,7 @@ standalone disarm
 standalone get-result
 ```
 
-**Config:** none. **Buttons:** BOTH_LONG = arm/disarm. Sessions commit
+**Config:** none. **Buttons:** TOGGLE = arm/disarm. Sessions commit
 automatically (on the next REQA or after the idle timeout) ,  no short-press
 capture. **Works on Lite and Ultra** (emulation only).
 
@@ -133,14 +128,14 @@ transaction.
 standalone set-mode hf14a-tap-sniff
 standalone config hf14a-tap-sniff --timeout 2000
 standalone trigger                 # arm
-#  → position CU by the live reader/card, press both-short to capture a session
+#  → position CU by the live reader/card, press the ACTION button to capture a session
 standalone disarm
 standalone get-result
 ```
 
 **Config** (8-byte blob): `--timeout <100-30000>` (per-capture listen duration,
-ms). **Buttons:** BOTH_SHORT = capture one session · BOTH_LONG = arm/disarm ·
-BOTH_VLONG = discard all sessions. No `--opt-in` needed.
+ms). **Buttons:** ACTION = capture one session · TOGGLE = arm/disarm ·
+CLEAR = discard all sessions. No `--opt-in` needed.
 
 ## `nfc-canary` ,  reader tripwire  *(Lite + Ultra)*
 
@@ -153,7 +148,7 @@ bait ,  use a slot with a real HF tag, otherwise readers rarely get past
 ```
 standalone set-mode nfc-canary
 standalone config nfc-canary --min-level poll --cooldown 15 --ble both
-standalone trigger                 # arm (or both-buttons long on device)
+standalone trigger                 # arm (or STANDALONE_TOGGLE button)
 #  ... leave it somewhere ...
 standalone disarm
 standalone get-result              # table of probe windows
@@ -171,9 +166,9 @@ Within a window you get at most one **alert** per level, and only for levels
 `field`), `--cooldown 1-255` seconds (default 10), `--ble off|alert|end|both`
 (default `both`).
 
-**Buttons:** BOTH_SHORT = send a **TEST** BLE event (green = delivered, red =
+**Buttons:** ACTION = send a **TEST** BLE event (green = delivered, red =
 no BLE client connected) ,  do this before walking away ·
-BOTH_LONG = arm/disarm · BOTH_VLONG = clear the log.
+TOGGLE = arm/disarm · CLEAR = clear the log.
 
 **Notifications.** With a BLE client connected, alerts arrive as standard
 data frames, cmd `7010`, 10-byte payload: `type(1=alert,2=end,3=test) level
@@ -232,7 +227,7 @@ Then present the devices; frames relay automatically and are recorded.
 standalone disarm                     # saves the session trace
 standalone get-result
 ```
-**Buttons:** BOTH_LONG = arm/disarm · **BOTH_VLONG = discard results and
+**Buttons:** TOGGLE = arm/disarm · **CLEAR = discard results and
 restart pairing** (stops BLE, clears the trace, re-links from scratch ,  use it if
 roles didn't assign or a device dropped). Relay has no short-press action; frames
 relay automatically once paired.
@@ -301,8 +296,8 @@ standalone config slot-cycle -d 010F0000D007
 
 Fields (6-byte blob): `version=01`, `slot_mask` (bit N = include slot N),
 `start_slot` (must be set in the mask), `reserved=00`, `interval_ms` little-endian
-(100-60000, default 3000). **Buttons:** BOTH_SHORT = advance now (resumes if
-paused) · BOTH_LONG = arm/disarm · BOTH_VLONG = pause/resume.
+(100-60000, default 3000). **Buttons:** ACTION = advance now (resumes if
+paused) · TOGGLE = arm/disarm · CLEAR = pause/resume.
 
 ## `read_replay` ,  clone a card into a slot and emulate it  *(Ultra only)*
 
@@ -324,8 +319,8 @@ standalone disarm
 **Config** (4-byte blob): `--read-blocks on|off` (default `on`). With it on, each
 sector is read with the default key `FFFFFFFFFFFF`; sectors with other keys are
 skipped and stay factory, and `sectors read/total` shows the shortfall. With it
-off, only the card identity is cloned. **Buttons:** BOTH_SHORT = scan + clone one
-card · BOTH_LONG = arm/disarm · BOTH_VLONG = discard results. **Requires
+off, only the card identity is cloned. **Buttons:** ACTION = scan + clone one
+card · TOGGLE = arm/disarm · CLEAR = discard results. **Requires
 `--opt-in`** (writes the active slot). MIFARE Classic 1K source assumed.
 
 ## `autoclone` ,  auto-sensing clone  *(Ultra only)*
@@ -354,8 +349,8 @@ what was readable, and the target must be a gen1a magic card (block-0 writable).
 **LF:** the 5-byte EM410x ID is written to a T5577 (`blocks` = 1 on success).
 `--also-slot` applies to the HF path only.
 **Config** (4-byte blob): `--also-slot on|off` (default `off`).
-**Buttons:** BOTH_SHORT = read source, then (2nd) write target · BOTH_LONG =
-arm/disarm · BOTH_VLONG = discard the buffered source and results. **Requires
+**Buttons:** ACTION = read source, then (2nd) write target · TOGGLE =
+arm/disarm · CLEAR = discard the buffered source and results. **Requires
 `--opt-in`** (writes target memory, and the slot with `--also-slot`). The device
 stays armed after a write, so trigger → trigger repeats for the next card.
 
@@ -377,7 +372,7 @@ set of ~13 common keys (`FFFFFFFFFFFF`, `A0A1A2A3A4A5`, `D3F7D3F7D3F7`, …);
 sectors whose key is not in it show `--`. Because a failed auth halts the card,
 the mode **re-selects before every key attempt**, so a full 16-sector run takes
 ~10-20 s ,  keep the card on the antenna until it finishes. **Buttons:**
-BOTH_SHORT = run one check · BOTH_LONG = arm/disarm · BOTH_VLONG = discard
+ACTION = run one check · TOGGLE = arm/disarm · CLEAR = discard
 results. No `--opt-in` needed (never writes).
 
 ## `gdb_gateway` ,  GDB memory/flash gateway over USB or BLE  *(Lite + Ultra)*
@@ -425,7 +420,7 @@ exactly as it would a serial port.
 
 ```
 standalone set-mode gdb-gateway --opt-in   # can program flash ,  --opt-in required
-#  ARM: press both-buttons long (green LED), or `standalone trigger` / the
+#  ARM: press the TOGGLE button (green LED), or `standalone trigger` / the
 #  host's STANDALONE_TRIGGER command -- app_standalone_trigger() arms in
 #  software if disarmed, no button needed. Either way the active link is
 #  now GDB RSP, so exit the CLI (or, over BLE, disconnect it) first.
@@ -435,7 +430,7 @@ python3 software/script/gdb_ble_bridge.py
 arm-none-eabi-gdb -ex 'target remote localhost:3333'    # BLE, via the bridge
 #  (gdb) dump memory flash.bin 0x0 0x100000     # full-chip dump
 #  (gdb) restore blob.bin binary 0x000c7000     # write a non-running region
-#  DISARM: both-buttons long again, or `standalone disarm` / STANDALONE_DISARM
+#  DISARM: TOGGLE button again, or `standalone disarm` / STANDALONE_DISARM
 ```
 
 **Reads are unrestricted:** dump any flash/RAM/peripheral address (the whole
@@ -448,14 +443,14 @@ are still subject to ACL, so an ACL-locked region returns `E01`. The app floor
 can be lowered at runtime with `monitor unlock-app` (see below) for targeted
 patches; MBR and SoftDevice stay protected.
 
-**Config:** none. **Buttons:** BOTH_LONG = arm/disarm; no short-press or
+**Config:** none. **Buttons:** TOGGLE = arm/disarm; no short-press or
 very-long action. Arm/disarm also works without a button: `standalone trigger`/
 `standalone disarm` (STANDALONE_TRIGGER/STANDALONE_DISARM), which is what the
 web terminal's `hw gdb arm`/`hw gdb disarm` use. **Produces no results**
 (`get-result` is unused). **Requires `--opt-in`** (it can program flash).
 Works on Lite and Ultra ,  no reader hardware is touched. Detaching gdb (or
 the web terminal's `hw gdb exit`) leaves the mode armed so you can reconnect;
-disarm with both-buttons long or `hw gdb disarm`. For big transfers, `set
+disarm with the TOGGLE button or `hw gdb disarm`. For big transfers, `set
 remotetimeout 60` in gdb.
 
 **In-browser client:** `phreakbyte.html`'s terminal tab has `hw gdb` ,  a small
@@ -517,12 +512,12 @@ Until a key/cert are provisioned, `REGISTER` output is not a usable credential.
 
 ```
 standalone set-mode u2f        # no --opt-in needed; writes no tag/slot
-#  press both-buttons long to ARM (blue LED); present the CU to an NFC reader
+#  press the TOGGLE button to ARM (blue LED); present the CU to an NFC reader
 #  Android: Chrome -> webauthn.io -> register a security key -> tap
 #  PC/SC:   python3 firmware/tools/u2f_nfc_test.py   (full register+auth verify)
 ```
 
-**Config:** none. **Buttons:** BOTH_LONG = arm/disarm. **Produces no results.**
+**Config:** none. **Buttons:** TOGGLE = arm/disarm. **Produces no results.**
 Works on Lite and Ultra (NFCT only, no reader hardware). First boot generates
 the master key; it persists, so credentials survive reboots.
 

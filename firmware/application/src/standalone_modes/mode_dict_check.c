@@ -152,7 +152,7 @@ static standalone_rc_t read_result(uint8_t *out, size_t out_max, size_t *out_len
     if (!out || !out_len) return STANDALONE_RC_INVALID_CFG;
     if (m_st.read_cursor >= m_st.write_cursor) {
         /* End of buffer: rewind so a later get-result re-reads the same
-         * results. They persist until clear-result / BOTH_VLONG. */
+         * results. They persist until clear-result / CLEAR. */
         m_st.read_cursor = 0;
         *out_len = 0;
         return STANDALONE_RC_NO_RESULT;

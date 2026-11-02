@@ -14,8 +14,9 @@
  *     writes_slot in their descriptor and refuse activation unless the host
  *     has set STANDALONE_FLAG_HOST_OPTED_IN via app_standalone_set_mode().
  *   - Mode IDs are persisted to FDS. Never renumber existing IDs; append.
- *   - State machine: DISARMED <-> ARMED_IDLE driven by chord gestures.
- *     BOTH_LONG (>=1s, <5s held simultaneously) is the universal arm/disarm.
+ *   - State machine: DISARMED <-> ARMED_IDLE driven by button events.
+ *     STANDALONE_BTN_BOTH_LONG is the universal arm/disarm (button function
+ *     STANDALONE_TOGGLE, or the host STANDALONE_TRIGGER/DISARM commands).
  */
 
 #ifndef APP_STANDALONE_H
@@ -73,16 +74,10 @@ typedef enum {
 /* -------------------------------------------------------------------------
  * Button event abstraction
  *
- * NOTE: Single-button events (A/B short or long) are NOT exposed here -
- * they are already claimed by the existing settings_button_function_t
- * config in settings.c (CycleSlot, CloneIcUid, NfcFieldGenerator, etc).
- * Standalone uses only simultaneous-press chords, which the existing
- * button driver does not produce and so cannot conflict with.
- *
- * Chord classification (measured from "both pressed" to "both released"):
- *   BOTH_SHORT  : duration <  1000 ms
- *   BOTH_LONG   : duration >= 1000 ms and < 5000 ms   (arm/disarm)
- *   BOTH_VLONG  : duration >= 5000 ms                 (destructive ops)
+ * Events come from the settings button functions STANDALONE_ACTION,
+ * STANDALONE_TOGGLE and STANDALONE_CLEAR (bound with `hw settings
+ * btnpress`), and from the host trigger/disarm commands. The BOTH_* names
+ * are historical; there is no two-button chord.
  * ------------------------------------------------------------------------- */
 
 typedef enum {
@@ -241,7 +236,7 @@ standalone_rc_t     app_standalone_read_result_mode(standalone_mode_t mode,
                             uint8_t *out, size_t out_max, size_t *out_len);
 standalone_rc_t     app_standalone_clear_result_mode(standalone_mode_t mode);
 
-/* Manual trigger - host-side equivalent of BOTH_SHORT. */
+/* Manual trigger - host-side equivalent of the ACTION button. */
 standalone_rc_t     app_standalone_trigger(void);
 standalone_rc_t     app_standalone_disarm(void);
 /* Non-blocking disarm for the host command path — defers the state change and

@@ -2579,7 +2579,7 @@ class ChameleonCMD:
                                          bytes([int(mode)]))
 
     def standalone_trigger(self):
-        """Fire the active mode's primary action (equivalent to BOTH_SHORT).
+        """Fire the active mode's primary action (same as the STANDALONE_ACTION button).
 
         If standalone is disarmed, this performs an implicit arm first.
         Destructive modes still require HOST_OPTED_IN; otherwise returns

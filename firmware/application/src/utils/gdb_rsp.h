@@ -20,7 +20,7 @@
  * NUS) is parsed as GDB RSP instead of the framed CLI protocol; replies go
  * out the same link they came in on (usb_main.c / ble_main.c pick the
  * transport, same as the normal CLI's auto_response_data). Arming/disarming
- * is the normal standalone workflow: a both-buttons long press
+ * is the normal standalone workflow: the TOGGLE button function
  * (app_standalone_on_button), or the host commands STANDALONE_TRIGGER/
  * STANDALONE_DISARM (app_standalone_trigger()/_disarm(), app_standalone.c)
  * -- the latter is how the web terminal's `hw gdb arm`/`disarm` work with no

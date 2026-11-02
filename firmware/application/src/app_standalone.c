@@ -2,7 +2,7 @@
  * app_standalone.c
  *
  * Framework: state machine, mode registry, FDS persistence, button dispatch.
- * Chord detection lives in app_main.c and feeds app_standalone_on_button().
+ * Button functions in app_main.c feed app_standalone_on_button().
  *
  * Persistence layout (FDS file 0x1010 = FDS_STANDALONE_FILE_ID):
  *   key 0x0001          : state record (mode + flags, 4 bytes)

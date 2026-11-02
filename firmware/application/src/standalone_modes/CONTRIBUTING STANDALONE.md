@@ -8,13 +8,13 @@ PR workflow) see the [development guide](https://deepwiki.com/RfidResearchGroup/
 
 A standalone mode is a self-contained workflow that runs on the device
 without a connected host. The user configures it once over USB or BLE,
-arms it with a button chord, operates it using the physical buttons, and
+arms it with a bound button, operates it using the physical buttons, and
 retrieves results when reconnected.
 
 The framework handles:
 
 - Persisting the selected mode and its config to flash (FDS)
-- Arm/disarm state machine and button chord classification
+- Arm/disarm state machine and button-function dispatch
 - LED feedback primitives
 - Host command dispatch (CMD 7000-7006)
 - Python CLI plumbing (`standalone status/set-mode/trigger/get-result/config`)
@@ -225,9 +225,11 @@ tag_mode_enter();
 
 ### on_button(evt)
 
-Called with the classified chord gesture. `BOTH_LONG` is handled by the
+Called for the `STANDALONE_ACTION` and `STANDALONE_CLEAR` button functions
+(or the host trigger). `BOTH_LONG` (`STANDALONE_TOGGLE`) is handled by the
 framework and never reaches your mode. Handle `BOTH_SHORT` (primary
-action) and `BOTH_VLONG` (typically: clear captured data).
+action) and `BOTH_VLONG` (typically: clear captured data). The `BOTH_*`
+names are historical.
 
 May block for the duration of one RF operation. If an operation takes
 more than one second, feed the watchdog:
@@ -329,17 +331,17 @@ Before submitting a PR, verify:
   that something outside `standalone_modes/` references directly
 - [ ] `standalone status` returns correct state after `set-mode`
 - [ ] Mode config persists across a power cycle (`standalone config <mode>` after reboot shows correct values)
-- [ ] Arm / disarm via button chord works (ARMED_IDLE state confirmed
+- [ ] Arm / disarm via the bound TOGGLE button works (ARMED_IDLE state confirmed
   with `standalone status`)
-- [ ] Primary action (BOTH_SHORT) behaves correctly with and without a
+- [ ] Primary action (ACTION button) behaves correctly with and without a
   tag present
-- [ ] BOTH_VLONG clears captured data
+- [ ] CLEAR button clears captured data
 - [ ] `standalone get-result` returns data after captures and empty
   after `standalone clear-result`
 - [ ] Device does not reset spontaneously while idle in ARMED state
   (leave armed for 30+ seconds and poll `standalone status`)
 - [ ] `standalone trigger` from CLI produces the same result as the
-  button chord
+  ACTION button
 - [ ] No unexpected behavior on the existing modes after your change
   (`standalone set-mode slot_cycle`, arm, observe slot rotation)
 

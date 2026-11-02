@@ -35,10 +35,9 @@ typedef enum {
     // Toggle NFC field generator on/off (Ultra only, must be in reader mode)
     SettingsButtonNfcFieldGenerator = 5U,
     SettingsButtonStandaloneDisarm  = 6U,  /* disarm active standalone mode */
-    /* Single-button equivalents of the A+B chords, for clones where A+B resets */
-    SettingsButtonStandaloneToggle  = 7U,  /* arm / disarm (chord: both long) */
-    SettingsButtonStandaloneAction  = 8U,  /* run the armed mode (chord: both short) */
-    SettingsButtonStandaloneClear   = 9U,  /* clear stored results (chord: both very long) */
+    SettingsButtonStandaloneToggle  = 7U,  /* arm / disarm */
+    SettingsButtonStandaloneAction  = 8U,  /* run the armed mode */
+    SettingsButtonStandaloneClear   = 9U,  /* clear stored results */
 } settings_button_function_t;
 
 typedef struct ALIGN_U32 {

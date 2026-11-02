@@ -73,25 +73,26 @@ rest of this doc is about exercising the device-side buttons and the other
 modes.
 
 
-## Chord gestures (reference)
+## Button functions (reference)
 
-Standalone uses **simultaneous-press chords** to avoid conflicting with the
-existing single-button `SettingsButtonFunction` config. Hold both A and B at
-the same time, then release them together. Duration is measured from "both
-held" to "both released":
+Standalone is driven by single-button functions. Bind them first with
+`hw settings btnpress`, e.g.:
 
-| Duration | Event | Action |
+```
+hw settings btnpress -a -l -f STANDALONE_TOGGLE
+hw settings btnpress -b -l -f STANDALONE_ACTION
+hw settings btnpress -b -s -f STANDALONE_CLEAR
+hw settings store
+```
+
+| Function | Event | Action |
 |---|---|---|
-| < 1 second | `BOTH_SHORT` | Mode's primary action (capture / advance slot / etc.) |
-| 1 – 5 seconds | `BOTH_LONG` | Toggle arm / disarm |
-| ≥ 5 seconds | `BOTH_VLONG` | Destructive — clear captured data |
+| `STANDALONE_ACTION` | `BOTH_SHORT` | Mode's primary action (capture / advance slot / etc.) |
+| `STANDALONE_TOGGLE` | `BOTH_LONG` | Toggle arm / disarm |
+| `STANDALONE_CLEAR`  | `BOTH_VLONG` | Destructive — clear captured data |
 
-The trickiest one is `BOTH_SHORT` — both buttons have to register pressed
-together, then both released together, within a second. Easier with thumb
-and index finger than two thumbs.
-
-Single-button presses (just A or just B) keep doing whatever your normal
-button settings say. Standalone never touches that.
+The `BOTH_*` event names are historical. A button bound to one of these no
+longer does its previous job.
 
 
 ## LED feedback
@@ -141,11 +142,11 @@ chameleon --> standalone config --block 4 --key-type A --timeout 3000 authtrace
 # Disconnect USB if you want a fully host-less test. Optional.
 
 # === Now on the device ===
-# Hold both buttons ~2 seconds → magenta LED sweep → ARMED
+# Press the TOGGLE button → magenta LED sweep → ARMED
 # Place card on antenna
-# Brief simultaneous tap of both buttons → quick flash → one session captured
+# Press the ACTION button → quick flash → one session captured
 # Repeat with same card 2-3 times (need ≥2 sessions for mfkey32v2)
-# Hold both ~2 seconds → reverse sweep → DISARMED
+# Press the TOGGLE button → reverse sweep → DISARMED
 
 # === Reconnect USB ===
 chameleon --> standalone get-result --dump
@@ -200,18 +201,18 @@ standalone config authtrace
 What it does: rotates through enabled emulation slots at a configurable
 interval. No tag interaction, no flash writes, no destructive side
 effects. The simplest possible reference mode — handy for verifying the
-chord/arm/disarm path on a unit without reading the AuthTrace output.
+button/arm/disarm path on a unit without reading the AuthTrace output.
 
 **Bench test:**
 
 ```
 chameleon --> standalone set-mode slot_cycle
 
-# Hold both buttons ~2s → yellow LED sweep → ARMED, starts cycling
+# Press the TOGGLE button → yellow LED sweep → ARMED, starts cycling
 # Watch the slot LEDs change every few seconds
-# Brief tap of both → manually advance one slot
-# Hold both ≥ 5s → pause/resume (slot_cycle's VLONG action)
-# Hold both ~2s → disarm
+# Press the ACTION button → manually advance one slot
+# Press the CLEAR button → pause/resume (slot_cycle's CLEAR action)
+# Press the TOGGLE button → disarm
 ```
 
 By default it cycles through all 8 slots at 3000 ms each. Currently the only
@@ -266,12 +267,12 @@ make sure the device stays powered until you can drain the result buffer.
 You're using an unpatched CLI. The standalone commands are added by the
 same patch as the firmware — both halves need to be in sync.
 
-**Chord gesture doesn't arm the device (no LED sweep)**
+**Button doesn't arm the device (no LED sweep)**
 
-The two buttons need to press and release within roughly the same 50ms
-window for the chord rescue path to catch them. Practice with a
-deliberate "press both, hold, release both" motion. The status query
-will tell you whether arming succeeded — `state: ARMED_IDLE` means yes.
+Check that a button is bound to `STANDALONE_TOGGLE` (`hw settings btnpress`)
+and that a mode is selected. `standalone status` shows whether arming
+succeeded — `state: ARMED_IDLE` means yes. `standalone trigger` arms from the
+host.
 
 **LEDs are the wrong color**
 

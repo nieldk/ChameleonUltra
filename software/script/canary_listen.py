@@ -165,7 +165,7 @@ async def listen_once(target, pair):
             print("pairing (enter the device BLE pairing key when asked) ...")
             await c.pair()
         await c.start_notify(NUS_TX, lambda _, d: handle(parser, tracker, bytes(d)))
-        print("listening (Ctrl-C to quit); press both buttons briefly on the device for a TEST event")
+        print("listening (Ctrl-C to quit); press the STANDALONE_ACTION button on the device for a TEST event")
         await done.wait()
         print("device disconnected")
 

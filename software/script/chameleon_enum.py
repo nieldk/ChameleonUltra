@@ -748,11 +748,11 @@ class ButtonPressFunction(enum.IntEnum):
         elif self == ButtonPressFunction.STANDALONE_DISARM:
             return "Disarm active standalone mode"
         elif self == ButtonPressFunction.STANDALONE_TOGGLE:
-            return "Arm / disarm standalone mode (same as A+B long)"
+            return "Arm / disarm standalone mode"
         elif self == ButtonPressFunction.STANDALONE_ACTION:
-            return "Run armed standalone mode (same as A+B short)"
+            return "Run armed standalone mode"
         elif self == ButtonPressFunction.STANDALONE_CLEAR:
-            return "Clear standalone results (same as A+B very long)"
+            return "Clear standalone results"
         return "None"
 
 

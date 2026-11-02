@@ -5397,8 +5397,8 @@ class StandaloneSetMode(DeviceRequiredUnit):
 @standalone.command('trigger')
 class StandaloneTrigger(DeviceRequiredUnit):
     """
-    Fire the active mode's primary action (equivalent to pressing both
-    buttons briefly on the device).
+    Fire the active mode's primary action (same as the button bound to
+    STANDALONE_ACTION).
 
     For authtrace, this runs one scan session against whatever tag is in
     the field right now.
@@ -5428,7 +5428,7 @@ class StandaloneDisarm(DeviceRequiredUnit):
     """
     Disarm the active standalone mode via USB, triggering on_exit.
 
-    Equivalent to the both-button long chord on the device. Saves result
+    Same as the button bound to STANDALONE_TOGGLE. Saves result
     data to FDS so it can be retrieved with get-result.
     """
 
@@ -5460,7 +5460,7 @@ class StandaloneDisarm(DeviceRequiredUnit):
                 # the original failure) is the same either way.
                 print(color_string((CY, f"(disarm-state check also failed: {confirm_e})")))
             print(color_string((CR, f"disarm failed: {e}")))
-            print(color_string((CY, "Use the both-button chord on the device to disarm manually.")))
+            print(color_string((CY, "Use a button bound to STANDALONE_DISARM to disarm manually.")))
 
 
 # read_replay / autoclone / dict_check result decoders.
@@ -6041,7 +6041,7 @@ class StandaloneConfig(DeviceRequiredUnit):
             print(f"  link auto-pair nearest available CU in relay mode")
             print(f"  role lower MAC = RELAY_CARD (reader side), "
                   f"higher MAC = RELAY_READER (card side)")
-            print(color_string((CY, "Ultra only. Arm both units with both-button chord.")))
+            print(color_string((CY, "Ultra only. Arm both units with `standalone trigger` or a STANDALONE_TOGGLE button.")))
             return
 
         if mode == StandaloneMode.EMUL_TRACE:
@@ -6128,7 +6128,7 @@ class StandaloneConfig(DeviceRequiredUnit):
                 print(f"  also-slot:  {'on' if als else 'off'}")
             else:
                 print(color_string((CY, "no persisted config — default also-slot off")))
-            print(color_string((CY, "Scan source (1st chord), present magic card (2nd chord). Needs --opt-in to arm.")))
+            print(color_string((CY, "Scan source (1st action press), present magic card (2nd action press). Needs --opt-in to arm.")))
             return
 
         if mode == StandaloneMode.DICT_CHECK:

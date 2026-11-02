@@ -793,8 +793,9 @@ hwLog.command("clear", "Erase the stored debug log", [], async () => {
  * A GDB Remote Serial Protocol client for the gdb_gateway standalone mode,
  * built straight into the terminal -- no arm-none-eabi-gdb, no local bridge.
  * app_standalone_trigger() (CMD_TRIGGER/7006, used by `hw gdb arm` below)
- * software-arms the mode via transition_arm() the same way a both-buttons
- * long-press does (app_standalone.c), so this needs no physical button.
+ * software-arms the mode via transition_arm() the same way the
+ * STANDALONE_TOGGLE button does (app_standalone.c), so this needs no
+ * physical button.
  * Once armed, the active link -- BLE here -- speaks RSP instead of the
  * framed CLI protocol (gdb_rsp.c), so everything below bypasses `request()`
  * and talks raw $...#cksum packets over rawWrite()/rawRspSink.
@@ -859,7 +860,7 @@ function hexAddr(s){   // addresses are always hex here; parseInt(…,16) ignore
 }
 const numArg = s => s.toLowerCase().startsWith("0x") ? parseInt(s,16) : parseInt(s,10);   // length args: decimal, or 0x-hex
 
-hwGdb.command("arm", "Select and arm gdb_gateway (software arm, same path as a both-buttons long-press)", [], async () => {
+hwGdb.command("arm", "Select and arm gdb_gateway (software arm, same path as the STANDALONE_TOGGLE button)", [], async () => {
   need();
   const f0 = okOrThrow(await request(CMD_GET_MODE));
   if(f0.data[1] !== MODE_GDB){
@@ -892,10 +893,10 @@ hwGdb.command("disarm", "Disarm gdb_gateway: monitor reset over RSP (device rebo
     const hex = Array.from("reset").map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join("");
     await rspSend(rspAscii("qRcmd,"+hex));
     rspLeave();
-    return [" - Reset requested over RSP. The device reboots and comes back disarmed.", "   Reconnect once it's back (both-buttons long-press works too, any time, with no protocol involved)."];
+    return [" - Reset requested over RSP. The device reboots and comes back disarmed.", "   Reconnect once it's back (a button bound to STANDALONE_DISARM works too, any time, with no protocol involved)."];
   }catch(e){
     rspLeave();
-    return [" - "+e.message, "   If RSP won't respond either, long-press both buttons on the device -- that's a GPIO handler, not a link command, and disarms regardless of what the link is doing."];
+    return [" - "+e.message, "   If RSP won't respond either, press a button bound to STANDALONE_DISARM (hw settings btnpress) -- that's a GPIO handler, not a link command, and disarms regardless of what the link is doing."];
   }
 });
 
@@ -909,7 +910,7 @@ hwGdb.command("enter", "Switch this terminal into raw RSP mode and confirm the d
   }catch(e){
     rspLeave();
     return [" - "+e.message, "   Run 'hw gdb arm' first if you haven't.",
-            "   If you already have and it's still not answering, long-press both buttons on the device to disarm and recover -- a framed command can't reach it while armed."];
+            "   If you already have and it's still not answering, press a button bound to STANDALONE_DISARM (hw settings btnpress) to disarm and recover -- a framed command can't reach it while armed."];
   }
 });
 

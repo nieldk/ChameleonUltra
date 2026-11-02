@@ -2,7 +2,7 @@
 """
 TCP <-> BLE bridge for the gdb_gateway standalone mode (BLE side).
 
-Arm gdb_gateway on the device first (both-button long press). Once armed the
+Arm gdb_gateway on the device first (STANDALONE_TOGGLE button or `standalone trigger`). Once armed the
 BLE NUS link carries raw GDB RSP bytes instead of the framed CLI protocol
 (firmware/application/src/utils/gdb_rsp.c), so this script is a dumb byte
 pump -- no framing, no interpretation -- between a local TCP socket and

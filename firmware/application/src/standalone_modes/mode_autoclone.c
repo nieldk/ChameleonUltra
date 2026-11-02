@@ -3,9 +3,9 @@
  *
  * Two-step auto-sensing clone. Ultra only. Auto-detects the source frequency:
  *   HF 14A -> gen1a magic card, or LF EM410x -> T5577.
- *   1st BOTH_SHORT: scan source, build block 0 from the anticollision (UID clone,
+ *   1st ACTION: scan source, build block 0 from the anticollision (UID clone,
  *                   no key), and read any data sectors whose key is in the dict.
- *   2nd BOTH_SHORT: write the buffered blocks to the magic card now present.
+ *   2nd ACTION: write the buffered blocks to the magic card now present.
  * Optionally also clones the source into the active slot (cfg.also_slot).
  *
  * The UID is always cloned (works on UID-only / non-FF cards); data sectors are
@@ -339,7 +339,7 @@ static standalone_rc_t read_result(uint8_t *out, size_t out_max, size_t *out_len
     if (!out || !out_len) return STANDALONE_RC_INVALID_CFG;
     if (m_st.read_cursor >= m_st.write_cursor) {
         /* End of buffer: rewind so a later get-result re-reads the same
-         * results. They persist until clear-result / BOTH_VLONG. */
+         * results. They persist until clear-result / CLEAR. */
         m_st.read_cursor = 0;
         *out_len = 0;
         return STANDALONE_RC_NO_RESULT;

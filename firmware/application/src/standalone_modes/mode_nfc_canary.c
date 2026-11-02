@@ -18,9 +18,9 @@
  * readers progress to SELECT / ENGAGE; an empty slot will mostly only ever
  * reach FIELD / POLL.
  *
- * Buttons: BOTH_SHORT = send a TEST event over BLE (verifies the alert path)
- *          BOTH_LONG  = arm / disarm (framework)
- *          BOTH_VLONG = clear the log
+ * Buttons: ACTION = send a TEST event over BLE (verifies the alert path)
+ *          TOGGLE = arm / disarm (framework)
+ *          CLEAR  = clear the log
  *
  * Persistence: the log is flushed to FDS at most every FLUSH_MIN_S seconds
  * (flash wear + the multi-second stall FDS GC can cause) and always on

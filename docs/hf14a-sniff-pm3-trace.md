@@ -38,13 +38,13 @@ on-screen decode. Works with or without `--tap`.
 Passive tap sniffer that runs without a host attached; sessions are stored to
 flash and pulled later.
 
-Button chord while armed:
+Buttons while armed (bind with `hw settings btnpress`):
 
-| Chord | Action |
-|-------|--------|
-| BOTH_SHORT | run one capture at the configured timeout |
-| BOTH_LONG | arm / disarm |
-| BOTH_VLONG | discard all stored sessions |
+| Function | Action |
+|----------|--------|
+| STANDALONE_ACTION | run one capture at the configured timeout |
+| STANDALONE_TOGGLE | arm / disarm |
+| STANDALONE_CLEAR | discard all stored sessions |
 
 Up to 8 sessions, 256 trace bytes each. Config blob (8 bytes): `version`,
 reserved, `timeout_ms` (u16, 100–30000, default 5000), reserved. Results

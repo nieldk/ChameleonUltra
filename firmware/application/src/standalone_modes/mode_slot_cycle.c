@@ -14,10 +14,10 @@
  *   u8  reserved
  *   u16 interval_ms   dwell time per slot, 100..60000
  *
- * Button mapping while armed (chord-only):
- *   BOTH_SHORT   manually advance (primary - also resumes if paused)
- *   BOTH_LONG    arm/disarm (handled by framework)
- *   BOTH_VLONG   pause / resume rotation
+ * Buttons while armed (bound via `hw settings btnpress`):
+ *   ACTION   manually advance (also resumes if paused)
+ *   TOGGLE   arm/disarm (handled by framework)
+ *   CLEAR    pause / resume rotation
  */
 
 #include "app_standalone.h"

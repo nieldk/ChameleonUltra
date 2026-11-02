@@ -185,10 +185,12 @@ static standalone_rc_t on_tick(uint32_t now_ms) {
 }
 
 /*
- * on_button: called when the user completes a chord gesture.
+ * on_button: called for the ACTION and CLEAR button functions (or the
+ * host trigger).
  *
- * BOTH_LONG is handled by the framework (arm/disarm) and never reaches here.
- * Handle BOTH_SHORT (primary action) and BOTH_VLONG (destructive/clear).
+ * TOGGLE is handled by the framework (arm/disarm) and never reaches here.
+ * Handle ACTION (primary action, STANDALONE_BTN_BOTH_SHORT) and CLEAR
+ * (destructive/clear, STANDALONE_BTN_BOTH_VLONG).
  *
  * May block for the duration of one RF operation. Feed the WDT if doing
  * anything that takes more than ~1 second.
