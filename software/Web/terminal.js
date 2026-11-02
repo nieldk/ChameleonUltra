@@ -66,6 +66,16 @@ const HID_FORMAT_BY_NAME = {
   HGEN37:29, MDI37:30,
 };
 const HID_FORMAT_BY_VALUE = Object.fromEntries(Object.entries(HID_FORMAT_BY_NAME).map(([k,v])=>[v,k]));
+(function(){
+  const sel = document.getElementById("l_hid_fmt");
+  if(!sel) return;
+  for(const [name, v] of Object.entries(HID_FORMAT_BY_NAME).sort((a,b) => a[1]-b[1])){
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = name;
+    sel.appendChild(o);
+  }
+})();
 
 /* ---------------------------------------------------------------------
  *  Minimal argparse-lite: tokenize (quote-aware) + flag parsing.
@@ -793,9 +803,8 @@ hwLog.command("clear", "Erase the stored debug log", [], async () => {
  * A GDB Remote Serial Protocol client for the gdb_gateway standalone mode,
  * built straight into the terminal -- no arm-none-eabi-gdb, no local bridge.
  * app_standalone_trigger() (CMD_TRIGGER/7006, used by `hw gdb arm` below)
- * software-arms the mode via transition_arm() the same way the
- * STANDALONE_TOGGLE button does (app_standalone.c), so this needs no
- * physical button.
+ * software-arms the mode via transition_arm() the same way a both-buttons
+ * long-press does (app_standalone.c), so this needs no physical button.
  * Once armed, the active link -- BLE here -- speaks RSP instead of the
  * framed CLI protocol (gdb_rsp.c), so everything below bypasses `request()`
  * and talks raw $...#cksum packets over rawWrite()/rawRspSink.
@@ -860,7 +869,7 @@ function hexAddr(s){   // addresses are always hex here; parseInt(…,16) ignore
 }
 const numArg = s => s.toLowerCase().startsWith("0x") ? parseInt(s,16) : parseInt(s,10);   // length args: decimal, or 0x-hex
 
-hwGdb.command("arm", "Select and arm gdb_gateway (software arm, same path as the STANDALONE_TOGGLE button)", [], async () => {
+hwGdb.command("arm", "Select and arm gdb_gateway (software arm, same path as a both-buttons long-press)", [], async () => {
   need();
   const f0 = okOrThrow(await request(CMD_GET_MODE));
   if(f0.data[1] !== MODE_GDB){
@@ -893,10 +902,10 @@ hwGdb.command("disarm", "Disarm gdb_gateway: monitor reset over RSP (device rebo
     const hex = Array.from("reset").map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join("");
     await rspSend(rspAscii("qRcmd,"+hex));
     rspLeave();
-    return [" - Reset requested over RSP. The device reboots and comes back disarmed.", "   Reconnect once it's back (a button bound to STANDALONE_DISARM works too, any time, with no protocol involved)."];
+    return [" - Reset requested over RSP. The device reboots and comes back disarmed.", "   Reconnect once it's back (both-buttons long-press works too, any time, with no protocol involved)."];
   }catch(e){
     rspLeave();
-    return [" - "+e.message, "   If RSP won't respond either, press a button bound to STANDALONE_DISARM (hw settings btnpress) -- that's a GPIO handler, not a link command, and disarms regardless of what the link is doing."];
+    return [" - "+e.message, "   If RSP won't respond either, long-press both buttons on the device -- that's a GPIO handler, not a link command, and disarms regardless of what the link is doing."];
   }
 });
 
@@ -910,7 +919,7 @@ hwGdb.command("enter", "Switch this terminal into raw RSP mode and confirm the d
   }catch(e){
     rspLeave();
     return [" - "+e.message, "   Run 'hw gdb arm' first if you haven't.",
-            "   If you already have and it's still not answering, press a button bound to STANDALONE_DISARM (hw settings btnpress) to disarm and recover -- a framed command can't reach it while armed."];
+            "   If you already have and it's still not answering, long-press both buttons on the device to disarm and recover -- a framed command can't reach it while armed."];
   }
 });
 
@@ -1116,7 +1125,7 @@ async function hf14aScanOnce(){
   return {uid, atqa, sak, ats};
 }
 
-hf14a.command("scan", "Scan 14a tag, print UID/ATQA/SAK/ATS (PRNG/magic-card detection not ported here -- see `hf 14a info`)", [], async () => {
+hf14a.command("scan", "Scan 14a tag, print UID/ATQA/SAK/ATS (see `hf 14a info` for PRNG/magic-card detection)", [], async () => {
   await needReader();
   const tag = await hf14aScanOnce();
   if(!tag) return ["ISO14443-A Tag No Found."];
@@ -1129,51 +1138,10 @@ hf14a.command("scan", "Scan 14a tag, print UID/ATQA/SAK/ATS (PRNG/magic-card det
   return lines;
 });
 
-// Reduced port of HF14AInfo/HF14AScan.scan(deep=True) (chameleon_cli_unit.py).
-// Covers: basic fields, manufacturer (7-byte UIDs), MF1 support/PRNG, and a
-// read-only gen1a magic-card probe. NOT ported: the full pm3-style
-// type-fingerprint table (detect_types/multi_uid_types), ATS TLV decode
-// (ats_lines), the GetVersion APDU, and gen3/gen4-gdm magic probes -- these
-// are ~400 lines of table-driven logic in hf14a_info.py/cli_hf_mf.py that
-// didn't fit this batch. Use the real CLI's `hf 14a info` for the full report.
-hf14a.command("info", "Scan 14a tag, print detail information (reduced -- see command help)", [], async () => {
+// Full report from hf14a_info.js (port of hf14a_info.py + HF14AScan.scan(deep=True)).
+hf14a.command("info", "Scan 14a tag, print detail information", [], async () => {
   await needReader();
-  const tag = await hf14aScanOnce();
-  if(!tag) return ["ISO14443-A Tag no found"];
-  const lines = [
-    "- UID  : "+bhex(tag.uid),
-    "- ATQA : "+bhex(tag.atqa),
-    "- SAK  : "+bhex([tag.sak]),
-  ];
-  if(tag.uid.length > 4) lines.push("- Manufacturer: "+manufacturerName(tag.uid[0]));
-  if(tag.ats.length) lines.push("- ATS  : "+bhex(tag.ats));
-  else lines.push("Proprietary non iso14443-4 card found, RATS not supported");
-
-  // mf1_detect_support / mf1_detect_prng (MF1_DETECT_SUPPORT/MF1_DETECT_PRNG,
-  // already used by this page's HF14A/MF1 tab).
-  // mf1_detect_support (chameleon_cmd.py) checks the exact STATUS_HF_TAG_OK
-  // (0x00), not the broader OK_STATUSES set used elsewhere.
-  const sup = await request(CU.MF1_DETECT_SUPPORT);
-  if(sup.status === 0x00){
-    const prng = okOrThrow(await request(CU.MF1_DETECT_PRNG));
-    const pt = prng.data[0];
-    lines.push(pt===0 ? "Static nonce....... yes" : pt===1 ? "Prng detection..... weak" : "Prng detection..... hard");
-
-    // Read-only gen1a magic-card probe: 7-bit 0x40 "unlock stage 1" command;
-    // a real card ignores/NAKs it, a gen1a card ACKs with 0x0a. Never sends
-    // the stage-2 0x43 or any write (cli_hf_mf.identify_magic_gen).
-    try{
-      const optsOn  = (1<<7)|(1<<6)|(1<<3); // activate_rf, wait_response, keep_rf
-      const probe = await request(CU.HF14A_RAW, [optsOn, ...u16be(500), ...u16be(7), 0x40]);
-      if(OK_STATUSES.has(probe.status) && probe.data.length && probe.data[0]===0x0a){
-        lines.push("Magic capabilities. gen1a backdoor detected");
-      }
-    }catch(e){ /* best-effort probe; a real card erroring out here is expected */ }
-    finally{
-      try{ await request(CU.HF14A_RAW, [(1<<7), ...u16be(200), ...u16be(0)]); }catch(e){} // drop field
-    }
-  }
-  return lines;
+  return await Hf14aInfo.infoReport();
 });
 
 // Flags mirror the real `hf 14a raw` (chameleon_cli_unit.py HF14ARaw) exactly,

@@ -218,6 +218,8 @@ pre { margin-top:8px; padding:16px; border:1px solid var(--border); border-radiu
 @keyframes term-blink { 50% { opacity:0; } }
 .term-hidden-input { position:absolute; left:-9999px; width:1px; height:1px; opacity:0; }
 .cfgf.wide { width:100%; }
+.cfgf input.badhex { border-color:var(--red); box-shadow:0 0 0 1px var(--red-border); }
+.hexmsg { color:var(--red); font-size:10px; letter-spacing:0; text-transform:none; min-height:0; }
 .cfgf.wide input { width:100%; }
 .block { background:var(--bg-card); border:1px solid var(--border); border-radius:4px; padding:18px 20px; margin-bottom:16px; }
 .block h3 { font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-bright); margin-bottom:12px; }
@@ -625,6 +627,7 @@ footer { border-top:1px solid var(--border); padding:32px 0; }
     <div class="block">
       <div class="ctl">
         <button class="ghost small" id="h_scan">HF14A scan</button>
+        <button class="ghost small" id="h_info">HF14A info</button>
         <button class="ghost small" id="h_scankeep">Scan (keep field)</button>
         <button class="ghost small" id="h_fieldon">Field on</button>
         <button class="ghost small" id="h_fieldoff">Field off</button>
@@ -941,7 +944,7 @@ AABBCCDDEEFF</textarea></label>
     <h2><span class="sec-num">L3</span>HID Prox</h2>
     <div class="block">
       <div class="row">
-        <label class="cfgf">Format (0=auto)<input id="l_hid_fmt" value="0"></label>
+        <label class="cfgf">Format<select id="l_hid_fmt"><option value="0">Auto</option></select></label>
         <label class="cfgf wide">ID (26 hex = 13B)<input id="l_hid_id" value="00000000000000000000000000"></label>
       </div>
       <div class="ctl" style="margin-top:10px">
@@ -956,9 +959,9 @@ AABBCCDDEEFF</textarea></label>
     <h2><span class="sec-num">L4</span>ioProx</h2>
     <div class="block">
       <div class="row">
-        <label class="cfgf">Version<input id="l_io_ver" value="1"></label>
-        <label class="cfgf">Facility code<input id="l_io_fc" value="1"></label>
-        <label class="cfgf">Card number<input id="l_io_cn" value="1234"></label>
+        <label class="cfgf">Version<input id="l_io_ver" type="number" min="0" max="255" value="1"></label>
+        <label class="cfgf">Facility code<input id="l_io_fc" type="number" min="0" max="255" value="1"></label>
+        <label class="cfgf">Card number<input id="l_io_cn" type="number" min="0" max="65535" value="1234"></label>
         <label class="cfgf wide">ID (32 hex = 16B, from scan/compose)<input id="l_io_id" value=""></label>
       </div>
       <div class="ctl" style="margin-top:10px">
@@ -1087,7 +1090,7 @@ AABBCCDDEEFF</textarea></label>
     <h2><span class="sec-num">M3</span>Counters</h2>
     <div class="block">
       <div class="row">
-        <label class="cfgf">Index (0-2)<input id="m_cidx" value="0"></label>
+        <label class="cfgf">Counter<select id="m_cidx"><option value="0">Counter 0</option><option value="1">Counter 1</option><option value="2">Counter 2</option></select></label>
         <button class="ghost small" id="m_cget">Get counter</button>
         <label class="cfgf">New value<input id="m_cval" value="0"></label>
         <label class="cfgf">Reset tearing flag<select id="m_ctear"><option value="0">No</option><option value="1">Yes</option></select></label>
@@ -1190,7 +1193,7 @@ AABBCCDDEEFF</textarea></label>
     <h2><span class="sec-num">F3</span>Reader mode (against a physical DESFire card)</h2>
     <div class="block">
       <div class="row">
-        <label class="cfgf">Key number (0-31)<input id="f_keyno" value="0"></label>
+        <label class="cfgf">Key number<input id="f_keyno" type="number" min="0" max="31" value="0"></label>
         <label class="cfgf">Algorithm<select id="f_alg"><option value="aes">AES (16B key/challenge)</option><option value="2tdea">2TDEA (16B key, 8B challenge)</option><option value="3tdea">3TDEA (24B key, 16B challenge)</option></select></label>
         <label class="cfgf wide">Key (hex)<input id="f_key" value="00000000000000000000000000000000"></label>
         <label class="cfgf">AID (6 hex, optional)<input id="f_aid" value=""></label>
@@ -1333,6 +1336,7 @@ AABBCCDDEEFF</textarea></label>
         <button class="ghost" id="sh_clear">Clear</button>
       </div>
       <datalist id="sh_cmdlist"></datalist>
+      <div class="det" id="sh_hint" style="min-height:1.6em"></div>
       <pre class="shell-log" id="sh_log" aria-live="polite"></pre>
     </div>
   </section>
@@ -1366,7 +1370,8 @@ AABBCCDDEEFF</textarea></label>
 <script src="aid_database.js?v=1"></script>
 <script src="button_capabilities.js?v=1"></script>
 <script src="disasm_thumb.js?v=1"></script>
-<script src="fullcmd.js?v=21"></script>
-<script src="terminal.js?v=15"></script>
+<script src="hf14a_info.js?v=1"></script>
+<script src="fullcmd.js?v=23"></script>
+<script src="terminal.js?v=17"></script>
 </body>
 </html>

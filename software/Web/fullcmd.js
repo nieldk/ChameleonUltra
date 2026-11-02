@@ -800,6 +800,9 @@ wire("h_scan", hScan, async () => {
   if(f.status !== 0x00){ showResult(hScan, "No tag: "+stname(f.status)); return; }
   showResult(hScan, fmtTags(parseHf14aScan(f.data)), "ok");
 });
+wire("h_info", hScan, async () => {
+  showResult(hScan, (await Hf14aInfo.infoReport()).join("\n"), "ok");
+});
 wire("h_scankeep", hScan, async () => {
   const f = await request(CU.HF14A_SCAN_KEEP);
   if(f.status !== 0x00){ showResult(hScan, "No tag: "+stname(f.status)); return; }
@@ -1677,6 +1680,7 @@ wire("f_upload", fCred, async () => {
 const fReader = $("f_readerResult");
 wire("f_auth", fReader, async () => {
   const keyNo = Number($("f_keyno").value);
+  if(!(keyNo >= 0 && keyNo <= 31)) throw new Error("key number must be 0-31");
   if(keyNo < 0 || keyNo > 31) throw new Error("key number must be 0-31");
   const alg = $("f_alg").value;
   const [algByte, wantLen] = DFC_ALGOS[alg];
@@ -2231,6 +2235,55 @@ wire("e_savejson", eCard, async () => {
         shList = $("sh_cmdlist"), shSend = $("sh_send"), shClear = $("sh_clear");
   if(!shCmd || !shData || !shLog || !shSend) return; // Shell tab not present in this build
 
+  // Payload layout per command, taken from the comments in data_cmd.h.
+  const SHELL_HINTS = {
+   "GET_DFU_APP_VERSION": "DFU application-version counter (build.sh) from settings page",
+   "RESET_DEVICE": "plain reboot into the app, no bootloader/factory wipe",
+   "LOG_GET_STATUS": "persistent debug log: level, sizes, counters",
+   "LOG_SET_LEVEL": "0 off .. 4 debug, persisted in settings",
+   "LOG_READ": "u32 offset, u16 len -> text",
+   "BL_STAGE_BEGIN": "u32 len, u32 crc32",
+   "BL_STAGE_DATA": "u32 offset, data",
+   "BL_STAGE_COMMIT": "u32 magic \"COPY\": verify, copy, reset",
+   "BL_STAGE_COMMIT_RAW": "u32 magic \"RAW!\": verify, NVMC write 0xF3000 + UICR convert, reset",
+   "BL_INFO": "read-only: NRFFW[0/1], MBR words, REGOUT0, vector@0xF3000",
+   "GET_DFU_SETTINGS_VERSION": "-> u32 app_version, u32 bootloader_version (settings page)",
+   "SET_DFU_SETTINGS_VERSION": "u8 mask (b0 app, b1 bl), u32 app, u32 bl",
+   "FDS_LIST": "-> N * {u16 file_id, u16 key, u16 len_bytes} (big-endian)",
+   "FDS_READ": "u16 file_id, u16 key, u16 offset, u16 len -> record slice (len 0 = max)",
+   "U2F_SET_ATTESTATION": "u8[32] att_priv, u8[] att_cert_der -> provision U2F attestation",
+   "HF14A_SCAN_KEEP": "scan+RATS, keep field alive for APDU exchange",
+   "HF14A_AUTH_TRACE": "full anticoll + Crypto1 auth, every frame returned for inspection",
+   "HF14A_PASSIVE_RECV": "listen-only: capture one card->reader frame under an external field (uplink sniff gate test)",
+   "MF1_GET_PRNG_TYPE": "0=static 1=weak(LFSR) 2=hard(rand)",
+   "MFPLUS_WRITE_PERSO": "in: addr_hi(1) addr_lo(1) key(16) -- was MFPLUS_SET_KEY",
+   "MFPLUS_COMMIT_PERSO": "no payload; SL0 -> SL3",
+   "HF14A_4_APDU_RECV": "non-blocking poll: firmware->host APDU",
+   "HF14A_4_APDU_SEND": "host->firmware APDU response",
+   "HF14A_4_SET_ANTI_COLL": "set UID/ATQA/SAK/ATS",
+   "HF14A_4_STATIC_RESP": "add/clear static APDU response pair",
+   "HF14A_4_READER_APDU": "select+RATS+send APDU, keep field",
+   "HF14A_4_EMV_SCAN": "full EMV scan in one call",
+   "DESFIRE_SET_CREDENTIAL": "chunked .dfcb octets -> active slot",
+   "DESFIRE_GET_CREDENTIAL": "chunked .dfcb octets <- active slot",
+   "DESFIRE_GET_INFO": "summary of the active DESFire slot",
+   "DESFIRE_FACTORY_BLANK": "re-init slot to a blank card",
+   "DESFIRE_GET_STATS": "RF frame counters + max handler us",
+   "DESFIRE_READER_AUTH_ISO7816": "reader mode: ISO 7816 mutual auth vs a physical DESFire card",
+   "DESFIRE_READER_GET_VERSION": "reader mode: full 3-frame GetVersion in one T=CL session",
+   "STANDALONE_CANARY_EVENT": "device -> host BLE notification (nfc_canary)",
+   "LF_SEARCH": "PM3-style: sweep all LF decoders, first hit"
+  };
+  const shHint = $("sh_hint");
+  function showHint(){
+    if(!shHint) return;
+    const s = shCmd.value.trim().toUpperCase();
+    const name = (s in CU) ? s : Object.keys(CU).find(k => CU[k] === (/^0x[0-9a-f]+$/i.test(s) ? parseInt(s,16) : /^\d+$/.test(s) ? parseInt(s,10) : -1));
+    shHint.textContent = name ? (name+" ("+CU[name]+"): "+(SHELL_HINTS[name] || "no layout noted in data_cmd.h")) : "";
+  }
+  shCmd.addEventListener("input", showHint);
+  shCmd.addEventListener("change", showHint);
+
   if(shList){
     for(const name of Object.keys(CU).sort()){
       const opt = document.createElement("option");
@@ -2296,4 +2349,72 @@ wire("e_savejson", eCard, async () => {
       else if(ev.key === "ArrowDown"){ ev.preventDefault(); recall(1); }
     });
   }
+})();
+
+/* ---------------------------------------------------------------------
+ * Hex field length check: red outline + message while the length is wrong.
+ * Allowed lengths are in hex chars; "opt" fields may be empty.
+ * ------------------------------------------------------------------- */
+(function(){
+  const RULES = {
+    l_hid_id:[[26]], l_pac_id:[[16]], l_in_id:[[16]], l_id_id:[[16]], l_io_id:[[32],true],
+    h_wdata:[[32]], h_aatqa:[[4]], h_asak:[[2]], h4_atqa:[[4]], h4_sak:[[2]],
+    h_auid:[[8,14,20]], h4_uid:[[8,14,20]], l_em4_pwd:[[8]], l_t5_word:[[8]], m_verdata:[[16]],
+  };
+  const items = [];
+  for(const id of Object.keys(RULES)){
+    const el = $(id);
+    if(!el) continue;
+    const msg = document.createElement("span");
+    msg.className = "hexmsg";
+    el.parentNode.appendChild(msg);
+    items.push({el, msg, lens:RULES[id][0], opt:!!RULES[id][1]});
+  }
+  function check(it){
+    const v = it.el.value.replace(/[\s:]/g, "");
+    let err = "";
+    if(!(it.opt && v === "")){
+      if(!/^[0-9a-f]*$/i.test(v)) err = "hex digits only";
+      else if(!it.lens.includes(v.length)) err = "need "+it.lens.join(" or ")+" hex chars, have "+v.length;
+    }
+    it.el.classList.toggle("badhex", !!err);
+    it.msg.textContent = err;
+  }
+  const run = () => items.forEach(check);
+  items.forEach(it => it.el.addEventListener("input", () => check(it)));
+  document.addEventListener("click", () => setTimeout(run, 300));   // fields filled by scan/get buttons
+  run();
+})();
+
+/* ---------------------------------------------------------------------
+ * ATQA/SAK presets (bytes as the fields take them: ATQA low byte first).
+ * Values from nfc_mf1.c, nfc_mf0_ntag.c, nfc_desfire.c and the NXP datasheets.
+ * ------------------------------------------------------------------- */
+(function(){
+  const PRESETS = [
+    ["MIFARE Mini", "0400", "09"], ["MIFARE 1K", "0400", "08"], ["MIFARE 4K", "0200", "18"],
+    ["MIFARE Plus 2K (SL1)", "4400", "10"], ["MIFARE Plus 4K (SL1)", "4400", "11"],
+    ["NTAG / Ultralight", "4400", "00"], ["DESFire", "4403", "20"],
+  ];
+  function add(atqaId, sakId, presetId){
+    const atqa = $(atqaId), sak = $(sakId);
+    if(!atqa || !sak) return;
+    const label = atqa.closest("label");
+    const wrap = document.createElement("label");
+    wrap.className = "cfgf";
+    wrap.appendChild(document.createTextNode("Preset"));
+    const sel = document.createElement("select");
+    sel.id = presetId;
+    sel.innerHTML = '<option value="">Custom</option>' + PRESETS.map((p,i) => '<option value="'+i+'">'+p[0]+'</option>').join("");
+    sel.addEventListener("change", () => {
+      if(sel.value === "") return;
+      const p = PRESETS[Number(sel.value)];
+      atqa.value = p[1]; sak.value = p[2];
+      atqa.dispatchEvent(new Event("input")); sak.dispatchEvent(new Event("input"));
+    });
+    wrap.appendChild(sel);
+    label.parentNode.insertBefore(wrap, label);
+  }
+  add("h_aatqa", "h_asak", "h_apreset");
+  add("h4_atqa", "h4_sak", "h4_apreset");
 })();
