@@ -411,7 +411,7 @@ footer { border-top:1px solid var(--border); padding:32px 0; }
 
     <h2><span class="sec-num">04</span>Live events <button class="ghost" id="clr">Clear</button></h2>
     <ul id="log"></ul>
-    <div class="empty" id="empty">No events yet. Press the button bound to Standalone run on the device to send a test event.</div>
+    <div class="empty" id="empty">No events yet. Press both buttons briefly on the device to send a test event.</div>
 
     <div class="card card-amber">
       <div class="card-label">Note</div>
@@ -506,9 +506,9 @@ footer { border-top:1px solid var(--border); padding:32px 0; }
           <option value="4">Show battery</option>
           <option value="5">NFC field generator (Ultra)</option>
           <option value="6">Disarm standalone mode</option>
-          <option value="7">Standalone arm / disarm</option>
-          <option value="8">Standalone run</option>
-          <option value="9">Standalone clear results</option>
+          <option value="7">Standalone arm / disarm (= A+B long)</option>
+          <option value="8">Standalone run (= A+B short)</option>
+          <option value="9">Standalone clear results (= A+B very long)</option>
         </select></label>
         <button class="ghost small" id="d_getbtn">Get</button>
         <button class="small" id="d_setbtn">Set</button>
@@ -588,7 +588,7 @@ footer { border-top:1px solid var(--border); padding:32px 0; }
       <div class="row">
         <label class="cfgf">Slot (1-8)<input id="s_slot" value="1"></label>
         <label class="cfgf">Sense<select id="s_sense"><option value="2">HF</option><option value="1">LF</option></select></label>
-        <label class="cfgf">Tag type (code)<input id="s_tagtype" value="1001" placeholder="see table below"></label>
+        <label class="cfgf">Tag type<select id="s_tagtype"></select></label>
         <button class="ghost small" id="s_settype">Set slot tag type</button>
         <button class="ghost small" id="s_setdefault">Set slot data default</button>
       </div>
@@ -599,16 +599,7 @@ footer { border-top:1px solid var(--border); padding:32px 0; }
         <button class="danger small" id="s_delsense">Delete {sense} data in slot</button>
       </div>
       <div class="det">"Delete {sense} data in slot" wipes just the HF or LF tag data for that slot (per the Sense dropdown above) without touching the other sense or the slot's nickname — use it to clear a slot's old tag before reusing it with a different type.</div>
-      <details style="margin-top:10px"><summary>Common tag type codes</summary>
-        <pre id="s_typecodes">LF 100 EM410X · 104 EM410X_ELECTRA · 150 PAC · 170 Viking · 180 Jablotron
-LF 200 HIDProx · 201 ioProx · 310 IDTECK · 311 Indala
-HF 1000 MIFARE_Mini · 1001 MIFARE_1024 (1K) · 1002 MIFARE_2048 (2K) · 1003 MIFARE_4096 (4K)
-HF 1100 NTAG_213 · 1101 NTAG_215 · 1102 NTAG_216 · 1103 MF0ICU1 · 1105 MF0UL11 · 1106 MF0UL21
-HF 1300 DESFire EV1 2K · 1301 DESFire EV1 4K · 1302 DESFire EV1 8K
-HF 1303 DESFire EV2 2K · 1304 DESFire EV2 4K · 1305 DESFire EV2 8K
-HF 1306 DESFire EV3 2K · 1307 DESFire EV3 4K · 1308 DESFire EV3 8K</pre>
-      </details>
-      <div class="det">The DESFire tab needs the active slot's HF type set to one of the DESFire codes above. On a slot that's never held DESFire data, "Set slot tag type" alone is <b>not</b> enough — the device only reloads existing flash data, and there is none yet. You also need this slot to be the <i>active</i> slot (Set active slot) before "Set slot data default", since that's the step that only writes live if the slot is already active. See DESFire tab → F0 for a one-click helper that does this in the right order.</div>
+      <div class="det">The DESFire tab needs the active slot's HF type set to one of the DESFire types. On a slot that's never held DESFire data, "Set slot tag type" alone is <b>not</b> enough — the device only reloads existing flash data, and there is none yet. You also need this slot to be the <i>active</i> slot (Set active slot) before "Set slot data default", since that's the step that only writes live if the slot is already active. See DESFire tab → F0 for a one-click helper that does this in the right order.</div>
       <div class="result" id="s_typeResult"></div>
     </div>
 
@@ -1375,7 +1366,7 @@ AABBCCDDEEFF</textarea></label>
 <script src="aid_database.js?v=1"></script>
 <script src="button_capabilities.js?v=1"></script>
 <script src="disasm_thumb.js?v=1"></script>
-<script src="fullcmd.js?v=20"></script>
+<script src="fullcmd.js?v=21"></script>
 <script src="terminal.js?v=15"></script>
 </body>
 </html>

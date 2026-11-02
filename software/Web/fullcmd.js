@@ -130,6 +130,25 @@ const TAG_TYPE_NAMES = {
 };
 function tagTypeName(code){ return (TAG_TYPE_NAMES[code]||("type "+code))+" ("+code+")"; }
 
+/* Slot tag type dropdown (S3): LF below 1000, HF from 1000; legacy 1-8 omitted. */
+(function(){
+  const sel = $("s_tagtype");
+  if(!sel) return;
+  const groups = [["LF", c => c >= 100 && c < 1000], ["HF", c => c >= 1000]];
+  for(const [label, test] of groups){
+    const og = document.createElement("optgroup");
+    og.label = label;
+    for(const code of Object.keys(TAG_TYPE_NAMES).map(Number).filter(test)){
+      const o = document.createElement("option");
+      o.value = code;
+      o.textContent = TAG_TYPE_NAMES[code];
+      og.appendChild(o);
+    }
+    sel.appendChild(og);
+  }
+  sel.value = "1001";
+})();
+
 const STATUS_NAMES = {0x00:"HF_TAG_OK",0x01:"HF_TAG_NO",0x02:"HF_ERR_STAT",0x03:"HF_ERR_CRC",
   0x04:"HF_COLLISION",0x05:"HF_ERR_BCC",0x06:"MF_ERR_AUTH",0x07:"HF_ERR_PARITY",0x08:"HF_ERR_ATS",
   0x40:"LF_TAG_OK",0x41:"LF_TAG_NO_FOUND",0x60:"PAR_ERR",0x66:"DEVICE_MODE_ERROR",0x67:"INVALID_CMD",
@@ -705,13 +724,13 @@ wire("s_settype", sType, async () => {
   const {slot} = slotArgs();
   const tagtype = Number($("s_tagtype").value);
   okOrThrow(await request(CU.SET_SLOT_TAG_TYPE, [slot-1, ...u16be(tagtype)]));
-  showResult(sType, "Slot "+slot+" tag type set to "+tagtype+" (not written to flash until you save).", "ok");
+  showResult(sType, "Slot "+slot+" tag type set to "+tagTypeName(tagtype)+" (not written to flash until you save).", "ok");
 });
 wire("s_setdefault", sType, async () => {
   const {slot} = slotArgs();
   const tagtype = Number($("s_tagtype").value);
   okOrThrow(await request(CU.SET_SLOT_DATA_DEFAULT, [slot-1, ...u16be(tagtype)]));
-  showResult(sType, "Slot "+slot+" data reset to default for type "+tagtype+" (written to flash).", "ok");
+  showResult(sType, "Slot "+slot+" data reset to default for type "+tagTypeName(tagtype)+" (written to flash).", "ok");
 });
 wire("s_setenable", sType, async () => {
   const {slot, sense} = slotArgs();
