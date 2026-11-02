@@ -264,8 +264,15 @@ int main(void) {
     /* A watchdog reset means the app hung (see bl_recovery_arm_wdt): treat it
      * like BUTTON_2 so the device shows up for reflashing without a button. */
     bool app_hung = bl_recovery_wdt_reset_consume();
-    bool vbus    = (NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk) != 0;
-    bool button2 = vbus && nrf_gpio_pin_read(BUTTON_2) == 1;
+    /* A held: wait for VBUS while it stays held (as the SDK button path
+     * does), so plugging in USB after power-on still counts. */
+    bool button2 = false;
+    while (nrf_gpio_pin_read(BUTTON_2) == 1) {
+        if (NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk) {
+            button2 = true;
+            break;
+        }
+    }
     bool button1 = nrf_gpio_pin_read(BUTTON_1) == 1;
     if (button2 || app_hung) {
         NRF_POWER->GPREGRET = BOOTLOADER_DFU_UF2_MAGIC;
