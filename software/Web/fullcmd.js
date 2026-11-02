@@ -801,6 +801,7 @@ wire("h_scan", hScan, async () => {
   showResult(hScan, fmtTags(parseHf14aScan(f.data)), "ok");
 });
 wire("h_info", hScan, async () => {
+  if(typeof Hf14aInfo === "undefined") throw new Error("hf14ainfo.js did not load (check it is deployed next to phreakbyte.html)");
   showResult(hScan, (await Hf14aInfo.infoReport()).join("\n"), "ok");
 });
 wire("h_scankeep", hScan, async () => {
