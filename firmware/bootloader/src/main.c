@@ -247,14 +247,15 @@ int main(void) {
     hw_connect_init();
 
     /*
-     * Hold BUTTON_2 while plugging in USB / powering on to enter UF2 drag-
-     * and-drop mode. The pull config matches the existing BUTTON_1 setup
-     * (pulldown, active-high). The flag is written to GPREGRET so the
+     * Hold BUTTON_2 (A) while plugging in USB to enter UF2 drag-and-drop
+     * mode. Without VBUS the button is ignored. The pull config matches
+     * the existing BUTTON_1 setup (pulldown, active-high). The flag is written to GPREGRET so the
      * SDK's existing dfu_enter_check() picks it up; nrf_dfu_uf2.c can
      * inspect the bits if it wants to distinguish UF2 from legacy DFU.
      *
      * BUTTON_1 + plug → legacy signed CDC/BLE DFU (existing behaviour).
      * BUTTON_2 + plug → UF2 drag-and-drop mode (new).
+     * Neither enters DFU on battery power.
      */
     bool uf2_mode = false;
     nrf_gpio_cfg_input(BUTTON_2, BUTTON_PULL);
@@ -263,7 +264,8 @@ int main(void) {
     /* A watchdog reset means the app hung (see bl_recovery_arm_wdt): treat it
      * like BUTTON_2 so the device shows up for reflashing without a button. */
     bool app_hung = bl_recovery_wdt_reset_consume();
-    bool button2 = nrf_gpio_pin_read(BUTTON_2) == 1;
+    bool vbus    = (NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk) != 0;
+    bool button2 = vbus && nrf_gpio_pin_read(BUTTON_2) == 1;
     bool button1 = nrf_gpio_pin_read(BUTTON_1) == 1;
     if (button2 || app_hung) {
         NRF_POWER->GPREGRET = BOOTLOADER_DFU_UF2_MAGIC;

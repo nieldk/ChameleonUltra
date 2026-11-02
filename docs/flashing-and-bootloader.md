@@ -114,7 +114,8 @@ The bootloader can be reached whatever state the application is in:
   timeout, then starts the app again, so a hanging app cycles between a short
   flashable window and the hang. `hw flash application.hex --no-enter` works in
   that window.
-* **Button** - hold BUTTON_2 at power-on or at any reset: UF2 + CDC DFU mode.
+* **Button** - hold BUTTON_2 (A) while plugging in USB, or at any reset with USB
+  connected: UF2 + CDC DFU mode. Without USB the button is ignored.
   With the watchdog above, a hung app resets within 10 s, so the next reset
   picks up the button.
 * **Invalid app** - an interrupted or failed raw/UF2 flash leaves the app
