@@ -64,6 +64,7 @@ const CU = {
   PAC_SCAN:3014, PAC_WRITE_TO_T55XX:3015, LF_T55XX_WRITE:3016, LF_T55XX_READ:3017,
   IDTECK_WRITE_TO_T55XX:3018, JABLOTRON_SCAN:3019, JABLOTRON_WRITE_TO_T55XX:3020,
   FDXB_SCAN:3021, FDXB_WRITE_TO_T55XX:3022, EM4X05_SCAN:3030, LF_SNIFF:3031, LF_SEARCH:3033,
+  LOGIC_ARM:3037, LOGIC_READ:3038, LOGIC_STOP:3039, LOGIC_SPI_READ:3040,
   INDALA_SCAN:3035, INDALA_WRITE_TO_T55XX:3036,
   // 3032 EM4X05_READSNIFF is a #define in firmware's data_cmd.c with no
   // app_cmd.c dispatch case and no chameleon_cmd.py wrapper -- not actually
@@ -1401,6 +1402,10 @@ wire("l_sniff", $("l_sniffResult"), async () => {
   showResult($("l_sniffResult"),
     d.length+" ADC sample(s) · min "+min+" · max "+max+" · mean "+mean.toFixed(1)+
     "\n(raw, ~0x80 = field on, lower = gap/no field — first 64 bytes: "+bhex(d.slice(0,64))+(d.length>64?" …":"")+")", "ok");
+  const pl = $("l_sniffPlot");
+  if(pl && window.CUPlot && d.length){
+    pl.replaceChildren(CUPlot.waveform(d, {periodUs: passive ? 6 : 8, title: "LF field ADC"}));
+  }
 });
 
 /* =======================================================================

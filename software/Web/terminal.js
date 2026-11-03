@@ -2209,7 +2209,65 @@ lf.command("sniff", "Capture raw LF field ADC samples (125kHz, 8us/sample)", [
   return [
     " - "+d.length+" ADC sample(s), min "+min+" max "+max+" mean "+(sum/d.length).toFixed(1),
     " - first 64 bytes: "+bhex(d.slice(0,64))+(d.length>64?" ...":""),
+    ...(window.CUPlot ? [{node: CUPlot.waveform(d, {periodUs: a.passive?6:8, title:"LF field ADC"})}] : []),
   ];
+});
+
+/* ================= hw logic ================= */
+// Port of cli_hw_logic.py; the graph replaces its --plot window.
+const hwLogic = hw.subgroup("logic", "Logic analyser for internal nets and the RC522 SPI register log");
+const LOGIC_SRC_HELP = "hf_cs, field_led, spi, or raw Px.yy (experimental)";
+
+function logicLines(m, o){
+  const lines = [];
+  if(m.hasEdges) lines.push(" - "+m.total+" edge(s)"+(m.overflow ? " (buffer full, capture truncated)" : ""));
+  if(m.spiOver || m.drops) lines.push(" - SPI log "+(m.spiOver ? "full, truncated" : "")+(m.drops ? " ("+m.drops+" dropped)" : ""));
+  if(m.hasEdges && m.total === 0) lines.push(" - diag: handler calls="+m.calls+" (0 = no edge seen)");
+  if(o.decode || m.spi.length) lines.push(...CULogic.decode(m));
+  if(m.hasEdges || m.spi.length){
+    lines.push({node: CUPlot.logic(m, {buttons: m.hasEdges ? [{label:"VCD", run:() => CULogic.saveVcd(m)}] : []})});
+  }
+  if(o.vcd && m.hasEdges){ CULogic.saveVcd(m); lines.push(" - Saved capture.vcd"); }
+  return lines;
+}
+const logicStart = async (a) => {
+  if(!a.sources.length) throw new ArgError("the following arguments are required: sources");
+  const r = await CULogic.arm(a.sources, Number(a.rate || 1), Number(a.merge || 0));
+  return [" - Armed "+a.sources.length+" channel(s) at "+(r.hz/1e6)+" MHz, initial levels 0b"+r.init.toString(2)];
+};
+hwLogic.command("start", "Arm the capture, run other commands, then 'hw logic stop'. Up to 4 sources, 1024 edges and a 4 KiB SPI log", [
+  {positional:true, dest:"sources", required:true},
+  {names:["--rate"], takesValue:true, dest:"rate", choices:["1","2","4","8","16"]},
+  {names:["--merge"], takesValue:true, dest:"merge"},
+], async (a) => { need(); return logicStart(a); });
+hwLogic.command("stop", "Stop capture, download it, print the decode and show the graph", [
+  {names:["--vcd"], takesValue:false, dest:"vcd"},
+  {names:["--decode"], takesValue:false, dest:"decode"},
+], async (a) => { need(); return logicLines(await CULogic.finish(), a); });
+hwLogic.command("capture", "Arm, wait, stop and show in one go. Sources: "+LOGIC_SRC_HELP, [
+  {positional:true, dest:"sources", required:true},
+  {names:["--rate"], takesValue:true, dest:"rate", choices:["1","2","4","8","16"]},
+  {names:["--merge"], takesValue:true, dest:"merge"},
+  {names:["--ms"], takesValue:true, dest:"ms"},
+  {names:["--vcd"], takesValue:false, dest:"vcd"},
+  {names:["--decode"], takesValue:false, dest:"decode"},
+], async (a) => {
+  need();
+  const head = await logicStart(a);
+  await new Promise(r => setTimeout(r, Math.max(1, Number(a.ms || 1000))));
+  return [...head, ...logicLines(await CULogic.finish(), a)];
+});
+hwLogic.command("plot", "Show the graph of the last logic capture again", [], async () => {
+  const m = CULogic.last();
+  if(!m) return ["No capture in buffer - run 'hw logic stop' or 'hw logic capture' first"];
+  return [{node: CUPlot.logic(m, {buttons: m.hasEdges ? [{label:"VCD", run:() => CULogic.saveVcd(m)}] : []})}];
+});
+hwLogic.command("decode", "Summarise the last capture: field, CS bursts, polling loops, SPI accesses", [
+  {names:["--gap"], takesValue:true, dest:"gap"},
+], async (a) => {
+  const m = CULogic.last();
+  if(!m) return ["No capture in buffer - run 'hw logic stop' or 'hw logic capture' first"];
+  return CULogic.decode(m, Number(a.gap || 100));
 });
 
 const lfEm = lf.subgroup("em", "EM commands");
@@ -2809,6 +2867,8 @@ async function blueBox(){
 
 function printLines(lines, cls){
   for(const l of lines){
+    // {node: Element} lines carry a graph or other DOM instead of text
+    if(l && typeof l === "object" && l.node){ out.appendChild(l.node); continue; }
     const row = document.createElement("div");
     if(cls) row.className = cls;
     row.textContent = l;

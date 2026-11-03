@@ -366,6 +366,7 @@ footer { border-top:1px solid var(--border); padding:32px 0; }
       <div class="tabgroup">
         <button class="tabbtn" data-tab="hf">HF14A / MF1</button>
         <button class="tabbtn" data-tab="lf">LF</button>
+        <button class="tabbtn" data-tab="logic">Logic</button>
         <button class="tabbtn" data-tab="mfu">MF0 / NTAG</button>
         <button class="tabbtn" data-tab="desfire">DESFire</button>
         <button class="tabbtn" data-tab="emv">EMV</button>
@@ -1043,10 +1044,38 @@ AABBCCDDEEFF</textarea></label>
         <button class="small" id="l_sniff">Sniff</button>
       </div>
       <div class="result" id="l_sniffResult"></div>
+      <div id="l_sniffPlot"></div>
     </div>
   </section>
 
   <!-- ================= MF0/NTAG ================= -->
+  <!-- ================= LOGIC ANALYSER ================= -->
+  <section class="tabpanel" id="tab-logic">
+    <div class="card card-amber">
+      <div class="card-label">Note</div>
+      <p>Records chip-select and field-LED edges and every RC522 register access while you run other commands. Arm it, switch to the HF tab and scan or read a card, come back and press <b>Stop &amp; show</b>. The device must be in reader mode for HF activity. Zoom with the mouse wheel, drag to pan, double-click to reset.</p>
+    </div>
+    <h2><span class="sec-num">G1</span>Capture</h2>
+    <div class="block">
+      <div class="row" style="margin-top:10px">
+        <label class="cfgf"><input type="checkbox" id="g_spi" checked> spi (RC522 registers)</label>
+        <label class="cfgf"><input type="checkbox" id="g_cs" checked> hf_cs</label>
+        <label class="cfgf"><input type="checkbox" id="g_field" checked> field_led</label>
+        <label class="cfgf">Rate MHz<select id="g_rate"><option>1</option><option>2</option><option>4</option><option>8</option><option>16</option></select></label>
+        <label class="cfgf">Merge us<input id="g_merge" value="15" style="width:5em"></label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="small" id="g_arm">Arm</button>
+        <button class="small" id="g_stop">Stop &amp; show</button>
+        <label class="cfgf">Capture ms<input id="g_ms" value="1000" style="width:6em"></label>
+        <button class="small" id="g_cap">Capture</button>
+      </div>
+      <div class="result" id="g_result"></div>
+      <div id="g_plot"></div>
+      <pre class="shell-log" id="g_text" style="max-height:420px;overflow:auto"></pre>
+    </div>
+  </section>
+
   <section class="tabpanel" id="tab-mfu">
     <h2><span class="sec-num">M1</span>Emulation pages (active slot)</h2>
     <div class="block">
@@ -1371,7 +1400,10 @@ AABBCCDDEEFF</textarea></label>
 <script src="button_capabilities.js?v=1"></script>
 <script src="disasm_thumb.js?v=1"></script>
 <script src="hf14ainfo.js?v=1"></script>
-<script src="fullcmd.js?v=24"></script>
-<script src="terminal.js?v=18"></script>
+<script src="plot.js?v=1"></script>
+<script src="logic.js?v=1"></script>
+<script src="fullcmd.js?v=25"></script>
+<script src="logic_tab.js?v=1"></script>
+<script src="terminal.js?v=19"></script>
 </body>
 </html>

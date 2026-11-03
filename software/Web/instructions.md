@@ -115,6 +115,41 @@ disassembly are made-up but the commands and code paths are genuine:
   USB/SoftDevice IRQ mid-step without dropping the link, so breakpoints +
   `continue` are the whole execution-control story.
 
+## 4. Logic analyser and graphs
+
+**Logic tab** and the terminal's `hw logic` record chip-select and
+field-LED edges plus every RC522 register read/write while you run other
+commands. Needs firmware with `hw logic` (command IDs 3037-3040) and, for HF
+activity, reader mode. Full description: [docs/logic-analyzer.md](../../docs/logic-analyzer.md).
+
+Logic tab: tick the sources, press **Arm**, run a scan or read from the HF
+tab, come back and press **Stop & show**. **Capture** arms, waits the given
+milliseconds and shows the result.
+
+Terminal:
+
+```
+hw mode -r
+hw logic start spi hf_cs field_led --merge 15
+hf 14a scan
+hw logic stop
+```
+
+`hw logic capture <sources> --ms 500`, `hw logic plot` and `hw logic decode`
+work as in the Python CLI. `--vcd` downloads `capture.vcd` for
+PulseView/GTKWave.
+
+The graph shows one trace per source, the field shaded where the LED is low,
+and the SPI accesses as ticks with labels (amber = write, blue = read).
+
+- Mouse wheel zooms at the cursor, drag pans, double-click or **Reset**
+  restores the full range. Hover for the exact time, levels and the nearest
+  SPI access. **PNG** saves the picture, **VCD** saves the edge channels.
+- More labels appear as you zoom in.
+
+`lf sniff` (terminal) and **Raw LF sniff** (LF tab) draw the ADC samples as
+a waveform with the mean level dashed, using the same viewer.
+
 ## Troubleshooting
 
 - **Nothing happens / "Not connected"** — the GATT link dropped; hit
