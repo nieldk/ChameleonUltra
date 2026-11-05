@@ -3,7 +3,7 @@
  *
  * Standalone mode: USB Ethernet (CDC-ECM or RNDIS). While armed the device re-enumerates
  * with an extra network interface; the host gets 192.168.16.2 over DHCP and the
- * device answers at 192.168.16.1. TCP port 18888 carries the normal framed CLI
+ * device answers at 192.168.16.1. TCP port 18888 (config --port) carries the normal framed CLI
  * protocol, so the python CLI connects with
  *
  *     hw connect -p tcp:192.168.16.1:18888
@@ -22,8 +22,9 @@
 #include "nrf_log.h"
 
 static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len) {
-    (void)cfg;
-    (void)cfg_len;
+    uint16_t port = 0;
+    if (cfg != NULL && cfg_len >= 4 && cfg[0] == 1) port = (uint16_t)(cfg[2] | (cfg[3] << 8));
+    usbnet_set_port(port);
     usbnet_enable(true);
     NRF_LOG_INFO("usb_net: armed, USB Ethernet after re-enumeration");
     return STANDALONE_RC_OK;

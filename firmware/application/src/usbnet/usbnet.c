@@ -68,6 +68,8 @@ static uint16_t         m_rx_off;
 static bool             m_inited;
 static bool             m_running;
 
+static uint16_t m_port = USBNET_TCP_PORT;
+
 static uint32_t m_st_rx_frames, m_st_tx_frames, m_st_drops, m_st_stalls;
 static uint32_t m_st_clients, m_st_tcp_rx, m_st_tcp_tx;
 
@@ -310,6 +312,33 @@ static void wake_handler(void *ctx) {
     (void)ctx;                               /* the interrupt wakes the main loop */
 }
 
+static void listen_start(void) {
+    struct tcp_pcb *l = tcp_new();
+    if (l && tcp_bind(l, IP_ADDR_ANY, m_port) == ERR_OK) {
+        m_listen = tcp_listen_with_backlog(l, 1);
+    }
+    if (m_listen) {
+        tcp_accept(m_listen, on_accept);
+    } else {
+        NRF_LOG_ERROR("usbnet: tcp listen failed");
+        if (l) tcp_close(l);
+    }
+}
+
+void usbnet_set_port(uint16_t port) {
+    if (port == 0) port = USBNET_TCP_PORT;
+    if (port == m_port) return;
+    m_port = port;
+    if (m_inited) {                          /* already listening: move the listener */
+        if (m_client) client_abort();
+        if (m_listen) {
+            tcp_close(m_listen);
+            m_listen = NULL;
+        }
+        listen_start();
+    }
+}
+
 void usbnet_link_down(void) {
     if (m_client) client_abort();
     tud_network_init_cb();
@@ -329,23 +358,14 @@ void usbnet_start(void) {
 
         if (dhserv_init(&k_dhcp) != ERR_OK) NRF_LOG_ERROR("usbnet: dhcp server init failed");
 
-        struct tcp_pcb *l = tcp_new();
-        if (l && tcp_bind(l, IP_ADDR_ANY, USBNET_TCP_PORT) == ERR_OK) {
-            m_listen = tcp_listen_with_backlog(l, 1);
-        }
-        if (m_listen) {
-            tcp_accept(m_listen, on_accept);
-        } else {
-            NRF_LOG_ERROR("usbnet: tcp listen failed");
-            if (l) tcp_close(l);
-        }
+        listen_start();
         APP_ERROR_CHECK(app_timer_create(&m_wake_timer, APP_TIMER_MODE_REPEATED, wake_handler));
         m_inited = true;
     }
 
     m_running = true;
     APP_ERROR_CHECK(app_timer_start(m_wake_timer, APP_TIMER_TICKS(WAKE_PERIOD_MS), NULL));
-    NRF_LOG_INFO("usbnet: up, 192.168.16.1:%d", USBNET_TCP_PORT);
+    NRF_LOG_INFO("usbnet: up, 192.168.16.1:%d", m_port);
 }
 
 void usbnet_stop(void) {
@@ -374,7 +394,7 @@ size_t usbnet_get_status(char *out, size_t out_max) {
 #endif
     STATUS_KV(out, out_max, len, "host_usb=%s%s\n", tud_mounted() ? "configured" : "not configured",
               tud_suspended() ? " (suspended)" : "");
-    STATUS_KV(out, out_max, len, "addr=192.168.16.1:%u\n", (unsigned)USBNET_TCP_PORT);
+    STATUS_KV(out, out_max, len, "addr=192.168.16.1:%u\n", (unsigned)m_port);
     if (leased) {
         STATUS_KV(out, out_max, len, "lease=192.168.16.2 %02x:%02x:%02x:%02x:%02x:%02x\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);

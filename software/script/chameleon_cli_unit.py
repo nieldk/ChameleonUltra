@@ -5945,6 +5945,7 @@ class StandaloneConfig(DeviceRequiredUnit):
         standalone config read-replay --read-blocks on
         standalone config autoclone --also-slot on
         standalone config dict-check --sectors 16
+        standalone config usb-net --port 19999
     """
 
     def args_parser(self) -> ArgumentParserNoExit:
@@ -5974,6 +5975,8 @@ class StandaloneConfig(DeviceRequiredUnit):
                             help='[autoclone] also clone the source into the active slot')
         parser.add_argument('--sectors', type=int, default=None,
                             help='[dict-check] number of sectors to test (1-16)')
+        parser.add_argument('--port', type=int, default=None,
+                            help='[usb-net] TCP port (1-65535, default 18888)')
         return parser
 
     def on_exec(self, args):
@@ -6089,6 +6092,31 @@ class StandaloneConfig(DeviceRequiredUnit):
             else:
                 print(color_string((CY,
                     "no persisted config — default timeout 5000 ms")))
+            return
+
+        if mode == StandaloneMode.USB_NET:
+            if any(v is not None for v in (args.block, args.key_type, args.key, args.timeout)):
+                print(color_string((CR, "usb-net config uses only --port")))
+                return
+            if args.port is not None:
+                if not (1 <= args.port <= 65535):
+                    print(color_string((CR, "port must be 1..65535")))
+                    return
+                cfg = struct.pack('<BBH', 1, 0, args.port)
+                resp = self.cmd.standalone_set_config(mode, cfg)
+                if resp.status == Status.SUCCESS:
+                    print(color_string((CG, f"usb-net port set to {args.port} (applies on next arm)")))
+                else:
+                    print(color_string((CR, f"set-config failed: status={resp.status}")))
+                return
+            blob = self.cmd.standalone_get_config(mode)
+            if blob and len(blob) >= 4:
+                ver, _r0, port = struct.unpack('<BBH', blob[:4])
+                print(color_string((CG, "usb-net config:")))
+                print(f"  version:  {ver}")
+                print(f"  port:     {port or 18888}")
+            else:
+                print(color_string((CY, "no persisted config — default port 18888")))
             return
 
         if mode == StandaloneMode.READ_REPLAY:

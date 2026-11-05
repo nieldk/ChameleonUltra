@@ -5,8 +5,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define USBNET_TCP_PORT 18888
+#define USBNET_TCP_PORT 18888   /* default; see usbnet_set_port() */
 
+void usbnet_set_port(uint16_t port);   /* 0 = default; moves a running listener */
 void usbnet_start(void);        /* init lwIP/DHCP/TCP once, then run */
 void usbnet_stop(void);         /* drop the client, stop servicing */
 void usbnet_link_down(void);    /* host detached or reconfigured the USB device */
