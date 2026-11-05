@@ -26,7 +26,12 @@
 # STANDALONE_RELAY           ?= 1   # BLE peer relay (Ultra only)
 # STANDALONE_GDB_GATEWAY     ?= 1   # CDC becomes a GDB memory/flash gateway (no SWD)
 # STANDALONE_U2F             ?= 1   # FIDO U2F (CTAP1) over NFC — needs vendored micro-ecc in src/crypto/micro-ecc/
+# STANDALONE_USB_NET         ?= 1   # USB Ethernet + CLI over TCP; swaps USB to TinyUSB + lwIP (run ./fetch_usbnet_deps.sh first, ~10 KB RAM)
 
 # gdb_gateway tuning (only matters when STANDALONE_GDB_GATEWAY=1):
 # GDB_GATEWAY_EXEC           ?= 0       # 0 = memory/flash only (smaller); 1 = + breakpoints/step
 # GDB_GATEWAY_PKT            ?= 0x800   # RSP PacketSize; raise for faster bulk reads, more RAM (default 0x200)
+
+# usb_net tuning (only matters when STANDALONE_USB_NET=1):
+# USBNET_CLASS               ?= ecm     # ecm = Linux, macOS; rndis = Windows, Linux
+# USBNET_MTU                 ?= 1514    # default 600 (ecm) or 1514 (rndis, Windows needs it); 1514 = ~1.8 KB more RAM

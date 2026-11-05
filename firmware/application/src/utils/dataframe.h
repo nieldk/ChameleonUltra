@@ -14,6 +14,8 @@ typedef struct {
 } data_frame_tx_t;
 
 void data_frame_receive(uint8_t *data, uint16_t length);
+bool data_frame_rx_busy(void);
+void data_frame_reset(void);
 void data_frame_process(void);
 void on_data_frame_complete(data_frame_cbk_t callback);
 

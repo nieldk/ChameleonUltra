@@ -5054,7 +5054,9 @@ data_frame_tx_t *cmd_processor_get_device_capabilities(uint16_t cmd, uint16_t st
 static void auto_response_data(data_frame_tx_t *resp) {
     // TODO Please select the reply source automatically according to the message source,
     //  and do not reply by checking the validity of the link layer by layer
-    if (is_usb_working()) {
+    if (usbnet_client_active()) {
+        usbnet_write(resp->buffer, resp->length);
+    } else if (is_usb_working()) {
         usb_cdc_write(resp->buffer, resp->length);
     } else if (is_nus_working()) {
         nus_data_response(resp->buffer, resp->length);

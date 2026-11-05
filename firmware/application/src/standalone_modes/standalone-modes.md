@@ -522,6 +522,68 @@ Works on Lite and Ultra (NFCT only, no reader hardware). First boot generates
 the master key; it persists, so credentials survive reboots.
 
 ---
+## `usb-net` ,  USB Ethernet, CLI over TCP  *(Lite + Ultra, TinyUSB build)*
+
+Arms a USB Ethernet interface (CDC-ECM or RNDIS) next to the serial port. The host gets
+`192.168.16.2` from a built-in DHCP server, the device is `192.168.16.1`, and
+TCP port `6868` carries the normal framed CLI protocol:
+
+```
+standalone set-mode usb-net
+standalone trigger                  # USB re-enumerates after ~1 s
+hw connect -p tcp:192.168.16.1:6868
+standalone disarm                   # back to serial only (also over TCP)
+```
+
+**Build:** off by default. It replaces the nRF SDK USB stack with TinyUSB and
+lwIP (pinned, fetched by `firmware/fetch_usbnet_deps.sh` into `firmware/deps/`):
+
+```
+./fetch_usbnet_deps.sh
+STANDALONE_USB_NET=1 ./build.sh                       # ecm: Linux, macOS
+STANDALONE_USB_NET=1 USBNET_CLASS=rndis ./build.sh    # rndis: Windows, Linux
+```
+
+The CDC serial port keeps working with the same VID/PID. While a TCP client is
+connected it owns the command link and replies go to it; a new connection
+replaces the old one. BLE is unaffected, so the mode can be armed from the web
+console. Arming and disarming re-enumerate the USB device, which drops a serial
+session that was open at that moment.
+
+**Costs and limits:** about 10 KB of RAM on Ultra (12 KB with rndis) (check `free before stack`
+in the linker map before combining with other modes; the link fails with
+"region RAM overflowed" when it does not fit). The host class is chosen at
+build time: `USBNET_CLASS=ecm` (default; Linux, macOS) or `USBNET_CLASS=rndis`
+(Windows, Linux; not macOS). The MTU defaults to 600 for ecm and 1514 for rndis
+(Windows rejects RNDIS with 600; override with `USBNET_MTU`; 1514 costs about
+1.8 KB more RAM). One client at a time, no authentication: the
+interface only exists on the USB cable. **Config:** none. **Buttons:** TOGGLE =
+arm/disarm. **Produces no results.** No `--opt-in` needed.
+
+**Reaching the CU from other machines.** The DHCP reply carries no gateway or
+DNS, so the CU has no route beyond 192.168.16.0/24 and cannot share the host's
+internet. To let another machine use the CU, relay port 6868 on the host
+(`ssh -L` or `socat`), or DNAT it. The MASQUERADE rule is required, because the
+CU has no default route:
+
+```
+sysctl -w net.ipv4.ip_forward=1
+iptables -t nat -A PREROUTING  -i <lan> -s <laptop-ip> -p tcp --dport 6868 -j DNAT --to-destination 192.168.16.1:6868
+iptables -t nat -A POSTROUTING -o <usb-if> -d 192.168.16.1 -p tcp --dport 6868 -j MASQUERADE
+```
+
+If the FORWARD chain drops by default (Docker, ufw), also allow it:
+
+```
+iptables -A FORWARD -i <lan> -o <usb-if> -s <laptop-ip> -d 192.168.16.1 -p tcp --dport 6868 -j ACCEPT
+iptables -A FORWARD -i <usb-if> -o <lan> -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+```
+
+Then run `hw connect -p tcp:<host-ip>:6868` on the other machine. Only one TCP
+client is accepted; a new connection replaces the current one. The port has no
+authentication, so restrict the source with `-s`.
+
+---
 ## `--opt-in` and quiet flags
 
 `set-mode` takes optional flags:
@@ -545,9 +607,9 @@ the master key; it persists, so credentials survive reboots.
 | `clear-result` | Discard stored results. |
 
 CLI vs firmware names: the CLI uses hyphens (`emul-trace`, `hf14a-tap-sniff`,
-`nfc-canary`, `slot-cycle`, `gdb-gateway`); `status` reports the firmware's
+`nfc-canary`, `slot-cycle`, `gdb-gateway`, `usb-net`); `status` reports the firmware's
 underscored names (`emul_trace`, `hf14a_tap_sniff`, `nfc_canary`, `slot_cycle`,
-`gdb_gateway`). They refer to the same modes.
+`gdb_gateway`, `usb_net`). They refer to the same modes.
 
 ## Result format
 

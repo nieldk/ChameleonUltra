@@ -30,6 +30,7 @@ STANDALONE_GDB_GATEWAY     ?= 0   # disabled by default
 GDB_GATEWAY_EXEC           ?= 1   # exec control (breakpoints/step) in gdb_gateway; 0 = memory/flash only
 GDB_GATEWAY_PKT            ?= 0x200   # RSP PacketSize; raise (e.g. 0x800) for faster bulk reads, more RAM
 STANDALONE_U2F             ?= 0   # disabled by default (FIDO U2F over NFC; needs micro-ecc)
+STANDALONE_USB_NET         ?= 0   # disabled by default (USB Ethernet; swaps the USB stack to TinyUSB + lwIP, needs ../fetch_usbnet_deps.sh)
 
 CFLAGS += -DCONFIG_STANDALONE_AUTHTRACE=$(STANDALONE_AUTHTRACE)
 CFLAGS += -DCONFIG_STANDALONE_SLOT_CYCLE=$(STANDALONE_SLOT_CYCLE)
@@ -42,6 +43,7 @@ CFLAGS += -DCONFIG_STANDALONE_HF14A_TAP_SNIFF=$(STANDALONE_HF14A_TAP_SNIFF)
 CFLAGS += -DCONFIG_STANDALONE_RELAY=$(STANDALONE_RELAY)
 CFLAGS += -DCONFIG_STANDALONE_GDB_GATEWAY=$(STANDALONE_GDB_GATEWAY)
 CFLAGS += -DCONFIG_STANDALONE_U2F=$(STANDALONE_U2F)
+CFLAGS += -DCONFIG_STANDALONE_USB_NET=$(STANDALONE_USB_NET)
 CFLAGS += -DCONFIG_GDB_GATEWAY_EXEC=$(GDB_GATEWAY_EXEC)
 CFLAGS += -DCONFIG_GDB_GATEWAY_PKT=$(GDB_GATEWAY_PKT)
 
@@ -705,6 +707,63 @@ help:
 	@echo		flash_softdevice
 	@echo		sdk_config - starting external tool for editing sdk_config.h
 	@echo		flash      - flashing binary
+
+# usb_net: the nRF SDK USB stack is replaced by TinyUSB (CDC + CDC-ECM) with lwIP.
+# Fetch the pinned sources first: ../fetch_usbnet_deps.sh
+ifeq ($(strip $(STANDALONE_USB_NET)),1)
+USBNET_DEPS ?= ../deps
+USBNET_CLASS ?= ecm
+USBNET_CLASS := $(strip $(USBNET_CLASS))
+# Windows rejects RNDIS with a small MTU
+ifeq ($(USBNET_CLASS),rndis)
+USBNET_MTU  ?= 1514
+else
+USBNET_MTU  ?= 600
+endif
+USBNET_MTU  := $(strip $(USBNET_MTU))
+ifeq ($(USBNET_CLASS),rndis)
+CFLAGS      += -DUSBNET_RNDIS=1
+else ifneq ($(USBNET_CLASS),ecm)
+$(error USBNET_CLASS must be ecm or rndis)
+endif
+CFLAGS      += -DCFG_TUD_NET_MTU=$(USBNET_MTU)
+TINYUSB     := $(USBNET_DEPS)/tinyusb
+LWIP        := $(USBNET_DEPS)/lwip
+ifeq ($(wildcard $(TINYUSB)/src/tusb.c $(LWIP)/src/core/init.c),)
+$(error TinyUSB/lwIP not found in $(USBNET_DEPS); run ../fetch_usbnet_deps.sh)
+endif
+SRC_FILES := $(filter-out \
+  $(PROJ_DIR)/usb_main.c \
+  $(SDK_ROOT)/components/libraries/usbd/app_usbd.c \
+  $(SDK_ROOT)/components/libraries/usbd/class/cdc/acm/app_usbd_cdc_acm.c \
+  $(SDK_ROOT)/components/libraries/usbd/app_usbd_core.c \
+  $(SDK_ROOT)/components/libraries/usbd/app_usbd_serial_num.c \
+  $(SDK_ROOT)/components/libraries/usbd/app_usbd_string_desc.c \
+  $(SDK_ROOT)/modules/nrfx/drivers/src/nrfx_usbd.c, \
+  $(SRC_FILES))
+SRC_FILES += \
+  $(PROJ_DIR)/usb_main_tusb.c \
+  $(PROJ_DIR)/usbnet/usbnet.c \
+  $(PROJ_DIR)/standalone_modes/mode_usb_net.c \
+  $(TINYUSB)/src/tusb.c \
+  $(TINYUSB)/src/common/tusb_fifo.c \
+  $(TINYUSB)/src/device/usbd.c \
+  $(TINYUSB)/src/device/usbd_control.c \
+  $(TINYUSB)/src/class/cdc/cdc_device.c \
+  $(TINYUSB)/src/class/net/ecm_rndis_device.c \
+  $(TINYUSB)/src/portable/nordic/nrf5x/dcd_nrf5x.c \
+  $(TINYUSB)/lib/networking/rndis_reports.c \
+  $(TINYUSB)/lib/networking/dhserver.c \
+  $(wildcard $(LWIP)/src/core/*.c) \
+  $(filter-out $(LWIP)/src/core/ipv4/dhcp.c,$(wildcard $(LWIP)/src/core/ipv4/*.c)) \
+  $(LWIP)/src/netif/ethernet.c
+INC_FOLDERS += \
+  $(PROJ_DIR)/usbnet \
+  $(SDK_ROOT)/modules/nrfx/drivers/src \
+  $(TINYUSB)/src \
+  $(TINYUSB)/lib/networking \
+  $(LWIP)/src/include
+endif
 
 TEMPLATE_PATH := $(SDK_ROOT)/components/toolchain/gcc
 

@@ -624,7 +624,7 @@ void gdb_mon_handle(uint32_t *frame, uint32_t exc_return, uint32_t *r4_11) {
             m_run = 1;
             break;
         }
-        app_usbd_event_queue_process();   /* keep the CDC/RSP alive while stopped */
+        usb_poll();   /* keep the CDC/RSP alive while stopped */
         bsp_wdt_feed();
     }
 

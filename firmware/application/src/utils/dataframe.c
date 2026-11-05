@@ -166,6 +166,13 @@ void data_frame_receive(uint8_t *data, uint16_t length) {
 }
 
 /**
+ * @brief True while a complete frame waits for data_frame_process(); further bytes would be dropped
+ */
+bool data_frame_rx_busy(void) {
+    return m_data_completed;
+}
+
+/**
  * @brief After the data packet processing, when the received data forms a complete frame,
  *         This function will be distributed processing tasks through this function, which will be adjusted to notify the data processing of the data
  * If the data processing is time -consuming operation, you need to put this function in the main loop to call

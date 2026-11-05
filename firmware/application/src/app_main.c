@@ -1163,7 +1163,7 @@ int main(void) {
     BOOT_STEP("mode");
 
     // usbd event listener
-    APP_ERROR_CHECK(app_usbd_power_events_enable());
+    usb_power_events_enable();
 
     bsp_wdt_init();
     // Enter main loop.
@@ -1203,7 +1203,7 @@ int main(void) {
         while (NRF_LOG_PROCESS());
         logflash_poll();
         // USB event process
-        while (app_usbd_event_queue_process());
+        usb_poll();
         // WDT refresh
         bsp_wdt_feed();
         // No task to process, system sleep enter.

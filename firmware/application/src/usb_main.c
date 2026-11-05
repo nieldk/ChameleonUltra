@@ -192,3 +192,11 @@ int fputc(int ch, FILE *f){
 bool is_usb_working(void) {
     return g_usb_port_opened;
 }
+
+void usb_power_events_enable(void) {
+    APP_ERROR_CHECK(app_usbd_power_events_enable());
+}
+
+void usb_poll(void) {
+    while (app_usbd_event_queue_process());
+}

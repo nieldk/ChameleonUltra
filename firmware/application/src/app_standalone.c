@@ -54,6 +54,9 @@
 #ifndef CONFIG_STANDALONE_GDB_GATEWAY
 #define CONFIG_STANDALONE_GDB_GATEWAY  1
 #endif
+#ifndef CONFIG_STANDALONE_USB_NET
+#define CONFIG_STANDALONE_USB_NET  1
+#endif
 #ifndef CONFIG_STANDALONE_U2F
 #define CONFIG_STANDALONE_U2F  1
 #endif
@@ -138,6 +141,9 @@ static const standalone_mode_iface_t *const m_modes[] = {
 #endif
 #if CONFIG_STANDALONE_U2F
     &mode_u2f_iface,
+#endif
+#if CONFIG_STANDALONE_USB_NET
+    &mode_usb_net_iface,
 #endif
 };
 
