@@ -12,6 +12,8 @@
  * the command link and replies go to it. Disarm (TOGGLE button, `standalone
  * disarm` over TCP or BLE) re-enumerates back to the serial-only device.
  *
+ * Config (4 bytes): u8 version=1, u8 flags (bit0 = DHCP default gateway), u16 port.
+ *
  * Needs STANDALONE_USB_NET=1 (TinyUSB + lwIP build, see usb_main_tusb.c).
  */
 
@@ -25,6 +27,7 @@ static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len) {
     uint16_t port = 0;
     if (cfg != NULL && cfg_len >= 4 && cfg[0] == 1) port = (uint16_t)(cfg[2] | (cfg[3] << 8));
     usbnet_set_port(port);
+    usbnet_set_gateway(cfg != NULL && cfg_len >= 4 && cfg[0] == 1 && (cfg[1] & 1));
     usbnet_enable(true);
     NRF_LOG_INFO("usb_net: armed, USB Ethernet after re-enumeration");
     return STANDALONE_RC_OK;

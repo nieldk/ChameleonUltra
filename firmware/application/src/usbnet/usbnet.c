@@ -48,7 +48,7 @@ static const ip4_addr_t k_gw   = INIT_IP4(0, 0, 0, 0);
 static dhcp_entry_t m_leases[] = {
     {{0}, INIT_IP4(192, 168, 16, 2), 24 * 60 * 60},
 };
-static const dhcp_config_t k_dhcp = {
+static dhcp_config_t m_dhcp = {
     .router    = INIT_IP4(0, 0, 0, 0),
     .port      = 67,
     .dns       = INIT_IP4(0, 0, 0, 0),
@@ -325,6 +325,10 @@ static void listen_start(void) {
     }
 }
 
+void usbnet_set_gateway(bool on) {
+    m_dhcp.router = on ? k_ip : (ip4_addr_t)INIT_IP4(0, 0, 0, 0);   /* sent with the next lease */
+}
+
 void usbnet_set_port(uint16_t port) {
     if (port == 0) port = USBNET_TCP_PORT;
     if (port == m_port) return;
@@ -356,7 +360,7 @@ void usbnet_start(void) {
         netif_set_default(&m_netif);
         netif_set_up(&m_netif);
 
-        if (dhserv_init(&k_dhcp) != ERR_OK) NRF_LOG_ERROR("usbnet: dhcp server init failed");
+        if (dhserv_init(&m_dhcp) != ERR_OK) NRF_LOG_ERROR("usbnet: dhcp server init failed");
 
         listen_start();
         APP_ERROR_CHECK(app_timer_create(&m_wake_timer, APP_TIMER_MODE_REPEATED, wake_handler));
@@ -394,7 +398,8 @@ size_t usbnet_get_status(char *out, size_t out_max) {
 #endif
     STATUS_KV(out, out_max, len, "host_usb=%s%s\n", tud_mounted() ? "configured" : "not configured",
               tud_suspended() ? " (suspended)" : "");
-    STATUS_KV(out, out_max, len, "addr=192.168.16.1:%u\n", (unsigned)m_port);
+    STATUS_KV(out, out_max, len, "addr=192.168.16.1:%u gateway=%s\n", (unsigned)m_port,
+              m_dhcp.router.addr ? "offered" : "none");
     if (leased) {
         STATUS_KV(out, out_max, len, "lease=192.168.16.2 %02x:%02x:%02x:%02x:%02x:%02x\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);

@@ -557,8 +557,11 @@ build time: `USBNET_CLASS=ecm` (default; Linux, macOS) or `USBNET_CLASS=rndis`
 (Windows, Linux; not macOS). The MTU defaults to 600 for ecm and 1514 for rndis
 (Windows rejects RNDIS with 600; override with `USBNET_MTU`; 1514 costs about
 1.8 KB more RAM). One client at a time, no authentication: the
-interface only exists on the USB cable. **Config:** `--port` (TCP port, default 18888; applies on the next arm), e.g.
-`standalone config usb-net --port 19999`. **Buttons:** TOGGLE =
+interface only exists on the USB cable. **Config:** `--port` (TCP port, default 18888) and `--gateway on|off` (DHCP offers
+the CU, 192.168.16.1, as default router; default off), applied on the next arm,
+e.g. `standalone config usb-net --port 19999 --gateway on`. With the gateway on,
+some hosts (NetworkManager, for one) prefer the USB adapter's default route over
+their real one and lose internet; the CU does not route traffic. **Buttons:** TOGGLE =
 arm/disarm. **Produces no results.** No `--opt-in` needed.
 
 **Reaching the CU from other machines.** The DHCP reply carries no gateway or

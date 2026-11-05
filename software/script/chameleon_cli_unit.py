@@ -5946,6 +5946,7 @@ class StandaloneConfig(DeviceRequiredUnit):
         standalone config autoclone --also-slot on
         standalone config dict-check --sectors 16
         standalone config usb-net --port 19999
+        standalone config usb-net --gateway on
     """
 
     def args_parser(self) -> ArgumentParserNoExit:
@@ -5977,6 +5978,8 @@ class StandaloneConfig(DeviceRequiredUnit):
                             help='[dict-check] number of sectors to test (1-16)')
         parser.add_argument('--port', type=int, default=None,
                             help='[usb-net] TCP port (1-65535, default 18888)')
+        parser.add_argument('--gateway', choices=['on', 'off'], default=None,
+                            help='[usb-net] DHCP offers the CU as default gateway (default off)')
         return parser
 
     def on_exec(self, args):
@@ -6096,27 +6099,33 @@ class StandaloneConfig(DeviceRequiredUnit):
 
         if mode == StandaloneMode.USB_NET:
             if any(v is not None for v in (args.block, args.key_type, args.key, args.timeout)):
-                print(color_string((CR, "usb-net config uses only --port")))
+                print(color_string((CR, "usb-net config uses only --port and --gateway")))
                 return
-            if args.port is not None:
-                if not (1 <= args.port <= 65535):
-                    print(color_string((CR, "port must be 1..65535")))
-                    return
-                cfg = struct.pack('<BBH', 1, 0, args.port)
-                resp = self.cmd.standalone_set_config(mode, cfg)
+            blob = self.cmd.standalone_get_config(mode)
+            ver, flags, port = (struct.unpack('<BBH', blob[:4]) if blob and len(blob) >= 4
+                                else (1, 0, 0))
+            if args.port is not None or args.gateway is not None:
+                if args.port is not None:
+                    if not (1 <= args.port <= 65535):
+                        print(color_string((CR, "port must be 1..65535")))
+                        return
+                    port = args.port
+                if args.gateway is not None:
+                    flags = (flags | 1) if args.gateway == 'on' else (flags & ~1)
+                resp = self.cmd.standalone_set_config(mode, struct.pack('<BBH', 1, flags, port))
                 if resp.status == Status.SUCCESS:
-                    print(color_string((CG, f"usb-net port set to {args.port} (applies on next arm)")))
+                    print(color_string((CG, f"usb-net port {port or 18888}, gateway "
+                                            f"{'on' if flags & 1 else 'off'} (applies on next arm)")))
                 else:
                     print(color_string((CR, f"set-config failed: status={resp.status}")))
                 return
-            blob = self.cmd.standalone_get_config(mode)
             if blob and len(blob) >= 4:
-                ver, _r0, port = struct.unpack('<BBH', blob[:4])
                 print(color_string((CG, "usb-net config:")))
                 print(f"  version:  {ver}")
                 print(f"  port:     {port or 18888}")
+                print(f"  gateway:  {'on' if flags & 1 else 'off'}")
             else:
-                print(color_string((CY, "no persisted config — default port 18888")))
+                print(color_string((CY, "no persisted config — default port 18888, gateway off")))
             return
 
         if mode == StandaloneMode.READ_REPLAY:

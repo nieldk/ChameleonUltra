@@ -1896,6 +1896,7 @@ Read or write mode-specific config
 - `--also-slot` — [autoclone] also clone the source into the active slot (choices: on, off)
 - `--sectors` — [dict-check] number of sectors to test (1-16)
 - `--port` — [usb-net] TCP port (1-65535, default 18888)
+- `--gateway` — [usb-net] DHCP offers the CU as default gateway (default off) (choices: on, off)
 
 ### `standalone dict-check`
 
