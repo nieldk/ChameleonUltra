@@ -5660,6 +5660,30 @@ def _standalone_render_result(args, mode, raw: bytes):
             print(dict_check_table(recs))
         return
 
+    if mode == StandaloneMode.ZIGBEE:
+        import zb_parse as zp
+        recs = zp.parse_records(raw)
+        if args.json:
+            out = jsonlib.dumps([
+                {"channel": ch, "lqi": lqi, "len": len(f), "hex": f.hex()}
+                for ch, lqi, f in recs
+            ], indent=2)
+            if args.file:
+                Path(args.file).write_text(out)
+                print(color_string((CG, f"-> {args.file}")))
+            else:
+                print(out)
+        else:
+            text = "\n".join(zp.describe_frame(ch, lqi, f) for ch, lqi, f in recs)
+            if args.file:
+                Path(args.file).write_text(text)
+                print(color_string((CG, f"{len(recs)} zigbee frame(s) -> {args.file}")))
+            else:
+                print(color_string((CG, f"{len(recs)} zigbee frame(s)")))
+                if text:
+                    print(text)
+        return
+
     if mode not in (StandaloneMode.AUTHTRACE, StandaloneMode.EMUL_TRACE,
                     StandaloneMode.RELAY, StandaloneMode.HF14A_TAP_SNIFF):
         print(color_string((CY,
@@ -5811,6 +5835,9 @@ for _mode in StandaloneMode:
     _mode_grp.command('clear-result')(_make_mode_clear_result_cls(_mode))
 
 
+import cli_zigbee  # noqa: F401,E402  (standalone zigbee scan/devices/dump)
+
+
 @standalone.command('modes')
 class StandaloneModes(DeviceRequiredUnit):
     """
@@ -5949,6 +5976,7 @@ class StandaloneConfig(DeviceRequiredUnit):
         standalone config usb-net --port 19999
         standalone config usb-net --gateway on
         standalone config usb-net --auto on --class rndis
+        standalone config zigbee --channel 15
     """
 
     def args_parser(self) -> ArgumentParserNoExit:
@@ -5986,6 +6014,10 @@ class StandaloneConfig(DeviceRequiredUnit):
                             help='[usb-net] keep USB Ethernet on whenever USB is attached, beside any other mode')
         parser.add_argument('--class', dest='net_class', choices=['ecm', 'rndis', 'default'], default=None,
                             help='[usb-net] host class: ecm (Linux, macOS), rndis (Windows), default = build default')
+        parser.add_argument('--channel', type=int, default=None,
+                            help='[zigbee] 802.15.4 channel 11-26, or 0 to hop over all (default 11)')
+        parser.add_argument('--dwell', type=int, default=None,
+                            help='[zigbee] hop dwell per channel in ms (50-60000, default 500)')
         return parser
 
     def on_exec(self, args):
@@ -6101,6 +6133,38 @@ class StandaloneConfig(DeviceRequiredUnit):
             else:
                 print(color_string((CY,
                     "no persisted config — default timeout 5000 ms")))
+            return
+
+        if mode == StandaloneMode.ZIGBEE:
+            if any(v is not None for v in (args.block, args.key_type, args.key, args.timeout)):
+                print(color_string((CR, "zigbee config uses only --channel and --dwell")))
+                return
+            if args.channel is not None or args.dwell is not None:
+                cur = self.cmd.standalone_get_config(mode)
+                ch = args.channel if args.channel is not None else (cur[1] if cur and len(cur) >= 2 else 11)
+                dw = args.dwell if args.dwell is not None else (
+                    int.from_bytes(cur[2:4], 'little') if cur and len(cur) >= 4 else 500)
+                if not (ch == 0 or 11 <= ch <= 26):
+                    print(color_string((CR, "channel must be 11..26, or 0 to hop")))
+                    return
+                if not (50 <= dw <= 60000):
+                    print(color_string((CR, "dwell must be 50..60000 ms")))
+                    return
+                resp = self.cmd.standalone_set_config(mode, struct.pack('<BBH', 1, ch, dw))
+                if resp.status == Status.SUCCESS:
+                    what = f"channel {ch}" if ch else f"hopping 11-26, dwell {dw} ms"
+                    print(color_string((CG, f"zigbee set to {what} (applied immediately if armed)")))
+                else:
+                    print(color_string((CR, f"set-config failed: status={resp.status}")))
+                return
+            blob = self.cmd.standalone_get_config(mode)
+            if blob and len(blob) >= 2:
+                print(color_string((CG, "zigbee config:")))
+                print(f"  channel:  {blob[1] or 'hop'}")
+                if len(blob) >= 4:
+                    print(f"  dwell:    {int.from_bytes(blob[2:4], 'little')} ms")
+            else:
+                print(color_string((CY, "no persisted config — channel 11")))
             return
 
         if mode == StandaloneMode.USB_NET:

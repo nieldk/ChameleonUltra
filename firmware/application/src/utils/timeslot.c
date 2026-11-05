@@ -60,11 +60,13 @@ static void t55xx_soc_evt_handler(uint32_t evt_id, void *p_context) {
             m_is_timeslot_working = false;
             break;
         case NRF_EVT_RADIO_BLOCKED:
+            if (!m_is_timeslot_running) break;   /* not ours (zigbee session) */
             m_ts_blocked++;
             err_code = request_next_event_earliest();
             APP_ERROR_CHECK(err_code);
             break;
         case NRF_EVT_RADIO_CANCELED:
+            if (!m_is_timeslot_running) break;
             m_ts_canceled++;
             err_code = request_next_event_earliest();
             APP_ERROR_CHECK(err_code);

@@ -4,7 +4,7 @@
 > [Legal / responsible use](../README.md#legal--responsible-use) in the
 > top-level README.
 
-Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 46 command groups, 225 commands.
+Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 47 command groups, 230 commands.
 
 Notation: `<...>` are values you supply. Each option lists its flags, help, allowed `choices`, whether it is `required`, and its `default`. Run any command with `-h` in the client for the same information live.
 
@@ -1899,6 +1899,8 @@ Read or write mode-specific config
 - `--gateway` — [usb-net] DHCP offers the CU as default gateway (default off) (choices: on, off)
 - `--auto` — [usb-net] keep USB Ethernet on whenever USB is attached, beside any other mode (choices: on, off)
 - `--class` — [usb-net] host class: ecm (Linux, macOS), rndis (Windows), default = build default (choices: ecm, rndis, default)
+- `--channel` — [zigbee] 802.15.4 channel 11-26, or 0 to hop over all (default 11)
+- `--dwell` — [zigbee] hop dwell per channel in ms (50-60000, default 500)
 
 ### `standalone dict-check`
 
@@ -2133,4 +2135,43 @@ Read usb-net result buffer
 - `--json` — emit parsed sessions as JSON
 - `--dump` — dump every frame in each session
 - `--pm3` — write each session as a Proxmark3 .trace (<prefix>-NN.trace)
+
+### `standalone zigbee`
+
+Result data for the zigbee mode
+
+#### `standalone zigbee clear-result`
+
+Clear zigbee result buffer
+
+
+#### `standalone zigbee devices`
+
+Device inventory per PAN from cleartext MAC/NWK headers: short addresses, any IEEE addresses seen, frame counts and LQI (raw, uncompensated).
+
+- `-t`, `--time` — capture duration in seconds (default 30) (default: 30)
+
+#### `standalone zigbee dump`
+
+Print each captured frame decoded (MAC, beacon, NWK) plus hex. NWK payloads stay opaque unless you give the network key of your own network with -k.
+
+- `-k`, `--key` — 16-byte NWK key (32 hex chars) to decrypt NWK payloads (AES-CCM*, MIC-32). If omitted, the well-known Zigbee HA/ZLL default key is tried automatically.
+- `--no-default-key` — don't fall back to the well-known default/ZLL keys when -k is not given or fails (these are key-transport keys, not real network keys -- a MIC-ok hit here means the device non-compliantly reused one as its actual NWK key)
+- `-t`, `--time` — capture duration in seconds (default 10) (default: 10)
+
+#### `standalone zigbee get-result`
+
+Read zigbee result buffer
+
+- `-f`, `--file` — write output to file instead of stdout
+- `--raw` — dump raw bytes (no parsing)
+- `--json` — emit parsed sessions as JSON
+- `--dump` — dump every frame in each session
+- `--pm3` — write each session as a Proxmark3 .trace (<prefix>-NN.trace)
+
+#### `standalone zigbee scan`
+
+Passively list Zigbee networks seen in beacons and traffic, per channel. Arm the mode with channel 0 (hop) to cover 11-26: `standalone config -m zigbee --channel 0`.
+
+- `-t`, `--time` — capture duration in seconds (default 30) (default: 30)
 

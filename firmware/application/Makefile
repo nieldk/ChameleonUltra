@@ -31,6 +31,7 @@ GDB_GATEWAY_EXEC           ?= 1   # exec control (breakpoints/step) in gdb_gatew
 GDB_GATEWAY_PKT            ?= 0x200   # RSP PacketSize; raise (e.g. 0x800) for faster bulk reads, more RAM
 STANDALONE_U2F             ?= 0   # disabled by default (FIDO U2F over NFC; needs micro-ecc)
 STANDALONE_USB_NET         ?= 0   # disabled by default (USB Ethernet; swaps the USB stack to TinyUSB + lwIP, needs ../fetch_usbnet_deps.sh)
+STANDALONE_ZIGBEE          ?= 0   # disabled by default (passive 802.15.4 receive in SoftDevice timeslots)
 
 CFLAGS += -DCONFIG_STANDALONE_AUTHTRACE=$(STANDALONE_AUTHTRACE)
 CFLAGS += -DCONFIG_STANDALONE_SLOT_CYCLE=$(STANDALONE_SLOT_CYCLE)
@@ -44,6 +45,7 @@ CFLAGS += -DCONFIG_STANDALONE_RELAY=$(STANDALONE_RELAY)
 CFLAGS += -DCONFIG_STANDALONE_GDB_GATEWAY=$(STANDALONE_GDB_GATEWAY)
 CFLAGS += -DCONFIG_STANDALONE_U2F=$(STANDALONE_U2F)
 CFLAGS += -DCONFIG_STANDALONE_USB_NET=$(STANDALONE_USB_NET)
+CFLAGS += -DCONFIG_STANDALONE_ZIGBEE=$(STANDALONE_ZIGBEE)
 CFLAGS += -DCONFIG_GDB_GATEWAY_EXEC=$(GDB_GATEWAY_EXEC)
 CFLAGS += -DCONFIG_GDB_GATEWAY_PKT=$(GDB_GATEWAY_PKT)
 
@@ -274,6 +276,11 @@ endif
 ifeq ($(strip $(STANDALONE_GDB_GATEWAY)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_gdb_gateway.c
 SRC_FILES += $(PROJ_DIR)/utils/gdb_rsp.c
+endif
+ifeq ($(strip $(STANDALONE_ZIGBEE)),1)
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_zigbee.c
+SRC_FILES += $(PROJ_DIR)/zigbee/zb_radio.c
+INC_FOLDERS += $(PROJ_DIR)/zigbee
 endif
 ifeq ($(strip $(STANDALONE_U2F)),1)
 SRC_FILES   += $(PROJ_DIR)/standalone_modes/mode_u2f.c

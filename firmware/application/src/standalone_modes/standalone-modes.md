@@ -612,6 +612,117 @@ client is accepted; a new connection replaces the current one. The port has no
 authentication, so restrict the source with `-s`.
 
 ---
+## `zigbee` ,  passive 802.15.4 receive  *(Lite + Ultra, needs `STANDALONE_ZIGBEE=1`)*
+
+Receive only, nothing is transmitted. One channel, or hopping over 11-26. The SoftDevice
+owns the radio, so RX runs in chained 50 ms timeslots; frames between slots are missed and
+BLE shares the radio time (`blocked`/`canceled` count refused or revoked slots).
+
+```
+standalone config zigbee --channel 15      # 11..26, default 11
+standalone config zigbee --channel 0 --dwell 500   # hop 11..26, 500 ms per channel
+standalone set-mode zigbee
+standalone trigger                         # or the TOGGLE button
+standalone status
+standalone zigbee scan -t 60               # networks per channel/PAN (beacons, traffic)
+standalone zigbee devices -t 60            # sources per PAN: addresses, tx count, raw LQI
+standalone zigbee dump -t 10               # each frame decoded + hex; also auto-tries known
+                                            # keys (NWK fallback + APS join-key capture, see below)
+standalone zigbee dump -k <32 hex>         # also decrypt NWK payloads with your network key
+```
+
+If BLE activity leaves no gap for a slot, the SoftDevice cancels or blocks the request (`canceled`/`blocked`
+rise). Requests time out after 200 ms and are re-issued from the 20 ms tick. The slot length is halved on each cancel or block down to 5 ms (`slot_us` in `status`) and grown again after
+every 16 granted slots. A NORMAL-priority timeslot yields to connection events.
+
+`ed` is the largest raw energy-detect sample (EDSAMPLE, not converted) taken at the end of a slot on
+that channel; `framestart` counts frames whose length field was seen. If `ed` stays 0 everywhere while
+Wi-Fi or Zigbee is active, the receive path is not working.
+
+`ed ok`/`timeout` count finished and unfinished energy-detect samples; `radio_state` is NRF_RADIO->STATE just
+before the slot ends (2 = RXIDLE, 3 = RX, 0 = disabled).
+
+`rxen` shows whether the receiver ramped up after RXEN (`ready`/`timeout`), the radio state right after
+the wait and the RADIO POWER register as found at slot start.
+
+`sig` counts radio-callback signals (`radio`, `timer0`), session idle events and the last
+`sd_radio_request` return code (0 = ok); a chain that stops shows up as `slots` not rising.
+
+`status` shows the channel, slot counters (`us` = current slot length), frames with a good/bad FCS,
+a count per frame type, log fill, and while hopping the frame count and the largest raw
+energy-detect sample (`ed`, EDSAMPLE, not converted) per channel 11-26. The last frame's length
+and raw LQI byte are not converted to dBm or the IEEE range and not temperature-compensated
+(nRF52840 errata 153). Length excludes the FCS, which the radio does not store.
+
+If BLE activity leaves no gap for a slot, the SoftDevice cancels or blocks the request. Requests
+time out after 200 ms and are re-issued from the 20 ms tick; the slot length is halved on each
+cancel or block (down to 5 ms) and grown after every 16 granted slots.
+
+`diag` is for bring-up: `cb=radio/timer0/idle` slot signals, `rxen=ok/timeout` receiver ramp-up,
+`ed=ok/timeout` energy-detect samples, `st=` radio state after ramp-up / before slot end
+(2 RXIDLE, 3 RX), `pw` RADIO POWER as found at slot start, `rc` last request result, `fs`
+frames whose length field was seen. The status reply is built in a 512-byte buffer, so keep
+this output short.
+
+Frames are appended to a 2 KiB RAM log (`channel, lqi, len, MPDU`) and drained by the
+host commands above, which parse MAC, beacon and NWK headers in Python (`zb_parse.py`).
+If the host does not drain, the log fills and later frames are counted as `overflow`.
+Only cleartext headers are decoded:
+secured payloads stay opaque, beacons with GTS/pending-address fields are shown as
+unparsed. The log is freed only by `standalone clear-result` (or `standalone zigbee clear-result`), same as other modes; it is not freed just because `get-result`/`scan`/`devices`/`dump` drained it, so a long capture can still fill the 2 KiB log and start counting `overflow` even after everything so far was read. `standalone zigbee get-result` (the generic result reader) decodes each record the same way `dump` does (channel, LQI, MAC/beacon/NWK header), without the `-k` decryption step.
+
+The log also persists to flash on disarm (and immediately on an explicit clear), and reloads on the next arm or on a disarmed `get-result`/`ls` -- results survive a disarm or reset, same as other modes (nfc-canary, authtrace, relay, ...). A power loss while armed can still lose whatever was logged since the last flush. The persisted buffer is capped at 2 KiB (the framework's 2080-byte limit per mode), so the log is smaller than it would otherwise need to be; clear it between long sessions if you hit `overflow`.
+
+`dump` tries three well-known public keys automatically as NWK-key guesses: the Zigbee
+HA/ZLL default Trust Center link key (`ZigBeeAlliance09`, many consumer devices use it
+instead of a provisioned key), the ZLL master key, and the ZLL certification link key
+(the last two leaked/published for touchlink commissioning, far less likely to hit).
+Pass `-k <32 hex>` for your own network's key, or `--no-default-key` to skip all three.
+`dump -k`/the built-in fallbacks decrypt NWK payloads (AES-CCM*, 32-bit MIC, nonce from
+the aux header's source IEEE address) and report MIC ok/fail. Important caveat: none of
+the three built-in keys are *meant* to be a network's ongoing NWK key -- they are
+one-time key-*transport* keys used only while a device joins. A MIC-ok hit from one of
+them here means the device non-compliantly reused its TC link key as its NWK key; MIC
+FAIL (the common case) just means this network provisions a real random key, which is
+the normal, secure outcome. The CCM code itself was checked against the RFC 3610 vector
+and the ciphertext of a published Zigbee NWK example, but the MIC of that example did
+not reproduce, so the MIC check is unverified against real Zigbee traffic beyond what's
+captured here. While hopping, a network is only seen when it transmits during a dwell.
+
+### Recovering a network's real key: APS Transport Key capture
+
+The correct way to get a network's actual (random) NWK key is to catch it being handed
+to a device during (re-)join: the Trust Center sends it inside an APS "Transport Key"
+command, itself encrypted under the TC link key (normally `ZigBeeAlliance09`) rather
+than the NWK key -- so it's readable even though the NWK layer around it is still
+unsecured (the joining device has no NWK key yet). `dump` watches for this automatically:
+for every captured frame whose NWK layer is unsecured data, it tries to parse an APS
+command frame underneath and decrypt it with each of `APS_JOIN_KEYS` (same three keys
+as above, used here in their *correct* role as TC link keys). A hit prints as:
+
+```
+      *** APS Transport Key [ZigBeeAlliance09 (HA default TC link key), MIC ok] type=standard network key ***
+          network key: <32 hex>  seq=<n> dst=<ieee> src=<ieee>
+```
+
+**Caveat, stated plainly:** the Transport-Key command's field layout (key type, 16-byte
+key, sequence number, then 8-byte destination/source IEEE addresses, in that order) is
+reconstructed from the ZigBee specification's Transport-Key command definition and
+cross-checked against Microchip's/Silicon Labs' `APS_TransportKeyReq_t`/key-type struct
+docs and Wireshark's `packet-zbee-aps.c` field names -- but the dissector's C source
+itself could not be fetched (gitea.osmocom.org blocks automated fetches; GitHub's raw
+source isn't reachable from here) to confirm the byte order line-by-line. The CCM*
+mechanics (nonce/AAD construction, offsets into the APS aux header) were verified with a
+synthetic hand-built frame and decrypt correctly; what's **not** yet verified is that
+this layout matches a real captured join. Only the Standard Network Key case (key type
+`0x01`) is decoded; other key types (TC link key, application link key, ...) are
+reported by type but not parsed further. Treat the first real hit as something to
+sanity-check (does the recovered key, fed back into `dump -k`, actually decrypt that
+network's regular traffic with MIC ok?) rather than as unconditionally trusted.
+
+Radio setup and buffer layout follow the nRF52840 Product Specification (RADIO, IEEE 802.15.4
+operation). Not tested on hardware at the time of writing.
+
 ## `--opt-in` and quiet flags
 
 `set-mode` takes optional flags:
@@ -635,7 +746,7 @@ authentication, so restrict the source with `-s`.
 | `clear-result` | Discard stored results. |
 
 CLI vs firmware names: the CLI uses hyphens (`emul-trace`, `hf14a-tap-sniff`,
-`nfc-canary`, `slot-cycle`, `gdb-gateway`, `usb-net`); `status` reports the firmware's
+`nfc-canary`, `slot-cycle`, `gdb-gateway`, `usb-net`, `zigbee`); `status` reports the firmware's
 underscored names (`emul_trace`, `hf14a_tap_sniff`, `nfc_canary`, `slot_cycle`,
 `gdb_gateway`, `usb_net`). They refer to the same modes.
 

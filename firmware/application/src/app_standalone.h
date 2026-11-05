@@ -60,6 +60,7 @@ typedef enum {
     STANDALONE_MODE_GDB_GATEWAY = 0x0A,  /* CDC becomes a GDB memory/flash gateway (no SWD) */
     STANDALONE_MODE_U2F         = 0x0B,  /* FIDO U2F (CTAP1) authenticator over NFC */
     STANDALONE_MODE_USB_NET     = 0x0C,  /* USB Ethernet (CDC-ECM); CLI frames over TCP */
+    STANDALONE_MODE_ZIGBEE      = 0x0D,  /* passive 802.15.4 (Zigbee) receive */
 
     STANDALONE_MODE__COUNT              /* sentinel - keep last */
 } standalone_mode_t;
@@ -182,6 +183,7 @@ extern const standalone_mode_iface_t mode_nfc_canary_iface;    /* NFCT only, wor
 extern const standalone_mode_iface_t mode_gdb_gateway_iface;   /* USB GDB gateway, no RF/reader */
 extern const standalone_mode_iface_t mode_u2f_iface;           /* FIDO U2F over NFC, NFCT only */
 extern const standalone_mode_iface_t mode_usb_net_iface;       /* USB Ethernet + TCP CLI link, no RF */
+extern const standalone_mode_iface_t mode_zigbee_iface;        /* passive 802.15.4 RX via SoftDevice timeslots */
 
 /* -------------------------------------------------------------------------
  * Public API

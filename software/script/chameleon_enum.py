@@ -865,6 +865,7 @@ class StandaloneMode(enum.IntEnum):
     GDB_GATEWAY = 0x0A   # CDC becomes a GDB memory/flash gateway (no SWD)
     U2F         = 0x0B   # FIDO U2F (CTAP1) authenticator over NFC
     USB_NET     = 0x0C   # USB Ethernet (ECM/RNDIS); CLI frames over TCP port 18888
+    ZIGBEE      = 0x0D   # passive 802.15.4 (Zigbee) receive
 
     @classmethod
     def from_name(cls, name: str) -> "StandaloneMode":
