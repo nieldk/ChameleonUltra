@@ -526,12 +526,12 @@ the master key; it persists, so credentials survive reboots.
 
 Arms a USB Ethernet interface (CDC-ECM or RNDIS) next to the serial port. The host gets
 `192.168.16.2` from a built-in DHCP server, the device is `192.168.16.1`, and
-TCP port `6868` carries the normal framed CLI protocol:
+TCP port `18888` carries the normal framed CLI protocol:
 
 ```
 standalone set-mode usb-net
 standalone trigger                  # USB re-enumerates after ~1 s
-hw connect -p tcp:192.168.16.1:6868
+hw connect -p tcp:192.168.16.1:18888
 standalone disarm                   # back to serial only (also over TCP)
 ```
 
@@ -562,24 +562,24 @@ arm/disarm. **Produces no results.** No `--opt-in` needed.
 
 **Reaching the CU from other machines.** The DHCP reply carries no gateway or
 DNS, so the CU has no route beyond 192.168.16.0/24 and cannot share the host's
-internet. To let another machine use the CU, relay port 6868 on the host
+internet. To let another machine use the CU, relay port 18888 on the host
 (`ssh -L` or `socat`), or DNAT it. The MASQUERADE rule is required, because the
 CU has no default route:
 
 ```
 sysctl -w net.ipv4.ip_forward=1
-iptables -t nat -A PREROUTING  -i <lan> -s <laptop-ip> -p tcp --dport 6868 -j DNAT --to-destination 192.168.16.1:6868
-iptables -t nat -A POSTROUTING -o <usb-if> -d 192.168.16.1 -p tcp --dport 6868 -j MASQUERADE
+iptables -t nat -A PREROUTING  -i <lan> -s <laptop-ip> -p tcp --dport 18888 -j DNAT --to-destination 192.168.16.1:18888
+iptables -t nat -A POSTROUTING -o <usb-if> -d 192.168.16.1 -p tcp --dport 18888 -j MASQUERADE
 ```
 
 If the FORWARD chain drops by default (Docker, ufw), also allow it:
 
 ```
-iptables -A FORWARD -i <lan> -o <usb-if> -s <laptop-ip> -d 192.168.16.1 -p tcp --dport 6868 -j ACCEPT
+iptables -A FORWARD -i <lan> -o <usb-if> -s <laptop-ip> -d 192.168.16.1 -p tcp --dport 18888 -j ACCEPT
 iptables -A FORWARD -i <usb-if> -o <lan> -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 ```
 
-Then run `hw connect -p tcp:<host-ip>:6868` on the other machine. Only one TCP
+Then run `hw connect -p tcp:<host-ip>:18888` on the other machine. Only one TCP
 client is accepted; a new connection replaces the current one. The port has no
 authentication, so restrict the source with `-s`.
 

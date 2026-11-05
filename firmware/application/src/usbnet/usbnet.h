@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define USBNET_TCP_PORT 6868
+#define USBNET_TCP_PORT 18888
 
 void usbnet_start(void);        /* init lwIP/DHCP/TCP once, then run */
 void usbnet_stop(void);         /* drop the client, stop servicing */

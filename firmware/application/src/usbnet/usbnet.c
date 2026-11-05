@@ -4,7 +4,7 @@
  * lwIP (NO_SYS) runs on the TinyUSB CDC-ECM (or RNDIS) interface. The host gets
  * 192.168.16.2 from the built-in DHCP server; the device is 192.168.16.1.
  * TCP port USBNET_TCP_PORT carries the same framed CLI protocol as the CDC
- * serial port (python CLI: `hw connect -p tcp:192.168.16.1:6868`). One client
+ * serial port (python CLI: `hw connect -p tcp:192.168.16.1:18888`). One client
  * at a time; a new connection replaces the old one.
  *
  * Everything here runs from the main loop (usb_poll); nothing touches lwIP

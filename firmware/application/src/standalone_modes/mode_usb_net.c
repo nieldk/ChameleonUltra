@@ -3,10 +3,10 @@
  *
  * Standalone mode: USB Ethernet (CDC-ECM or RNDIS). While armed the device re-enumerates
  * with an extra network interface; the host gets 192.168.16.2 over DHCP and the
- * device answers at 192.168.16.1. TCP port 6868 carries the normal framed CLI
+ * device answers at 192.168.16.1. TCP port 18888 carries the normal framed CLI
  * protocol, so the python CLI connects with
  *
- *     hw connect -p tcp:192.168.16.1:6868
+ *     hw connect -p tcp:192.168.16.1:18888
  *
  * The CDC serial port stays available. While a TCP client is connected it owns
  * the command link and replies go to it. Disarm (TOGGLE button, `standalone
