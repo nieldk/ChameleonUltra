@@ -5249,7 +5249,7 @@ def relay_result_summary(sessions) -> str:
 @standalone.command('status')
 class StandaloneStatus(DeviceRequiredUnit):
     """
-    Show the current standalone state, mode, and flags.
+    Show the current standalone state, mode, flags and the mode's live status.
 
     Usage:
         standalone status
@@ -5277,6 +5277,15 @@ class StandaloneStatus(DeviceRequiredUnit):
             gc_hint = f"  {CY}(GC recommended){C0}" if dirty > 4 else ""
             print(f" flash: {used} words used  {pages} pages free  "
                   f"valid={valid} dirty={dirty}{gc_hint}")
+        try:
+            extra = self.cmd.standalone_get_status()
+        except Exception:
+            extra = []   # older firmware
+        if extra:
+            w = max(len(k) for k, _ in extra)
+            print(" status:")
+            for k, v in extra:
+                print(f"   {k:<{w}}  {v}")
         if mode == StandaloneMode.RELAY:
             try:
                 d = self.cmd.relay_get_diag()

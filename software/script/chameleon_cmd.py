@@ -2680,6 +2680,23 @@ class ChameleonCMD:
         import struct
         return [struct.unpack_from('<I', resp.data, i * 4)[0] for i in range(n)]
 
+    def standalone_get_status(self) -> list:
+        """Return the selected mode's status as [(key, value), ...].
+
+        Queries CMD 7014: UTF-8 "key=value" lines, generic ones first, then
+        the mode's own. Empty list on older firmware or when no mode is
+        selected.
+        """
+        resp = self.device.send_cmd_sync(Command.STANDALONE_GET_STATUS, b'')
+        if resp.status != Status.SUCCESS or not resp.data:
+            return []
+        out = []
+        for line in resp.data.decode('utf-8', errors='replace').splitlines():
+            key, sep, val = line.partition('=')
+            if sep:
+                out.append((key.strip(), val.strip()))
+        return out
+
     def standalone_get_available(self) -> list:
         """Return build-time availability for each mode, indexed by mode_id.
 

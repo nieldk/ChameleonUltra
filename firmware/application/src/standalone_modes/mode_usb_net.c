@@ -17,6 +17,7 @@
 
 #include "app_standalone.h"
 #include "usb_main.h"
+#include "usbnet.h"
 
 #include "nrf_log.h"
 
@@ -53,4 +54,5 @@ const standalone_mode_iface_t mode_usb_net_iface = {
     .read_result     = NULL,
     .clear_result    = NULL,
     .ensure_loaded   = NULL,
+    .get_status      = usbnet_get_status,
 };

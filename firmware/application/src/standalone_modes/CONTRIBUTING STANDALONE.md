@@ -257,6 +257,15 @@ has been read, signalling end-of-data to the host.
 Result buffers are RAM only and are lost on reboot. Document this for
 your users.
 
+### get_status(out, out_max) (optional)
+
+Called by `standalone status` (cmd 7014). Append `key=value` lines with
+`STATUS_KV(out, out_max, len, "key=%u\n", v)` and return the bytes written;
+keep it under about 250 bytes. The framework already adds `writes`/`opt_in`,
+`result` and `config` lines, so only report live state (link up, counters,
+last error). The CLI prints the lines as they come, so no host change is
+needed. Leave it NULL if there is nothing to add.
+
 ## Hardware constraints
 
 ### Antenna ownership

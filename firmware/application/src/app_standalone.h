@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -139,7 +140,16 @@ typedef struct standalone_mode_iface {
      * Called by standalone ls to show data for all modes without arming.
      * NULL for modes that produce no results (e.g. slot_cycle). */
     void              (*ensure_loaded)(void);
+    /* Optional: append "key=value\n" lines describing live state to out.
+     * Returns the bytes written (<= out_max - 1). Main context. */
+    size_t            (*get_status)(char *out, size_t out_max);
 } standalone_mode_iface_t;
+
+/* Append one "key=value\n" line to out at offset len (advances len). */
+#define STATUS_KV(out, max, len, ...) do { \
+        int n_ = snprintf((out) + (len), (max) - (len), __VA_ARGS__); \
+        if (n_ > 0) (len) += ((size_t)n_ < (max) - (len)) ? (size_t)n_ : (max) - (len) - 1; \
+    } while (0)
 
 /* -------------------------------------------------------------------------
  * Mode registry - extern decls. Conditionally compiled via the
@@ -183,6 +193,10 @@ uint8_t             app_standalone_get_flags(void);
 
 standalone_rc_t     app_standalone_set_mode(standalone_mode_t mode, uint8_t flags);
 bool                app_standalone_mode_available(standalone_mode_t mode);
+
+/* "key=value\n" lines for the selected mode (generic ones, then the mode's own).
+ * Returns the bytes written. */
+size_t              app_standalone_get_status(char *out, size_t out_max);
 
 standalone_rc_t     app_standalone_set_config(standalone_mode_t mode,
         const uint8_t *cfg, size_t cfg_len);

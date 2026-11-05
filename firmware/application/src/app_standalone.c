@@ -592,6 +592,34 @@ size_t app_standalone_get_result_avail(standalone_mode_t mode) {
     return m->get_result_size();
 }
 
+size_t app_standalone_get_status(char *out, size_t out_max) {
+    size_t len = 0;
+    if (out == NULL || out_max < 2) return 0;
+    out[0] = '\0';
+    const standalone_mode_iface_t *m = active_mode();
+    if (m == NULL) return 0;
+
+    if (m->writes_tag || m->writes_slot) {
+        STATUS_KV(out, out_max, len, "writes=%s%s opt_in=%s\n",
+                  m->writes_tag ? "tag" : "", m->writes_slot ? (m->writes_tag ? "+slot" : "slot") : "",
+                  (m_ctx.flags & STANDALONE_FLAG_HOST_OPTED_IN) ? "yes" : "NO");
+    }
+    if (m->get_result_size != NULL) {
+        STATUS_KV(out, out_max, len, "result=%u bytes\n", (unsigned)app_standalone_get_result_avail(m->id));
+    }
+    uint8_t cfg[STANDALONE_CONFIG_MAX_BYTES];
+    size_t  cfg_len = 0;
+    if (persist_config_load(m->id, cfg, sizeof(cfg), &cfg_len) == STANDALONE_RC_OK && cfg_len) {
+        STATUS_KV(out, out_max, len, "config=");
+        for (size_t i = 0; i < cfg_len; i++) STATUS_KV(out, out_max, len, "%02x", cfg[i]);
+        STATUS_KV(out, out_max, len, "\n");
+    } else {
+        STATUS_KV(out, out_max, len, "config=default\n");
+    }
+    if (m->get_status != NULL) len += m->get_status(out + len, out_max - len);
+    return len;
+}
+
 standalone_rc_t app_standalone_trigger(void) {
     if (m_ctx.mode == STANDALONE_MODE_DISABLED) return STANDALONE_RC_INVALID_STATE;
     if (m_ctx.state == STANDALONE_STATE_DISARMED) {

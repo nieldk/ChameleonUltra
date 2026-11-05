@@ -345,6 +345,21 @@ data_frame_tx_t *cmd_handler_standalone_get_available(uint16_t cmd, uint16_t sta
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(resp), resp);
 }
 
+/* 7014 GET_STATUS
+ * Request:  empty
+ * Response: UTF-8 text, one "key=value" per line: generic lines for the
+ *           selected mode, then the mode's own (empty if no mode selected).
+ */
+data_frame_tx_t *cmd_handler_standalone_get_status(uint16_t cmd, uint16_t status,
+        uint16_t length, uint8_t *data) {
+    (void)status;
+    (void)length;
+    (void)data;
+    char buf[384];
+    size_t n = app_standalone_get_status(buf, sizeof(buf));
+    return data_frame_make(cmd, STATUS_SUCCESS, n, (uint8_t *)buf);
+}
+
 /* 7008 RELAY_DIAG
  * Request:  empty
  * Response: { u32 adv_reports, u32 relay_hits, u8 ble_state, u8 ble_role,

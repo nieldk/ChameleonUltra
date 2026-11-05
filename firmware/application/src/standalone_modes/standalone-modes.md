@@ -583,6 +583,21 @@ Then run `hw connect -p tcp:<host-ip>:18888` on the other machine. Only one TCP
 client is accepted; a new connection replaces the current one. The port has no
 authentication, so restrict the source with `-s`.
 
+**Status.** `standalone status` shows USB profile, class, MTU, host
+enumeration, DHCP lease, TCP client and byte/frame counters:
+
+```
+ status:
+   usb         ethernet
+   class       ecm mtu=600
+   host_usb    configured
+   addr        192.168.16.1:18888
+   lease       192.168.16.2 02:43:55:12:34:56
+   tcp_client  connected accepted=1 rx=412 tx=1180 bytes
+   frames      rx 96 tx 71
+   errors      rx_drops 0 write_stalls 0
+```
+
 ---
 ## `--opt-in` and quiet flags
 

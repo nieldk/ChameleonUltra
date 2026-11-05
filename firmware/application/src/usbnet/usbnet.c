@@ -14,6 +14,7 @@
 #include "usbnet.h"
 #include "usb_main.h"
 #include "dataframe.h"
+#include "app_standalone.h"
 
 #include "tusb.h"
 #include "dhserver.h"
@@ -67,6 +68,9 @@ static uint16_t         m_rx_off;
 static bool             m_inited;
 static bool             m_running;
 
+static uint32_t m_st_rx_frames, m_st_tx_frames, m_st_drops, m_st_stalls;
+static uint32_t m_st_clients, m_st_tcp_rx, m_st_tcp_tx;
+
 APP_TIMER_DEF(m_wake_timer);
 
 /* lwIP time base: ms since boot from the app timer RTC */
@@ -90,6 +94,7 @@ static err_t linkoutput_fn(struct netif *netif, struct pbuf *p) {
         if (!tud_ready()) return ERR_USE;
         if (tud_network_can_xmit(p->tot_len)) {
             tud_network_xmit(p, 0);
+            m_st_tx_frames++;
             return ERR_OK;
         }
         if (sys_now() - start > 100u) return ERR_USE;
@@ -116,6 +121,9 @@ bool tud_network_recv_cb(const uint8_t *src, uint16_t size) {
             /* the pool is smaller than the MTU, so the frame can be chained */
             pbuf_take(p, src, size);
             m_rx_frame = p;
+            m_st_rx_frames++;
+        } else {
+            m_st_drops++;
         }
     }
     return true;
@@ -211,6 +219,7 @@ static err_t on_accept(void *arg, struct tcp_pcb *newpcb, err_t err) {
     tcp_recv(newpcb, on_recv);
     tcp_err(newpcb, on_err);
     data_frame_reset();
+    m_st_clients++;
     NRF_LOG_INFO("usbnet: client connected");
     return ERR_OK;
 }
@@ -232,6 +241,7 @@ static void rx_drain(void) {
             m_rx_off = 0;
         }
     }
+    m_st_tcp_rx += consumed;
     if (consumed && m_client) tcp_recved(m_client, consumed);
 }
 
@@ -263,6 +273,7 @@ void usbnet_write(const void *buf, uint16_t length) {
             if (tcp_write(m_client, p, n, TCP_WRITE_FLAG_COPY) == ERR_OK) {
                 p += n;
                 length -= n;
+                m_st_tcp_tx += n;
                 tcp_output(m_client);
                 last = sys_now();
                 continue;
@@ -272,6 +283,7 @@ void usbnet_write(const void *buf, uint16_t length) {
         tud_task();
         service_io();
         if (sys_now() - last > WRITE_STALL_MS) {
+            m_st_stalls++;
             NRF_LOG_WARNING("usbnet: write stalled, dropping client");
             client_abort();
             return;
@@ -346,4 +358,35 @@ void usbnet_stop(void) {
         m_rx_frame = NULL;
     }
     NRF_LOG_INFO("usbnet: down");
+}
+
+size_t usbnet_get_status(char *out, size_t out_max) {
+    size_t len = 0;
+    const uint8_t *mac = m_leases[0].mac;
+    bool leased = false;
+    for (int i = 0; i < 6; i++) leased |= mac[i] != 0;
+
+    STATUS_KV(out, out_max, len, "usb=%s\n", m_running ? "ethernet" : "serial-only (re-enumerating)");
+#if USBNET_RNDIS
+    STATUS_KV(out, out_max, len, "class=rndis mtu=%u\n", (unsigned)CFG_TUD_NET_MTU);
+#else
+    STATUS_KV(out, out_max, len, "class=ecm mtu=%u\n", (unsigned)CFG_TUD_NET_MTU);
+#endif
+    STATUS_KV(out, out_max, len, "host_usb=%s%s\n", tud_mounted() ? "configured" : "not configured",
+              tud_suspended() ? " (suspended)" : "");
+    STATUS_KV(out, out_max, len, "addr=192.168.16.1:%u\n", (unsigned)USBNET_TCP_PORT);
+    if (leased) {
+        STATUS_KV(out, out_max, len, "lease=192.168.16.2 %02x:%02x:%02x:%02x:%02x:%02x\n",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    } else {
+        STATUS_KV(out, out_max, len, "lease=none\n");
+    }
+    STATUS_KV(out, out_max, len, "tcp_client=%s accepted=%lu rx=%lu tx=%lu bytes\n",
+              m_client ? "connected" : "none", (unsigned long)m_st_clients,
+              (unsigned long)m_st_tcp_rx, (unsigned long)m_st_tcp_tx);
+    STATUS_KV(out, out_max, len, "frames=rx %lu tx %lu\n", (unsigned long)m_st_rx_frames,
+              (unsigned long)m_st_tx_frames);
+    STATUS_KV(out, out_max, len, "errors=rx_drops %lu write_stalls %lu\n", (unsigned long)m_st_drops,
+              (unsigned long)m_st_stalls);
+    return len;
 }
