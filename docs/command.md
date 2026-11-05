@@ -999,7 +999,7 @@ Get device chipset ID
 
 ### `hw connect`
 
-Connect to chameleon by serial port, TCP, or BLE. Examples: -p /dev/ttyACM0 | -p tcp:127.0.0.1:4321 | -p ble (scan) | -p ble:AA:BB:CC:DD:EE:FF (needs 'bleak')
+Connect to chameleon by serial port, TCP, or BLE. Examples: -p /dev/ttyACM0 | -p tcp:127.0.0.1:4321 | -p usbnet (usb-net mode, 192.168.16.1:18888) | -p ble (scan) | -p ble:AA:BB:CC:DD:EE:FF (needs 'bleak')
 
 - `-p`, `--port`
 
@@ -1897,6 +1897,8 @@ Read or write mode-specific config
 - `--sectors` — [dict-check] number of sectors to test (1-16)
 - `--port` — [usb-net] TCP port (1-65535, default 18888)
 - `--gateway` — [usb-net] DHCP offers the CU as default gateway (default off) (choices: on, off)
+- `--auto` — [usb-net] keep USB Ethernet on whenever USB is attached, beside any other mode (choices: on, off)
+- `--class` — [usb-net] host class: ecm (Linux, macOS), rndis (Windows), default = build default (choices: ecm, rndis, default)
 
 ### `standalone dict-check`
 

@@ -96,6 +96,12 @@ class ChameleonCom:
         if not self.isOpen():
             error = None
             try:
+                if port == 'usbnet' or port.startswith('usbnet:'):
+                    # usb_net mode: the CU is always 192.168.16.1; optional port (default 18888)
+                    p = port[7:] or '18888'
+                    if not p.isdigit():
+                        sys.exit(color_string(CR, 'Usage: usbnet[:port]'))
+                    port = f'tcp:192.168.16.1:{p}'
                 # open serial port
                 if port.startswith('tcp:'):
                     host, _, port = port[4:].partition(':')

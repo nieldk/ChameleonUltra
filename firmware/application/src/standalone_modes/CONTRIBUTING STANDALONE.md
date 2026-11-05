@@ -266,6 +266,12 @@ keep it under about 250 bytes. The framework already adds `writes`/`opt_in`,
 last error). The CLI prints the lines as they come, so no host change is
 needed. Leave it NULL if there is nothing to add.
 
+### on_config(cfg, cfg_len) (optional)
+
+Called after `standalone config` stored this mode's config, whether or not the
+mode is armed. Use it for settings that act on their own (usb_net applies its
+transport settings here and at boot). Leave it NULL otherwise.
+
 ## Hardware constraints
 
 ### Antenna ownership

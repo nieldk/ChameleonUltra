@@ -14,4 +14,6 @@ void usbnet_stop(void);         /* drop the client, stop servicing */
 void usbnet_link_down(void);    /* host detached or reconfigured the USB device */
 void usbnet_poll(void);         /* main loop: frames, timers, TCP -> data frames */
 bool usbnet_running(void);
+uint8_t usbnet_sources(void);          /* bit0: mode armed, bit1: stored auto setting */
+bool usbnet_class_rndis(void);         /* host class of the active profile (usb_main_tusb.c) */
 size_t usbnet_get_status(char *out, size_t out_max);   /* "key=value\n" lines */

@@ -1,4 +1,4 @@
-/* lwIP options for usb_net: one ECM/RNDIS netif, DHCP server, one TCP listener. */
+/* lwIP options for usb_net: one ECM/RNDIS netif, DHCP server, mDNS name, one TCP listener. */
 #pragma once
 
 #define NO_SYS                  1
@@ -19,7 +19,17 @@
 #define LWIP_DHCP               0
 #define LWIP_AUTOIP             0
 #define LWIP_DNS                0
-#define LWIP_IGMP               0
+#define LWIP_IGMP               1   /* mDNS joins 224.0.0.251 */
+#define LWIP_MDNS_RESPONDER     1
+#define LWIP_MDNS_SEARCH        0
+#define MDNS_MAX_SERVICES       1
+#define MDNS_MAX_STORED_PKTS    2
+#define LWIP_NUM_NETIF_CLIENT_DATA 1
+#define MEMP_NUM_IGMP_GROUP     2
+#define MEMP_NUM_SYS_TIMEOUT    (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 2)
+
+unsigned long usbnet_rand(void);
+#define LWIP_RAND()             ((u32_t)usbnet_rand())
 #define LWIP_NETCONN            0
 #define LWIP_SOCKET             0
 #define LWIP_STATS              0
@@ -31,7 +41,7 @@
 #define MEMP_NUM_TCP_PCB        3
 #define MEMP_NUM_TCP_PCB_LISTEN 1
 #define MEMP_NUM_TCP_SEG        8
-#define MEMP_NUM_UDP_PCB        1
+#define MEMP_NUM_UDP_PCB        2   /* DHCP server, mDNS */
 
 #define PBUF_POOL_SIZE          4
 #define PBUF_POOL_BUFSIZE       600

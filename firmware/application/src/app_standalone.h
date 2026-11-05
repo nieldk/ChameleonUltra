@@ -143,6 +143,8 @@ typedef struct standalone_mode_iface {
     /* Optional: append "key=value\n" lines describing live state to out.
      * Returns the bytes written (<= out_max - 1). Main context. */
     size_t            (*get_status)(char *out, size_t out_max);
+    /* Optional: called after this mode's config was stored, armed or not. */
+    void              (*on_config)(const uint8_t *cfg, size_t cfg_len);
 } standalone_mode_iface_t;
 
 /* Append one "key=value\n" line to out at offset len (advances len). */

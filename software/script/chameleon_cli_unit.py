@@ -127,6 +127,7 @@ class HWConnect(BaseCLIUnit):
         parser = ArgumentParserNoExit()
         parser.description = ("Connect to chameleon by serial port, TCP, or BLE. "
                               "Examples: -p /dev/ttyACM0 | -p tcp:127.0.0.1:4321 | "
+                              "-p usbnet (usb-net mode, 192.168.16.1:18888) | "
                               "-p ble (scan) | -p ble:AA:BB:CC:DD:EE:FF (needs 'bleak')")
         parser.add_argument("-p", "--port", type=str, required=False)
         return parser
@@ -5947,6 +5948,7 @@ class StandaloneConfig(DeviceRequiredUnit):
         standalone config dict-check --sectors 16
         standalone config usb-net --port 19999
         standalone config usb-net --gateway on
+        standalone config usb-net --auto on --class rndis
     """
 
     def args_parser(self) -> ArgumentParserNoExit:
@@ -5980,6 +5982,10 @@ class StandaloneConfig(DeviceRequiredUnit):
                             help='[usb-net] TCP port (1-65535, default 18888)')
         parser.add_argument('--gateway', choices=['on', 'off'], default=None,
                             help='[usb-net] DHCP offers the CU as default gateway (default off)')
+        parser.add_argument('--auto', choices=['on', 'off'], default=None,
+                            help='[usb-net] keep USB Ethernet on whenever USB is attached, beside any other mode')
+        parser.add_argument('--class', dest='net_class', choices=['ecm', 'rndis', 'default'], default=None,
+                            help='[usb-net] host class: ecm (Linux, macOS), rndis (Windows), default = build default')
         return parser
 
     def on_exec(self, args):
@@ -6099,23 +6105,29 @@ class StandaloneConfig(DeviceRequiredUnit):
 
         if mode == StandaloneMode.USB_NET:
             if any(v is not None for v in (args.block, args.key_type, args.key, args.timeout)):
-                print(color_string((CR, "usb-net config uses only --port and --gateway")))
+                print(color_string((CR, "usb-net config uses only --port, --gateway, --auto, --class")))
                 return
+            # flags: bit0 gateway, bit1 auto, bits2-3 class (0 default, 1 ecm, 2 rndis)
             blob = self.cmd.standalone_get_config(mode)
             ver, flags, port = (struct.unpack('<BBH', blob[:4]) if blob and len(blob) >= 4
                                 else (1, 0, 0))
-            if args.port is not None or args.gateway is not None:
+            cls_names = {0: 'default', 1: 'ecm', 2: 'rndis'}
+            if any(v is not None for v in (args.port, args.gateway, args.auto, args.net_class)):
                 if args.port is not None:
                     if not (1 <= args.port <= 65535):
                         print(color_string((CR, "port must be 1..65535")))
                         return
                     port = args.port
-                if args.gateway is not None:
-                    flags = (flags | 1) if args.gateway == 'on' else (flags & ~1)
+                for opt, bit in ((args.gateway, 1), (args.auto, 2)):
+                    if opt is not None:
+                        flags = (flags | bit) if opt == 'on' else (flags & ~bit)
+                if args.net_class is not None:
+                    cls = {v: k for k, v in cls_names.items()}[args.net_class]
+                    flags = (flags & ~0x0C) | (cls << 2)
                 resp = self.cmd.standalone_set_config(mode, struct.pack('<BBH', 1, flags, port))
                 if resp.status == Status.SUCCESS:
-                    print(color_string((CG, f"usb-net port {port or 18888}, gateway "
-                                            f"{'on' if flags & 1 else 'off'} (applies on next arm)")))
+                    print(color_string((CG, "usb-net config stored; applied now"
+                                            + (" (USB re-enumerates)" if args.auto or args.net_class else ""))))
                 else:
                     print(color_string((CR, f"set-config failed: status={resp.status}")))
                 return
@@ -6124,8 +6136,10 @@ class StandaloneConfig(DeviceRequiredUnit):
                 print(f"  version:  {ver}")
                 print(f"  port:     {port or 18888}")
                 print(f"  gateway:  {'on' if flags & 1 else 'off'}")
+                print(f"  auto:     {'on' if flags & 2 else 'off'}")
+                print(f"  class:    {cls_names.get((flags >> 2) & 3, '?')}")
             else:
-                print(color_string((CY, "no persisted config — default port 18888, gateway off")))
+                print(color_string((CY, "no persisted config — port 18888, gateway off, auto off, class = build default")))
             return
 
         if mode == StandaloneMode.READ_REPLAY:

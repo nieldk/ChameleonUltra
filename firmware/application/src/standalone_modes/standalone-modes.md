@@ -524,51 +524,75 @@ the master key; it persists, so credentials survive reboots.
 ---
 ## `usb-net` ,  USB Ethernet, CLI over TCP  *(Lite + Ultra, TinyUSB build)*
 
-Arms a USB Ethernet interface (CDC-ECM or RNDIS) next to the serial port. The host gets
-`192.168.16.2` from a built-in DHCP server, the device is `192.168.16.1`, and
-TCP port `18888` carries the normal framed CLI protocol:
+Adds a USB Ethernet interface (CDC-ECM or RNDIS) next to the serial port. The
+host gets `192.168.16.2` from a built-in DHCP server, the device is
+`192.168.16.1` (also `chameleon.local` over mDNS), and TCP port `18888` carries
+the normal framed CLI protocol:
 
 ```
-standalone set-mode usb-net
-standalone trigger                  # USB re-enumerates after ~1 s
-hw connect -p tcp:192.168.16.1:18888
-standalone disarm                   # back to serial only (also over TCP)
+standalone config usb-net --auto on     # once: on whenever USB is attached
+hw connect -p usbnet                    # = tcp:192.168.16.1:18888
 ```
+
+It is a transport, not an exclusive mode. Two ways to turn it on:
+- **`--auto on`** (stored): the interface is up from boot whenever the cable is
+  attached, beside whatever mode is armed (authtrace, canary, ...). Nothing to arm.
+- **Arming the `usb-net` mode** (`standalone set-mode usb-net`, `standalone trigger`):
+  on for the session, off again on disarm unless `--auto` is on.
+
+Turning it on or off, or changing the class, re-enumerates the USB device (about
+1 s) and drops an open serial session.
 
 **Build:** off by default. It replaces the nRF SDK USB stack with TinyUSB and
 lwIP (pinned, fetched by `firmware/fetch_usbnet_deps.sh` into `firmware/deps/`):
 
 ```
 ./fetch_usbnet_deps.sh
-STANDALONE_USB_NET=1 ./build.sh                       # ecm: Linux, macOS
-STANDALONE_USB_NET=1 USBNET_CLASS=rndis ./build.sh    # rndis: Windows, Linux
+STANDALONE_USB_NET=1 ./build.sh
 ```
 
 The CDC serial port keeps working with the same VID/PID. While a TCP client is
 connected it owns the command link and replies go to it; a new connection
-replaces the old one. BLE is unaffected, so the mode can be armed from the web
-console. Arming and disarming re-enumerate the USB device, which drops a serial
-session that was open at that moment.
+replaces the old one. BLE is unaffected.
 
-**Costs and limits:** about 10 KB of RAM on Ultra (12 KB with rndis) (check `free before stack`
-in the linker map before combining with other modes; the link fails with
-"region RAM overflowed" when it does not fit). The host class is chosen at
-build time: `USBNET_CLASS=ecm` (default; Linux, macOS) or `USBNET_CLASS=rndis`
-(Windows, Linux; not macOS). The MTU defaults to 600 for ecm and 1514 for rndis
-(Windows rejects RNDIS with 600; override with `USBNET_MTU`; 1514 costs about
-1.8 KB more RAM). One client at a time, no authentication: the
-interface only exists on the USB cable. **Config:** `--port` (TCP port, default 18888) and `--gateway on|off` (DHCP offers
-the CU, 192.168.16.1, as default router; default off), applied on the next arm,
-e.g. `standalone config usb-net --port 19999 --gateway on`. With the gateway on,
-some hosts (NetworkManager, for one) prefer the USB adapter's default route over
-their real one and lose internet; the CU does not route traffic. **Buttons:** TOGGLE =
-arm/disarm. **Produces no results.** No `--opt-in` needed.
+**Config** (`standalone config usb-net ...`, applied immediately):
+- `--auto on|off`: always-on transport (default off).
+- `--class ecm|rndis|default`: host class. ECM for Linux and macOS, RNDIS for
+  Windows. `default` is the build default (`USBNET_CLASS`, ecm unless set).
+- `--port N`: TCP port (default 18888).
+- `--gateway on|off`: DHCP offers the CU, 192.168.16.1, as default router
+  (default off). Some hosts (NetworkManager, for one) prefer the USB adapter's
+  default route over their real one and lose internet; the CU does not route.
 
-**Reaching the CU from other machines.** The DHCP reply carries no gateway or
-DNS, so the CU has no route beyond 192.168.16.0/24 and cannot share the host's
-internet. To let another machine use the CU, relay port 18888 on the host
-(`ssh -L` or `socat`), or DNAT it. The MASQUERADE rule is required, because the
-CU has no default route:
+**Costs and limits:** about 12 KB of RAM on Ultra (check `free before stack` in
+the linker map before combining with other modes; the link fails with "region
+RAM overflowed" when it does not fit) and about 45 KB of flash (about 50 KB stay free on Ultra). The MTU is 1514
+(`USBNET_MTU` to change; RNDIS needs full size on Windows). One client at a
+time, no authentication: the interface only exists on the USB cable.
+**Buttons:** TOGGLE = arm/disarm. **Produces no results.** No `--opt-in` needed.
+
+**Status.** `standalone status` shows the USB profile, class, MTU, host
+enumeration, mDNS name, DHCP lease, TCP client and byte/frame counters. When
+another mode is selected the same lines appear as `net_*`:
+
+```
+ status:
+   usb         ethernet on=auto
+   class       ecm mtu=1514
+   host_usb    configured
+   name        chameleon.local
+   addr        192.168.16.1:18888 gateway=none
+   lease       192.168.16.2 02:43:55:12:34:56
+   tcp_client  connected accepted=1 rx=412 tx=1180 bytes
+   frames      rx 96 tx 71
+   errors      rx_drops 0 write_stalls 0
+```
+
+**Reaching the CU from other machines.** The DHCP reply carries no DNS, and no
+gateway unless `--gateway on`, so the CU has no route beyond 192.168.16.0/24 and
+cannot share the host's internet. To let another machine use the CU, relay port
+18888 on the host (`ssh -L` or `socat`), or DNAT it. The MASQUERADE rule is
+required, because the CU has no default route:
 
 ```
 sysctl -w net.ipv4.ip_forward=1
@@ -586,21 +610,6 @@ iptables -A FORWARD -i <usb-if> -o <lan> -m conntrack --ctstate ESTABLISHED,RELA
 Then run `hw connect -p tcp:<host-ip>:18888` on the other machine. Only one TCP
 client is accepted; a new connection replaces the current one. The port has no
 authentication, so restrict the source with `-s`.
-
-**Status.** `standalone status` shows USB profile, class, MTU, host
-enumeration, DHCP lease, TCP client and byte/frame counters:
-
-```
- status:
-   usb         ethernet
-   class       ecm mtu=600
-   host_usb    configured
-   addr        192.168.16.1:18888
-   lease       192.168.16.2 02:43:55:12:34:56
-   tcp_client  connected accepted=1 rx=412 tx=1180 bytes
-   frames      rx 96 tx 71
-   errors      rx_drops 0 write_stalls 0
-```
 
 ---
 ## `--opt-in` and quiet flags

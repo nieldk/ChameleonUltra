@@ -15,11 +15,14 @@ void usb_poll(void);
 
 /* usb_net standalone mode: CLI frames over a TCP stream on USB Ethernet. */
 #if CONFIG_STANDALONE_USB_NET
-void usbnet_enable(bool on);          /* switch USB profile; applied from usb_poll() */
+void usbnet_enable(bool on);          /* session override (usb_net mode armed); applied from usb_poll() */
+void usbnet_configure(bool auto_on, bool rndis);   /* persisted settings: always-on, host class */
+void usbnet_boot(void);               /* apply the stored config; call before usb_power_events_enable() */
 bool usbnet_client_active(void);      /* a TCP client is connected */
 void usbnet_write(const void *p_buf, uint16_t length);
 #else
 #define usbnet_client_active() false
+#define usbnet_boot() ((void)0)
 #define usbnet_write(buf, len) ((void)0)
 #endif
 

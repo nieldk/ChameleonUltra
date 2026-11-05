@@ -3,8 +3,9 @@
  * STANDALONE_USB_NET=1.
  *
  * Normal profile: one CDC-ACM serial port, same VID/PID and API as usb_main.c.
- * usb_net profile: CDC-ACM + CDC-ECM or RNDIS Ethernet. Entering or leaving the mode
- * re-enumerates the device with the other configuration descriptor.
+ * usb_net profile: CDC-ACM + CDC-ECM or RNDIS Ethernet. Turning it on or off, or
+ * changing the host class, re-enumerates the device with the other configuration
+ * descriptor. It is on when the usb_net mode is armed or the stored config says auto.
  */
 
 #include "usb_main.h"
@@ -75,25 +76,32 @@ static const uint8_t k_cfg_cdc[] = {
     TUD_CDC_DESCRIPTOR(0, 0, EP_CDC_NOTIF, 8, EP_CDC_OUT, EP_CDC_IN, 64),
 };
 
-#if USBNET_RNDIS
-static const uint8_t k_cfg_net[] = {
+static const uint8_t k_cfg_rndis[] = {
     TUD_CONFIG_DESCRIPTOR(1, 4, 0, TUD_CONFIG_DESC_LEN + TUD_RNDIS_DESC_LEN + TUD_CDC_DESC_LEN,
                           TUSB_DESC_CONFIG_ATT_SELF_POWERED, 100),
     TUD_RNDIS_DESCRIPTOR(0, STR_NET, EP_NET_NOTIF, 8, EP_NET_OUT, EP_NET_IN,
                          CFG_TUD_NET_ENDPOINT_SIZE),
     TUD_CDC_DESCRIPTOR(2, 0, EP_CDC_NOTIF, 8, EP_CDC_OUT, EP_CDC_IN, 64),
 };
-#else
-static const uint8_t k_cfg_net[] = {
+
+static const uint8_t k_cfg_ecm[] = {
     TUD_CONFIG_DESCRIPTOR(1, 4, 0, TUD_CONFIG_DESC_LEN + TUD_CDC_ECM_DESC_LEN + TUD_CDC_DESC_LEN,
                           TUSB_DESC_CONFIG_ATT_SELF_POWERED, 100),
     TUD_CDC_ECM_DESCRIPTOR(0, STR_NET, STR_MAC, EP_NET_NOTIF, 64, EP_NET_OUT, EP_NET_IN,
                            CFG_TUD_NET_ENDPOINT_SIZE, CFG_TUD_NET_MTU),
     TUD_CDC_DESCRIPTOR(2, 0, EP_CDC_NOTIF, 8, EP_CDC_OUT, EP_CDC_IN, 64),
 };
+
+#ifndef USBNET_DEFAULT_RNDIS
+#define USBNET_DEFAULT_RNDIS 0
 #endif
 
 static bool m_net_profile;                   /* descriptor set the host currently sees */
+static bool m_net_rndis;                     /* host class of that descriptor */
+static bool m_cls_rndis = USBNET_DEFAULT_RNDIS;   /* class for the next network profile */
+static bool m_auto;                          /* stored config: always on */
+static volatile bool m_session;              /* usb_net mode armed */
+static bool m_started;                       /* tud_init() done: the host may be enumerating */
 
 const uint8_t *tud_descriptor_device_cb(void) {
     return (const uint8_t *)&k_device;
@@ -101,7 +109,8 @@ const uint8_t *tud_descriptor_device_cb(void) {
 
 const uint8_t *tud_descriptor_configuration_cb(uint8_t index) {
     if (index) return NULL;
-    return m_net_profile ? k_cfg_net : k_cfg_cdc;
+    if (!m_net_profile) return k_cfg_cdc;
+    return m_net_rndis ? k_cfg_rndis : k_cfg_ecm;
 }
 
 static void hex(char *out, uint32_t v, int digits) {
@@ -251,7 +260,6 @@ bool is_usb_working(void) {
 /* ------------------------------------------------------------------------ */
 
 enum { SW_IDLE, SW_WAIT_DISCONNECT, SW_WAIT_CONNECT };
-static volatile bool m_want_net;
 static volatile bool m_switch_req;
 static uint8_t       m_switch_state = SW_IDLE;
 static uint32_t      m_switch_t;
@@ -259,9 +267,37 @@ static uint32_t      m_switch_t;
 #define SWITCH_FLUSH_MS    300u              /* let the command ack leave first */
 #define SWITCH_DETACH_MS   500u              /* host must see the detach */
 
+static bool want_net(void) {
+    return m_session || m_auto;
+}
+
+static bool profile_current(void) {
+    return want_net() == m_net_profile && (!m_net_profile || m_cls_rndis == m_net_rndis);
+}
+
+static void apply_profile(void);
+
 void usbnet_enable(bool on) {
-    m_want_net = on;
+    m_session = on;
     m_switch_req = true;
+}
+
+void usbnet_configure(bool auto_on, bool rndis) {
+    m_auto = auto_on;
+    m_cls_rndis = rndis;
+    if (!m_started) {                        /* boot: nothing has enumerated yet */
+        if (!profile_current()) apply_profile();
+        return;
+    }
+    m_switch_req = true;
+}
+
+uint8_t usbnet_sources(void) {
+    return (m_session ? 1 : 0) | (m_auto ? 2 : 0);
+}
+
+bool usbnet_class_rndis(void) {
+    return m_net_rndis;
 }
 
 static bool elapsed(uint32_t since, uint32_t ms) {
@@ -269,7 +305,8 @@ static bool elapsed(uint32_t since, uint32_t ms) {
 }
 
 static void apply_profile(void) {
-    m_net_profile = m_want_net;
+    m_net_profile = want_net();
+    m_net_rndis = m_cls_rndis;
     if (m_net_profile) usbnet_start(); else usbnet_stop();
 }
 
@@ -278,7 +315,7 @@ static void switch_step(void) {
         case SW_IDLE:
             if (!m_switch_req) return;
             m_switch_req = false;
-            if (m_want_net == m_net_profile) return;
+            if (profile_current()) return;
             if (!g_usb_connected) {          /* no host on the cable: nothing to re-enumerate */
                 apply_profile();
                 return;
@@ -319,6 +356,7 @@ void usb_cdc_init(void) {
 void usb_power_events_enable(void) {
     NVIC_SetPriority(USBD_IRQn, 6);
     APP_ERROR_CHECK_BOOL(tud_init(0));
+    m_started = true;
     static const nrf_drv_power_usbevt_config_t cfg = { .handler = power_evt };
     APP_ERROR_CHECK(nrf_drv_power_usbevt_init(&cfg));
 

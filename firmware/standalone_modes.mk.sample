@@ -33,5 +33,5 @@
 # GDB_GATEWAY_PKT            ?= 0x800   # RSP PacketSize; raise for faster bulk reads, more RAM (default 0x200)
 
 # usb_net tuning (only matters when STANDALONE_USB_NET=1):
-# USBNET_CLASS               ?= ecm     # ecm = Linux, macOS; rndis = Windows, Linux
-# USBNET_MTU                 ?= 1514    # default 600 (ecm) or 1514 (rndis, Windows needs it); 1514 = ~1.8 KB more RAM
+# USBNET_CLASS               ?= ecm     # default host class (changeable at run time with `standalone config usb-net --class`)
+# USBNET_MTU                 ?= 1514    # USB Ethernet frame size (default 1514; 600 saves ~1.8 KB RAM but Windows RNDIS needs 1514)

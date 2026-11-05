@@ -1150,6 +1150,7 @@ int main(void) {
     BOOT_STEP("tag");
     rgb_marquee_init();       // Light effect initialization
     app_standalone_init();    // Standalone (host-less) mode subsystem
+    usbnet_boot();            // usb_net: apply stored config before USB enumerates
     BOOT_STEP("standalone");
 
     ble_passkey_init();       // init ble connect key.

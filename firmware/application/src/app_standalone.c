@@ -456,7 +456,12 @@ standalone_rc_t app_standalone_set_config(standalone_mode_t mode,
         const uint8_t *cfg, size_t cfg_len) {
     if (mode >= STANDALONE_MODE__COUNT) return STANDALONE_RC_INVALID_CFG;
     if (cfg == NULL && cfg_len > 0)     return STANDALONE_RC_INVALID_CFG;
-    return persist_config_save(mode, cfg, cfg_len);
+    standalone_rc_t rc = persist_config_save(mode, cfg, cfg_len);
+    if (rc == STANDALONE_RC_OK) {
+        const standalone_mode_iface_t *m = find_mode(mode);
+        if (m != NULL && m->on_config != NULL) m->on_config(cfg, cfg_len);
+    }
+    return rc;
 }
 
 standalone_rc_t app_standalone_get_config(standalone_mode_t mode,

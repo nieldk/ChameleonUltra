@@ -714,15 +714,11 @@ ifeq ($(strip $(STANDALONE_USB_NET)),1)
 USBNET_DEPS ?= ../deps
 USBNET_CLASS ?= ecm
 USBNET_CLASS := $(strip $(USBNET_CLASS))
-# Windows rejects RNDIS with a small MTU
-ifeq ($(USBNET_CLASS),rndis)
 USBNET_MTU  ?= 1514
-else
-USBNET_MTU  ?= 600
-endif
 USBNET_MTU  := $(strip $(USBNET_MTU))
+# USBNET_CLASS is only the default; `standalone config usb-net --class` overrides it
 ifeq ($(USBNET_CLASS),rndis)
-CFLAGS      += -DUSBNET_RNDIS=1
+CFLAGS      += -DUSBNET_DEFAULT_RNDIS=1
 else ifneq ($(USBNET_CLASS),ecm)
 $(error USBNET_CLASS must be ecm or rndis)
 endif
@@ -756,6 +752,9 @@ SRC_FILES += \
   $(TINYUSB)/lib/networking/dhserver.c \
   $(wildcard $(LWIP)/src/core/*.c) \
   $(filter-out $(LWIP)/src/core/ipv4/dhcp.c,$(wildcard $(LWIP)/src/core/ipv4/*.c)) \
+  $(LWIP)/src/apps/mdns/mdns.c \
+  $(LWIP)/src/apps/mdns/mdns_domain.c \
+  $(LWIP)/src/apps/mdns/mdns_out.c \
   $(LWIP)/src/netif/ethernet.c
 INC_FOLDERS += \
   $(PROJ_DIR)/usbnet \

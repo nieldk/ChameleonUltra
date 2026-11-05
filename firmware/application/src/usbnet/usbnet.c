@@ -25,6 +25,8 @@
 #include "lwip/etharp.h"
 #include "lwip/tcp.h"
 #include "lwip/timeouts.h"
+#include "lwip/apps/mdns.h"
+#include "nrf.h"
 #include "netif/ethernet.h"
 
 #include <string.h>
@@ -67,6 +69,7 @@ static struct pbuf     *m_rx_q;          /* TCP payload not yet in the frame par
 static uint16_t         m_rx_off;
 static bool             m_inited;
 static bool             m_running;
+static bool             m_timer_on;      /* wake timer runs only while a host is enumerated */
 
 static uint16_t m_port = USBNET_TCP_PORT;
 
@@ -74,6 +77,16 @@ static uint32_t m_st_rx_frames, m_st_tx_frames, m_st_drops, m_st_stalls;
 static uint32_t m_st_clients, m_st_tcp_rx, m_st_tcp_tx;
 
 APP_TIMER_DEF(m_wake_timer);
+
+/* Random numbers for mDNS probing: xorshift seeded from the device address */
+unsigned long usbnet_rand(void) {
+    static uint32_t x;
+    if (x == 0) x = NRF_FICR->DEVICEADDR[0] ^ (NRF_FICR->DEVICEADDR[1] << 16) ^ app_timer_cnt_get() ^ 0x9e3779b9u;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    return x;
+}
 
 /* lwIP time base: ms since boot from the app timer RTC */
 u32_t sys_now(void) {
@@ -106,7 +119,8 @@ static err_t linkoutput_fn(struct netif *netif, struct pbuf *p) {
 
 static err_t netif_init_cb(struct netif *netif) {
     netif->mtu        = CFG_TUD_NET_MTU;
-    netif->flags      = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_LINK_UP | NETIF_FLAG_UP;
+    netif->flags      = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_IGMP |
+                        NETIF_FLAG_LINK_UP | NETIF_FLAG_UP;
     netif->state      = NULL;
     netif->name[0]    = 'E';
     netif->name[1]    = 'X';
@@ -296,9 +310,18 @@ void usbnet_write(const void *buf, uint16_t length) {
 
 void usbnet_poll(void) {
     if (!m_running) return;
-    if (!tud_ready()) {
+    if (!tud_ready()) {                      /* no host: no periodic wake-ups either */
         if (m_client) client_abort();
+        if (m_timer_on) {
+            (void)app_timer_stop(m_wake_timer);
+            m_timer_on = false;
+        }
         return;
+    }
+    if (!m_timer_on) {
+        APP_ERROR_CHECK(app_timer_start(m_wake_timer, APP_TIMER_TICKS(WAKE_PERIOD_MS), NULL));
+        m_timer_on = true;
+        mdns_resp_restart(&m_netif);         /* host just enumerated: announce again */
     }
     service_io();
     rx_drain();
@@ -310,6 +333,14 @@ bool usbnet_running(void) {
 
 static void wake_handler(void *ctx) {
     (void)ctx;                               /* the interrupt wakes the main loop */
+}
+
+#define MDNS_HOSTNAME "chameleon"
+static s8_t m_mdns_svc = -1;
+
+static void mdns_publish(void) {
+    if (m_mdns_svc >= 0) mdns_resp_del_service(&m_netif, (u8_t)m_mdns_svc);
+    m_mdns_svc = mdns_resp_add_service(&m_netif, MDNS_HOSTNAME, "_chameleon", DNSSD_PROTO_TCP, m_port, NULL, NULL);
 }
 
 static void listen_start(void) {
@@ -334,6 +365,7 @@ void usbnet_set_port(uint16_t port) {
     if (port == m_port) return;
     m_port = port;
     if (m_inited) {                          /* already listening: move the listener */
+        mdns_publish();
         if (m_client) client_abort();
         if (m_listen) {
             tcp_close(m_listen);
@@ -363,19 +395,23 @@ void usbnet_start(void) {
         if (dhserv_init(&m_dhcp) != ERR_OK) NRF_LOG_ERROR("usbnet: dhcp server init failed");
 
         listen_start();
+        mdns_resp_init();
+        if (mdns_resp_add_netif(&m_netif, MDNS_HOSTNAME) == ERR_OK) mdns_publish();
         APP_ERROR_CHECK(app_timer_create(&m_wake_timer, APP_TIMER_MODE_REPEATED, wake_handler));
         m_inited = true;
     }
 
     m_running = true;
-    APP_ERROR_CHECK(app_timer_start(m_wake_timer, APP_TIMER_TICKS(WAKE_PERIOD_MS), NULL));
     NRF_LOG_INFO("usbnet: up, 192.168.16.1:%d", m_port);
 }
 
 void usbnet_stop(void) {
     if (!m_running) return;
     m_running = false;
-    (void)app_timer_stop(m_wake_timer);
+    if (m_timer_on) {
+        (void)app_timer_stop(m_wake_timer);
+        m_timer_on = false;
+    }
     if (m_client) client_abort();
     if (m_rx_frame) {
         pbuf_free(m_rx_frame);
@@ -390,14 +426,14 @@ size_t usbnet_get_status(char *out, size_t out_max) {
     bool leased = false;
     for (int i = 0; i < 6; i++) leased |= mac[i] != 0;
 
-    STATUS_KV(out, out_max, len, "usb=%s\n", m_running ? "ethernet" : "serial-only (re-enumerating)");
-#if USBNET_RNDIS
-    STATUS_KV(out, out_max, len, "class=rndis mtu=%u\n", (unsigned)CFG_TUD_NET_MTU);
-#else
-    STATUS_KV(out, out_max, len, "class=ecm mtu=%u\n", (unsigned)CFG_TUD_NET_MTU);
-#endif
+    uint8_t src = usbnet_sources();
+    STATUS_KV(out, out_max, len, "usb=%s on=%s%s%s\n", m_running ? "ethernet" : "serial-only (re-enumerating)",
+              (src & 1) ? "mode" : "", (src == 3) ? "+" : "", (src & 2) ? "auto" : "");
+    STATUS_KV(out, out_max, len, "class=%s mtu=%u\n", usbnet_class_rndis() ? "rndis" : "ecm",
+              (unsigned)CFG_TUD_NET_MTU);
     STATUS_KV(out, out_max, len, "host_usb=%s%s\n", tud_mounted() ? "configured" : "not configured",
               tud_suspended() ? " (suspended)" : "");
+    STATUS_KV(out, out_max, len, "name=%s.local\n", MDNS_HOSTNAME);
     STATUS_KV(out, out_max, len, "addr=192.168.16.1:%u gateway=%s\n", (unsigned)m_port,
               m_dhcp.router.addr ? "offered" : "none");
     if (leased) {
