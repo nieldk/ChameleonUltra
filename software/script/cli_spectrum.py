@@ -6,9 +6,18 @@ spectrum --start/--end`). Arm the mode, `standalone trigger` starts a sweep,
 then `standalone spectrum plot` reads and plots it. Result format: u8
 version=2, u16 start_mhz LE, u8 count, then `count` raw EDSAMPLE bytes (point
 i == start_mhz+i MHz) -- see sa_radio.c / mode_spectrum.c.
+
+Peak classification (classify_peaks) is host-side only -- the firmware never
+demodulates anything, it's pure energy-detect. Peaks are labeled by width and
+center frequency against known channel plans (WiFi ~20MHz blocks, Zigbee
+2MHz-wide channels every 5MHz, BLE advertising channels) -- a heuristic
+guess, not a decode. Two real signals can still collide into one peak or one
+signal can split into two if it dips mid-band; treat labels as a hint, not
+ground truth.
 """
 
 import argparse
+import statistics
 
 from chameleon_enum import StandaloneMode
 
@@ -16,6 +25,65 @@ from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, standalone, color
 
 START_MHZ = 2400     # default full-band start, used only as a display fallback
 POINT_COUNT = 84      # default full-band count
+
+# 2.4 GHz channel plans used for peak classification (center frequencies, MHz).
+WIFI_CHANNELS = {ch: 2412 + 5 * (ch - 1) for ch in range(1, 14)}      # 1-13, 20MHz nominal width
+ZIGBEE_CHANNELS = {ch: 2405 + 5 * (ch - 11) for ch in range(11, 27)}  # 11-26, 2MHz occupied width
+BLE_ADV_CHANNELS = {37: 2402, 38: 2426, 39: 2480}                    # advertising channels only
+
+
+def _classify_one(center: float, width: int) -> str:
+    """Width-first heuristic: wide -> WiFi-shaped, narrow -> Zigbee/BLE-shaped."""
+    if width >= 15:
+        ch, f = min(WIFI_CHANNELS.items(), key=lambda kv: abs(kv[1] - center))
+        if abs(f - center) <= 11:
+            return f"WiFi ch{ch} (~{f} MHz)"
+        return "wideband (WiFi-shaped, channel unclear)"
+    if width <= 4:
+        ch, f = min(ZIGBEE_CHANNELS.items(), key=lambda kv: abs(kv[1] - center))
+        if abs(f - center) <= 2:
+            return f"Zigbee ch{ch} (~{f} MHz)"
+        ch, f = min(BLE_ADV_CHANNELS.items(), key=lambda kv: abs(kv[1] - center))
+        if abs(f - center) <= 2:
+            return f"BLE advertising ch{ch} (~{f} MHz)"
+        return "narrowband (BT/BLE-shaped)"
+    return "mid-width (unclassified)"
+
+
+def classify_peaks(freqs, vals):
+    """Finds contiguous above-threshold runs and labels each by width/center.
+
+    Threshold is the median (resists being pulled up by the peaks themselves)
+    plus a margin scaled to how far above baseline the busiest point is.
+    Returns a list of dicts: start, end, center, width (MHz), peak (raw
+    EDSAMPLE), label. Empty list if nothing clears the threshold.
+    """
+    if not vals:
+        return []
+    baseline = statistics.median(vals)
+    threshold = baseline + max(2, (max(vals) - baseline) * 0.3)
+    runs = []
+    start_i = None
+    for i, v in enumerate(vals):
+        if v > threshold:
+            if start_i is None:
+                start_i = i
+        elif start_i is not None:
+            runs.append((start_i, i - 1))
+            start_i = None
+    if start_i is not None:
+        runs.append((start_i, len(vals) - 1))
+
+    peaks = []
+    for s, e in runs:
+        f_start, f_end = freqs[s], freqs[e]
+        width = f_end - f_start + 1
+        center = (f_start + f_end) / 2
+        peaks.append({
+            "start": f_start, "end": f_end, "center": center, "width": width,
+            "peak": max(vals[s:e + 1]), "label": _classify_one(center, width),
+        })
+    return peaks
 
 
 def _group():
@@ -62,9 +130,11 @@ class SpectrumPlot(DeviceRequiredUnit):
         if freqs is None:
             print(" - No sweep result. Arm the mode and run `standalone trigger` first.")
             return
+        peaks = classify_peaks(freqs, vals)
         if args.raw:
             for f, v in zip(freqs, vals):
                 print(f"  {f:>4} MHz  {v:>3}")
+            _print_peaks(peaks)
             return
         try:
             import matplotlib
@@ -78,22 +148,45 @@ class SpectrumPlot(DeviceRequiredUnit):
         fig, ax = plt.subplots(figsize=(10, 4))
         ax.plot(freqs, vals, color="#3a7ca5", linewidth=1.5, marker=".", markersize=4)
         ax.fill_between(freqs, vals, color="#3a7ca5", alpha=0.15)
+        ymax = max(vals) if vals else 1
+        for p in peaks:
+            ax.axvspan(p["start"], p["end"], color="#d9534f", alpha=0.12)
+            ax.annotate(p["label"], xy=(p["center"], p["peak"]),
+                        xytext=(p["center"], ymax * 1.08),
+                        ha="center", va="bottom", fontsize=8, color="#a33",
+                        arrowprops=dict(arrowstyle="-", color="#a33", alpha=0.6))
         ax.set_xlabel("Frequency (MHz)")
         ax.set_ylabel("Energy-detect level (raw EDSAMPLE, uncalibrated)")
         ax.set_title("2.4 GHz ISM sweep")
         ax.set_xlim(freqs[0] - 1, freqs[-1] + 1)
+        ax.set_ylim(top=ymax * 1.25)
         fig.tight_layout()
         if args.out:
             fig.savefig(args.out, dpi=150)
             print(color_string((CG, f"-> {args.out}")))
         else:
             plt.show()
+        _print_peaks(peaks)
+
+
+def _print_peaks(peaks):
+    if not peaks:
+        print(" - No clear peaks above baseline.")
+        return
+    print(" - Detected peaks (heuristic, not a decode):")
+    for p in peaks:
+        print(f"   {p['start']:>4}-{p['end']:<4} MHz  peak={p['peak']:<3}  {p['label']}")
 
 
 def summarize(freqs, vals) -> str:
     """Shared by chameleon_cli_unit.py's generic get-result dispatch for this mode."""
     busiest = max(range(len(vals)), key=lambda i: vals[i])
-    return (f"{len(vals)} point(s), {freqs[0]}-{freqs[-1]} MHz -- "
+    base = (f"{len(vals)} point(s), {freqs[0]}-{freqs[-1]} MHz -- "
             f"min={min(vals)} max={vals[busiest]} (at {freqs[busiest]} MHz) "
             f"mean={sum(vals) / len(vals):.1f} "
             "(raw EDSAMPLE, uncalibrated; `standalone spectrum plot` for the shape)")
+    peaks = classify_peaks(freqs, vals)
+    if not peaks:
+        return base
+    tags = "; ".join(f"{p['label']} @{p['center']:.0f}MHz" for p in peaks)
+    return f"{base}\n  peaks: {tags}"
