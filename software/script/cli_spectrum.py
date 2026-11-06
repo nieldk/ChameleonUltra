@@ -61,11 +61,11 @@ def classify_peaks(freqs, vals):
     if not vals:
         return []
     baseline = statistics.median(vals)
-    threshold = baseline + max(2, (max(vals) - baseline) * 0.3)
+    threshold = baseline + max(1, (max(vals) - baseline) * 0.3)
     runs = []
     start_i = None
     for i, v in enumerate(vals):
-        if v > threshold:
+        if v >= threshold:
             if start_i is None:
                 start_i = i
         elif start_i is not None:
