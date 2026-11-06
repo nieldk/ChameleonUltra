@@ -17,6 +17,7 @@ OUI_VENDORS = {
     0x00124B: "Texas Instruments",
     0x0013A2: "MaxStream/Digi (XBee)",
     0x00158D: "Jennic/NXP",
+    0xC09B9E: "Silicon Labs",
 }
 
 
