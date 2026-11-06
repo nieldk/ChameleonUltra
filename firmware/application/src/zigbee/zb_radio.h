@@ -30,6 +30,9 @@ typedef struct {
     uint32_t framestart;                    /* length field seen (frame began) */
     uint8_t  ed_max[16];                    /* per channel 11..26: max EDSAMPLE at slot end, raw */
     uint32_t slot_us;               /* length requested for the next slot */
+    uint32_t rb_mode, rb_pcnf0, rb_crccnf, rb_freq;  /* registers read straight back after the
+                                                        * write, not the values the code assumes */
+    uint8_t  rb_sfd;
 } zb_stats_t;
 
 /* Passive 802.15.4 RX on channel 11..26, chained SoftDevice timeslots. */

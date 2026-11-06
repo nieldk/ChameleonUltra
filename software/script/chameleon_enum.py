@@ -867,6 +867,8 @@ class StandaloneMode(enum.IntEnum):
     USB_NET     = 0x0C   # USB Ethernet (ECM/RNDIS); CLI frames over TCP port 18888
     ZIGBEE      = 0x0D   # passive 802.15.4 (Zigbee) receive
     SPECTRUM    = 0x0E   # one-shot 2.4 GHz ISM energy-detect sweep
+    ESB         = 0x0F   # passive ESB-framed RX, known address (e.g. Logitech Unifying)
+    ESB_PROMISC = 0x10   # brute-force partial-address ESB sniff, unknown address (experimental)
 
     @classmethod
     def from_name(cls, name: str) -> "StandaloneMode":

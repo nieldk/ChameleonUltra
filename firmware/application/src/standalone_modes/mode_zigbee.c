@@ -227,6 +227,11 @@ static size_t get_status(char *out, size_t out_max) {
               (unsigned long)s.last_rc, (unsigned long)s.framestart);
     STATUS_KV(out, out_max, len, "frames ok=%lu bad_fcs=%lu dropped=%lu\n",
               (unsigned long)s.rx_ok, (unsigned long)s.rx_crc, (unsigned long)s.dropped);
+    /* Expect mode=15 pcnf0=06000008 crccnf=00000201 sfd=a7 freq=5*(ch-10) --
+     * anything else means the write didn't stick, not a demod/RF problem. */
+    STATUS_KV(out, out_max, len, "rb mode=%lu pcnf0=%08lx crccnf=%08lx sfd=%02x freq=%lu\n",
+              (unsigned long)s.rb_mode, (unsigned long)s.rb_pcnf0, (unsigned long)s.rb_crccnf,
+              (unsigned)s.rb_sfd, (unsigned long)s.rb_freq);
     STATUS_KV(out, out_max, len, "types bcn=%lu data=%lu ack=%lu cmd=%lu oth=%lu\n",
               (unsigned long)m_type[0], (unsigned long)m_type[1], (unsigned long)m_type[2],
               (unsigned long)m_type[3], (unsigned long)m_other);

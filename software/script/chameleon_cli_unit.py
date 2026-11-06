@@ -5700,6 +5700,57 @@ def _standalone_render_result(args, mode, raw: bytes):
             print(color_string((CG, cli_spectrum.summarize(freqs, vals))))
         return
 
+    if mode == StandaloneMode.ESB:
+        import cli_esb
+        recs = cli_esb.parse_records(raw)
+        if args.json:
+            out = jsonlib.dumps([
+                {"channel": ch, "len": len(f), "checksum_ok": cli_esb.unifying_checksum_ok(f), "hex": f.hex()}
+                for ch, f in recs
+            ], indent=2)
+            if args.file:
+                Path(args.file).write_text(out)
+                print(color_string((CG, f"-> {args.file}")))
+            else:
+                print(out)
+        else:
+            text = "\n".join(cli_esb.describe_frame(ch, f) for ch, f in recs)
+            if args.file:
+                Path(args.file).write_text(text)
+                print(color_string((CG, f"{cli_esb.summarize(recs)} -> {args.file}")))
+            else:
+                print(color_string((CG, cli_esb.summarize(recs))))
+                if text:
+                    print(text)
+        return
+
+    if mode == StandaloneMode.ESB_PROMISC:
+        import cli_esb
+        recs = cli_esb.parse_promisc_records(raw)
+        if args.json:
+            out = jsonlib.dumps([
+                {"channel": ch, "prefix_guess": p, "base_guess": b, "hex": f.hex()}
+                for ch, p, b, f in recs
+            ], indent=2)
+            if args.file:
+                Path(args.file).write_text(out)
+                print(color_string((CG, f"-> {args.file}")))
+            else:
+                print(out)
+        else:
+            text = "\n".join(cli_esb.describe_promisc_hit(ch, p, b, f) for ch, p, b, f in recs)
+            if args.file:
+                Path(args.file).write_text(text)
+                print(color_string((CG, f"{cli_esb.summarize_promisc(recs)} -> {args.file}")))
+            else:
+                print(color_string((CG, cli_esb.summarize_promisc(recs))))
+                print(color_string((CY,
+                    "candidates only -- CRC is off in this mode; a guess with a sustained hit "
+                    "count is the signal to trust, not an isolated hit")))
+                if text:
+                    print(text)
+        return
+
     if mode not in (StandaloneMode.AUTHTRACE, StandaloneMode.EMUL_TRACE,
                     StandaloneMode.RELAY, StandaloneMode.HF14A_TAP_SNIFF):
         print(color_string((CY,
@@ -5994,6 +6045,9 @@ class StandaloneConfig(DeviceRequiredUnit):
         standalone config usb-net --gateway on
         standalone config usb-net --auto on --class rndis
         standalone config zigbee --channel 15
+        standalone config esb --address 07A1B2C3D4
+        standalone config esb --channel 5 --bitrate 2m
+        standalone config esb-promisc --channel 5 --prefix-lo 0 --prefix-hi 7
     """
 
     def args_parser(self) -> ArgumentParserNoExit:
@@ -6032,9 +6086,19 @@ class StandaloneConfig(DeviceRequiredUnit):
         parser.add_argument('--class', dest='net_class', choices=['ecm', 'rndis', 'default'], default=None,
                             help='[usb-net] host class: ecm (Linux, macOS), rndis (Windows), default = build default')
         parser.add_argument('--channel', type=int, default=None,
-                            help='[zigbee] 802.15.4 channel 11-26, or 0 to hop over all (default 11)')
+                            help='[zigbee] 802.15.4 channel 11-26, or 0 to hop over all (default 11); '
+                                 '[esb] MHz offset from 2400, 0-100, or 255 to hop over the whole range (default 5)')
         parser.add_argument('--dwell', type=int, default=None,
-                            help='[zigbee] hop dwell per channel in ms (50-60000, default 500)')
+                            help='[zigbee/esb] hop dwell per channel in ms (50-60000, default 500)')
+        parser.add_argument('--address', default=None,
+                            help='[esb] 10-hex-char known address, prefix byte first '
+                                 '(e.g. a paired Logitech Unifying receiver\'s address)')
+        parser.add_argument('--bitrate', choices=['1m', '2m'], default=None,
+                            help='[esb] PHY bitrate (default 2m)')
+        parser.add_argument('--prefix-lo', type=int, default=None,
+                            help='[esb-promisc] low end of the device-ID guess range (0-255, default 0)')
+        parser.add_argument('--prefix-hi', type=int, default=None,
+                            help='[esb-promisc] high end of the device-ID guess range, inclusive (0-255, default 7)')
         parser.add_argument('--start', type=int, default=None,
                             help='[spectrum] sweep start MHz (2400-2483, default 2400)')
         parser.add_argument('--end', type=int, default=None,
@@ -6236,6 +6300,112 @@ class StandaloneConfig(DeviceRequiredUnit):
                 print(f"  repeat:  {repeat} ED sample(s)/point (peak-hold)")
             else:
                 print(color_string((CY, f"no persisted config — full band {SA_MIN}-{SA_MAX} MHz (84 points), repeat=1")))
+            return
+
+        if mode == StandaloneMode.ESB:
+            if any(v is not None for v in (args.block, args.key_type, args.key, args.timeout)):
+                print(color_string((CR,
+                    "esb config uses only --address, --channel, --dwell and --bitrate")))
+                return
+            if any(v is not None for v in (args.address, args.channel, args.dwell, args.bitrate)):
+                cur = self.cmd.standalone_get_config(mode)
+                cur_addr = cur[1:6] if cur and len(cur) >= 6 and cur[0] == 1 else b'\x00' * 5
+                cur_ch   = cur[6] if cur and len(cur) >= 7 else 5
+                cur_br   = cur[7] if cur and len(cur) >= 8 else 1
+                cur_dw   = int.from_bytes(cur[8:10], 'little') if cur and len(cur) >= 10 else 500
+
+                if args.address is not None:
+                    hexstr = args.address.strip().replace(':', '')
+                    if len(hexstr) != 10:
+                        print(color_string((CR, "--address must be 10 hex chars (5 bytes)")))
+                        return
+                    try:
+                        addr = bytes.fromhex(hexstr)
+                    except ValueError:
+                        print(color_string((CR, "--address is not valid hex")))
+                        return
+                else:
+                    addr = cur_addr
+                if addr == b'\x00' * 5:
+                    print(color_string((CR, "address must not be all-zero — the mode refuses to arm without one")))
+                    return
+
+                ch = args.channel if args.channel is not None else cur_ch
+                if not (0 <= ch <= 100 or ch == 0xFF):
+                    print(color_string((CR, "channel must be 0..100, or 255 to hop")))
+                    return
+
+                br = {'1m': 0, '2m': 1}[args.bitrate] if args.bitrate is not None else cur_br
+
+                dw = args.dwell if args.dwell is not None else cur_dw
+                if not (50 <= dw <= 60000):
+                    print(color_string((CR, "dwell must be 50..60000 ms")))
+                    return
+
+                resp = self.cmd.standalone_set_config(
+                    mode, struct.pack('<B5sBBH', 1, addr, ch, br, dw))
+                if resp.status == Status.SUCCESS:
+                    what = f"channel {ch}" if ch != 0xFF else f"hopping 0-100, dwell {dw} ms"
+                    print(color_string((CG,
+                        f"esb set to address {addr.hex()}, {what}, bitrate {'2M' if br else '1M'} "
+                        f"(applied immediately if armed)")))
+                else:
+                    print(color_string((CR, f"set-config failed: status={resp.status}")))
+                return
+            blob = self.cmd.standalone_get_config(mode)
+            if blob and len(blob) >= 10 and blob[0] == 1:
+                addr = blob[1:6]
+                ch, br = blob[6], blob[7]
+                dw = int.from_bytes(blob[8:10], 'little')
+                print(color_string((CG, "esb config:")))
+                print(f"  address:  {addr.hex() if addr != b'\\x00' * 5 else '(unset)'}")
+                print(f"  channel:  {ch if ch != 0xFF else 'hop'}")
+                print(f"  bitrate:  {'2M' if br else '1M'}")
+                print(f"  dwell:    {dw} ms")
+            else:
+                print(color_string((CY, "no persisted config — address unset (mode will refuse to arm)")))
+            return
+
+        if mode == StandaloneMode.ESB_PROMISC:
+            if any(v is not None for v in (args.block, args.key_type, args.key, args.timeout,
+                                            args.address, args.bitrate, args.dwell)):
+                print(color_string((CR,
+                    "esb-promisc config uses only --channel, --prefix-lo and --prefix-hi")))
+                return
+            if any(v is not None for v in (args.channel, args.prefix_lo, args.prefix_hi)):
+                cur = self.cmd.standalone_get_config(mode)
+                cur_ch  = cur[1] if cur and len(cur) >= 2 else 5
+                cur_lo  = cur[2] if cur and len(cur) >= 4 else 0
+                cur_hi  = cur[3] if cur and len(cur) >= 4 else 7
+
+                ch = args.channel if args.channel is not None else cur_ch
+                if not (0 <= ch <= 100):
+                    print(color_string((CR, "channel must be 0..100 (no hop in esb-promisc)")))
+                    return
+                lo = args.prefix_lo if args.prefix_lo is not None else cur_lo
+                hi = args.prefix_hi if args.prefix_hi is not None else cur_hi
+                if not (0 <= lo <= 255 and 0 <= hi <= 255 and lo <= hi):
+                    print(color_string((CR, "--prefix-lo must be 0..255 and <= --prefix-hi")))
+                    return
+
+                resp = self.cmd.standalone_set_config(mode, struct.pack('<BBBB', 1, ch, lo, hi))
+                if resp.status == Status.SUCCESS:
+                    print(color_string((CG,
+                        f"esb-promisc set to channel {ch}, guessing prefix {lo}-{hi} x 256 base bytes "
+                        f"(takes effect on next trigger)")))
+                else:
+                    print(color_string((CR, f"set-config failed: status={resp.status}")))
+                return
+            blob = self.cmd.standalone_get_config(mode)
+            if blob and len(blob) >= 4 and blob[0] == 1:
+                print(color_string((CG, "esb-promisc config:")))
+                print(f"  channel:    {blob[1]}")
+                print(f"  prefix-lo:  {blob[2]}")
+                print(f"  prefix-hi:  {blob[3]}")
+                print(color_string((CY,
+                    "  experimental -- see docs; captures are candidates, not confirmed frames")))
+            else:
+                print(color_string((CY, "no persisted config — channel 5, prefix range 0-7")))
             return
 
         if mode == StandaloneMode.USB_NET:

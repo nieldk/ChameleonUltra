@@ -62,6 +62,8 @@ typedef enum {
     STANDALONE_MODE_USB_NET     = 0x0C,  /* USB Ethernet (CDC-ECM); CLI frames over TCP */
     STANDALONE_MODE_ZIGBEE      = 0x0D,  /* passive 802.15.4 (Zigbee) receive */
     STANDALONE_MODE_SPECTRUM    = 0x0E,  /* one-shot 2.4 GHz ISM energy-detect sweep */
+    STANDALONE_MODE_ESB         = 0x0F,  /* passive ESB-framed RX, known address (e.g. Logitech Unifying) */
+    STANDALONE_MODE_ESB_PROMISC = 0x10,  /* brute-force partial-address ESB sniff, unknown address */
 
     STANDALONE_MODE__COUNT              /* sentinel - keep last */
 } standalone_mode_t;
@@ -186,6 +188,8 @@ extern const standalone_mode_iface_t mode_u2f_iface;           /* FIDO U2F over 
 extern const standalone_mode_iface_t mode_usb_net_iface;       /* USB Ethernet + TCP CLI link, no RF */
 extern const standalone_mode_iface_t mode_zigbee_iface;        /* passive 802.15.4 RX via SoftDevice timeslots */
 extern const standalone_mode_iface_t mode_spectrum_iface;      /* one-shot 2.4 GHz ISM energy-detect sweep */
+extern const standalone_mode_iface_t mode_esb_iface;            /* passive ESB-framed RX via SoftDevice timeslots */
+extern const standalone_mode_iface_t mode_esb_promisc_iface;    /* brute-force partial-address ESB sniff, unknown address */
 
 /* -------------------------------------------------------------------------
  * Public API

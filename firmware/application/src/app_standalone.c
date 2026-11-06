@@ -60,6 +60,12 @@
 #ifndef CONFIG_STANDALONE_SPECTRUM
 #define CONFIG_STANDALONE_SPECTRUM  0
 #endif
+#ifndef CONFIG_STANDALONE_ESB
+#define CONFIG_STANDALONE_ESB  0
+#endif
+#ifndef CONFIG_STANDALONE_ESB_PROMISC
+#define CONFIG_STANDALONE_ESB_PROMISC  0
+#endif
 #ifndef CONFIG_STANDALONE_USB_NET
 #define CONFIG_STANDALONE_USB_NET  1
 #endif
@@ -156,6 +162,12 @@ static const standalone_mode_iface_t *const m_modes[] = {
 #endif
 #if CONFIG_STANDALONE_SPECTRUM
     &mode_spectrum_iface,
+#endif
+#if CONFIG_STANDALONE_ESB
+    &mode_esb_iface,
+#endif
+#if CONFIG_STANDALONE_ESB_PROMISC
+    &mode_esb_promisc_iface,
 #endif
 };
 

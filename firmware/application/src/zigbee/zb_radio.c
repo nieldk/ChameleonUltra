@@ -76,6 +76,15 @@ static void radio_rx_begin(void) {
      * which this code never took over. Matches the regression signature exactly --
      * ready_ok/ed_ok stayed healthy (state-machine and RSSI, unaffected by RU) while
      * FRAMESTART never fired even with confirmed real traffic on-channel. */
+    /* Read every write straight back before trusting any of it -- the one
+     * thing not yet checked in this regression: that the register actually
+     * holds what the code just wrote, not just what the code assumes. */
+    m_st.rb_mode   = NRF_RADIO->MODE;
+    m_st.rb_pcnf0  = NRF_RADIO->PCNF0;
+    m_st.rb_crccnf = NRF_RADIO->CRCCNF;
+    m_st.rb_sfd    = (uint8_t)NRF_RADIO->SFD;
+    m_st.rb_freq   = NRF_RADIO->FREQUENCY;
+
     NRF_RADIO->SHORTS    = RADIO_SHORTS_RXREADY_START_Msk;   /* END->START is not allowed in this mode */
     NRF_RADIO->EVENTS_END = 0;
     NRF_RADIO->EVENTS_FRAMESTART = 0;
