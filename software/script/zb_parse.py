@@ -6,12 +6,29 @@ when the payload is secured. Anything not understood is reported as None/"unpars
 instead of guessed.
 """
 
+import os
 import struct
 
 FRAME_TYPES = {0: "beacon", 1: "data", 2: "ack", 3: "command"}
 
-# OUI (top 3 bytes of an EUI-64) -> chip/module vendor. Identifies the radio
-# silicon, not the end-product brand. Verified against the IEEE MA-L registry.
+# Full IEEE MA-L (OUI) registry, shipped as oui_vendors.tsv next to this file:
+# "OUIHEX\tVendor name" per line, one entry per registered /24. Identifies the
+# radio chip/module vendor, not the end-product brand. Regenerate from a fresh
+# https://standards-oui.ieee.org/oui/oui.txt with:
+#   python3 -c "
+#   import re
+#   pat = re.compile(r'^([0-9A-Fa-f]{6})\s+\(base 16\)\s*(.+?)\s*$')
+#   with open('oui.txt', encoding='utf-8', errors='replace') as f, \
+#        open('oui_vendors.tsv', 'w', encoding='utf-8') as out:
+#       for line in f:
+#           m = pat.match(line.rstrip('\n'))
+#           if m and m.group(2).strip():
+#               out.write(f'{m.group(1).upper()}\t{m.group(2).strip()}\n')
+#   "
+_OUI_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "oui_vendors.tsv")
+_oui_db = None
+
+# Fallback when oui_vendors.tsv isn't present (e.g. not yet pulled in).
 OUI_VENDORS = {
     0x000D6F: "Ember/Silicon Labs",
     0x00124B: "Texas Instruments",
@@ -21,9 +38,28 @@ OUI_VENDORS = {
 }
 
 
+def _load_oui_db():
+    global _oui_db
+    if _oui_db is not None:
+        return _oui_db
+    _oui_db = {}
+    try:
+        with open(_OUI_DB_PATH, encoding="utf-8") as f:
+            for line in f:
+                oui, _, vendor = line.rstrip("\n").partition("\t")
+                if vendor:
+                    _oui_db[oui] = vendor
+    except OSError:
+        pass                                          # file not present -- use OUI_VENDORS
+    return _oui_db
+
+
 def oui_vendor(eui64: int):
-    """Vendor for eui64's OUI, or None if it's not in OUI_VENDORS."""
-    return OUI_VENDORS.get((eui64 >> 40) & 0xFFFFFF)
+    """Vendor for eui64's OUI: oui_vendors.tsv (full IEEE registry) if present,
+    else the small built-in fallback table."""
+    oui = f"{(eui64 >> 40) & 0xFFFFFF:06X}"
+    v = _load_oui_db().get(oui)
+    return v if v is not None else OUI_VENDORS.get(int(oui, 16))
 
 
 def parse_records(blob: bytes):
