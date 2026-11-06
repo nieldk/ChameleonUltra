@@ -70,8 +70,12 @@ static void radio_rx_begin(void) {
     m_slot_ch            = m_channel;
     NRF_RADIO->FREQUENCY = 5UL * (m_slot_ch - 10u);      /* 2405 MHz + 5 * (ch - 11) */
     NRF_RADIO->PACKETPTR = (uint32_t)m_pkt;
-    NRF_RADIO->MODECNF0  = (RADIO_MODECNF0_RU_Fast << RADIO_MODECNF0_RU_Pos) |
-                           (RADIO_MODECNF0_DTX_Center << RADIO_MODECNF0_DTX_Pos);
+    /* MODECNF0 intentionally left at its reset value (RU_Default, DTX=Center).
+     * RU_Fast was tried here and reverted: Nordic's own MODECNF0.RU docs say fast
+     * ramp-up disables hardware-enforced TIFS and hands that control to software,
+     * which this code never took over. Matches the regression signature exactly --
+     * ready_ok/ed_ok stayed healthy (state-machine and RSSI, unaffected by RU) while
+     * FRAMESTART never fired even with confirmed real traffic on-channel. */
     NRF_RADIO->SHORTS    = RADIO_SHORTS_RXREADY_START_Msk;   /* END->START is not allowed in this mode */
     NRF_RADIO->EVENTS_END = 0;
     NRF_RADIO->EVENTS_FRAMESTART = 0;
