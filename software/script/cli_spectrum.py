@@ -18,10 +18,11 @@ ground truth.
 
 import argparse
 import statistics
+import time
 
-from chameleon_enum import StandaloneMode
+from chameleon_enum import StandaloneMode, Status
 
-from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, standalone, color_string, CG
+from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, standalone, color_string, CG, CY, CR
 
 START_MHZ = 2400     # default full-band start, used only as a display fallback
 POINT_COUNT = 84      # default full-band count
@@ -192,6 +193,148 @@ class SpectrumPlot(DeviceRequiredUnit):
         else:
             plt.show()
         _print_peaks(peaks)
+
+
+def _trigger_and_wait(cmd, timeout_s=30.0, poll_s=0.05):
+    """Fires one sweep and blocks until the firmware reports it done.
+
+    `standalone trigger` only starts the sweep (sa_radio_sweep_start() is
+    non-blocking, chained across radio timeslots) -- completion has to be
+    polled via `standalone_get_status()`'s "sweep=" field, same thing the
+    CLI's own `standalone status` shows. A sweep's wall-clock time depends on
+    point count *and* `repeat` (see --repeat / sa_radio_set_repeat): each
+    extra repeat adds a full EDSTART/EDEND cycle per point, and each radio
+    timeslot (SLOT_US) can itself be delayed or bumped by BLE/USB scheduling
+    (see "canceled"/"blocked" in `standalone status`) -- so a high-repeat,
+    full-band (84-point) sweep can comfortably take several seconds, well
+    past a naive few-second timeout. Default here is deliberately generous;
+    raise it further (SpectrumWaterfall's --sweep-timeout) for repeat>~15.
+
+    Returns (freqs, vals, None) on success, or (None, None, reason) where
+    reason is "trigger failed" (busy/error status from the trigger call
+    itself) or "timed out" (sweep never reported done within timeout_s).
+    """
+    resp = cmd.standalone_trigger()
+    if resp.status != Status.SUCCESS:
+        return None, None, f"trigger failed (status={resp.status})"
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        status = dict(cmd.standalone_get_status())
+        # standalone_get_status() splits each status line on the *first* '='
+        # only, so the "sweep" key's value is the whole rest of that line --
+        # "done range=2400-2483 points=84/84 repeat=1 slots=2 blocked=0
+        # canceled=0" -- not just "done" (see get_status() in mode_spectrum.c,
+        # one STATUS_KV line). Match the leading word, not the full value.
+        if status.get("sweep", "").split(" ", 1)[0] == "done":
+            break
+        time.sleep(poll_s)
+    else:
+        return None, None, f"timed out after {timeout_s:.0f}s waiting for sweep to finish"
+    raw = cmd.standalone_drain_result_for(StandaloneMode.SPECTRUM)
+    freqs, vals = _parse(raw)
+    if freqs is None:
+        return None, None, "sweep reported done but result didn't parse"
+    return freqs, vals, None
+
+
+@sa.command("waterfall")
+class SpectrumWaterfall(DeviceRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        p = ArgumentParserNoExit()
+        p.description = ("Live frequency-vs-time waterfall: repeatedly fires sweeps "
+                         "(like calling `standalone trigger` + `spectrum plot` in a "
+                         "loop) and scrolls them into a heatmap, newest row on top. "
+                         "Needs the mode already armed. Close the window or Ctrl+C "
+                         "to stop.")
+        p.add_argument("--rows", type=int, default=60,
+                       help="sweep history kept on screen (default 60)")
+        p.add_argument("--max-sweeps", type=int, default=None,
+                       help="stop after N sweeps instead of running until closed/interrupted "
+                            "(default: unlimited live, 30 when saving with --out)")
+        p.add_argument("--sweep-timeout", type=float, default=30.0,
+                       help="seconds to wait for each sweep to finish before giving up "
+                            "(default 30; raise this if `standalone config spectrum --repeat` "
+                            "is set high -- more repeats means a slower sweep)")
+        p.add_argument("-o", "--out", metavar="<path.gif>", default=None,
+                       help="save the session as an animated GIF instead of a live window")
+        p.add_argument("--vmax", type=float, default=None,
+                       help="pin the color scale's top to this raw EDSAMPLE value instead of "
+                            "autoscaling to the loudest point seen so far. Real readings rarely "
+                            "get near the 0-255 theoretical ceiling -- a quiet room is often "
+                            "single digits -- so autoscale (the default) is what keeps weak "
+                            "signals visible instead of washed out to near-black.")
+        return p
+
+    def on_exec(self, args: argparse.Namespace):
+        try:
+            import matplotlib
+            if args.out:
+                matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            import matplotlib.animation as animation
+            import numpy as np
+        except ImportError:
+            print(" - Waterfall needs matplotlib and numpy: pip install matplotlib numpy")
+            return
+
+        max_sweeps = args.max_sweeps if args.max_sweeps is not None else (30 if args.out else None)
+
+        freqs, vals, err = _trigger_and_wait(self.cmd, timeout_s=args.sweep_timeout)
+        if freqs is None:
+            print(color_string((CR, f" - No sweep: {err}. Check the mode is armed "
+                                    "(`standalone status`); if it's a high --repeat config, "
+                                    "try a larger --sweep-timeout.")))
+            return
+
+        rows = max(2, args.rows)
+        grid = np.full((rows, len(freqs)), np.nan)
+        grid[0] = vals
+
+        def clim_for(g):
+            if args.vmax is not None:
+                return 0, args.vmax
+            peak = np.nanmax(g) if not np.all(np.isnan(g)) else 1
+            return 0, max(1.0, peak * 1.15)
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        vmin0, vmax0 = clim_for(grid)
+        im = ax.imshow(grid, aspect="auto", cmap="viridis", vmin=vmin0, vmax=vmax0,
+                       extent=[freqs[0], freqs[-1], rows, 0], interpolation="nearest")
+        _draw_channel_refs(ax, freqs[0], freqs[-1])
+        ax.set_xlabel("Frequency (MHz)")
+        ax.set_ylabel("Sweeps ago")
+        ax.set_title("2.4 GHz ISM waterfall (live)")
+        cbar = fig.colorbar(im, ax=ax, label="Energy-detect level (raw EDSAMPLE, uncalibrated "
+                                              "-- color scale autoscaled unless --vmax)")
+        fig.tight_layout()
+
+        def update(_frame):
+            f2, v2, _err = _trigger_and_wait(self.cmd, timeout_s=args.sweep_timeout)
+            if f2 is None:
+                return [im]   # transient busy/timeout -- skip this frame, keep showing last
+            grid[1:] = grid[:-1]
+            grid[0] = v2
+            im.set_data(grid)
+            # Real EDSAMPLE readings rarely approach the 8-bit ceiling (a quiet
+            # room is often single digits), so a fixed 0-255 scale washes
+            # everything to near-black -- rescale to what's actually been seen
+            # (unless the user pinned --vmax) so weak signals stay visible.
+            vmin, vmax = clim_for(grid)
+            im.set_clim(vmin, vmax)
+            return [im]
+
+        # frames=None gives FuncAnimation an unbounded itertools.count() --
+        # fine for an interactive show() (pulled one at a time by the GUI
+        # timer) but .save() has to enumerate frames up front, so it would
+        # hang forever without a bound. Only the save path needs one.
+        frames = max_sweeps if args.out else None
+        ani = animation.FuncAnimation(fig, update, frames=frames, interval=200,
+                                      cache_frame_data=False, repeat=False)
+        if args.out:
+            ani.save(args.out, writer="pillow", fps=4)
+            print(color_string((CG, f"-> {args.out}")))
+        else:
+            plt.show()
 
 
 def _print_peaks(peaks):
