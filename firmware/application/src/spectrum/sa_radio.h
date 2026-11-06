@@ -28,6 +28,12 @@ typedef struct {
  * sa_radio_done() from the mode's on_tick. */
 bool sa_radio_sweep_start(uint16_t start_offset, uint16_t count);
 
+/* ED samples per point, peak-hold (max kept, not averaged) -- default 1.
+ * Takes effect on the next sa_radio_sweep_start(), not the one in progress.
+ * Clamped to 1..32; each extra sample costs one more EDSTART/EDEND cycle
+ * (~hundreds of us) per point, see sample_point() in sa_radio.c. */
+void sa_radio_set_repeat(uint8_t n);
+
 /* The range of the most recently started sweep (valid once busy() or done()
  * is true), so a caller that doesn't track it separately can still report
  * it -- e.g. when persisting the result record. */

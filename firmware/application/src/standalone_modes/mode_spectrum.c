@@ -6,11 +6,14 @@
  * armed; `standalone trigger` (or the button) starts one sweep. The host
  * plots the result (`standalone spectrum plot`).
  *
- * Config (4 bytes): u8 version=1, u16 start_mhz LE (2400-2483, default 2400),
- * u8 count (1-84, default 84, clamped so start+count <= 2484). Applies to the
- * next triggered sweep; like zigbee's channel config, also re-applied live to
- * a sweep already in progress isn't attempted here (there's nothing sensible
- * to do mid-sweep), only to the next trigger.
+ * Config (4 or 5 bytes): u8 version=1, u16 start_mhz LE (2400-2483, default
+ * 2400), u8 count (1-84, default 84, clamped so start+count <= 2484), and an
+ * optional u8 repeat (1-32, default 1 -- ED samples per point, peak-hold;
+ * see sa_radio_set_repeat()). A 4-byte config (no repeat byte) behaves as
+ * repeat=1, same as before this field existed. Applies to the next triggered
+ * sweep; like zigbee's channel config, also re-applied live to a sweep
+ * already in progress isn't attempted here (there's nothing sensible to do
+ * mid-sweep), only to the next trigger.
  *
  * Result (persisted, up to 87 bytes): u8 version=2, u16 start_mhz LE, u8
  * count, then `count` raw EDSAMPLE bytes, point i == (start_mhz + i) MHz.
@@ -41,10 +44,12 @@ static bool     m_harvested;   /* true once this sweep's result has been copied 
 
 static uint16_t m_cfg_start_mhz = DEFAULT_START_MHZ;
 static uint8_t  m_cfg_count     = DEFAULT_COUNT;
+static uint8_t  m_cfg_repeat    = 1;
 
 static void cfg_parse(const uint8_t *cfg, size_t cfg_len) {
     m_cfg_start_mhz = DEFAULT_START_MHZ;
     m_cfg_count     = DEFAULT_COUNT;
+    m_cfg_repeat    = 1;
     if (cfg == NULL || cfg_len < 4 || cfg[0] != 1) return;
     uint16_t start = (uint16_t)(cfg[1] | (cfg[2] << 8));
     uint8_t  count = cfg[3];
@@ -52,6 +57,7 @@ static void cfg_parse(const uint8_t *cfg, size_t cfg_len) {
     if (start < SA_START_MHZ || start + count > SA_START_MHZ + SA_POINT_COUNT) return;
     m_cfg_start_mhz = start;
     m_cfg_count     = count;
+    if (cfg_len >= 5 && cfg[4] >= 1 && cfg[4] <= 32) m_cfg_repeat = cfg[4];
 }
 
 static void on_config(const uint8_t *cfg, size_t cfg_len) {
@@ -92,6 +98,7 @@ static standalone_rc_t on_button(standalone_button_evt_t evt) {
     if (evt != STANDALONE_BTN_BOTH_SHORT) return STANDALONE_RC_OK;
     if (sa_radio_busy()) return STANDALONE_RC_BUSY;
     uint16_t start_offset = (uint16_t)(m_cfg_start_mhz - SA_START_MHZ);
+    sa_radio_set_repeat(m_cfg_repeat);
     if (!sa_radio_sweep_start(start_offset, m_cfg_count)) return STANDALONE_RC_INTERNAL;
     m_harvested = false;
     return STANDALONE_RC_OK;
@@ -154,10 +161,10 @@ static size_t get_status(char *out, size_t out_max) {
     sa_stats_t s;
     sa_radio_get_stats(&s);
     STATUS_KV(out, out_max, len,
-              "sweep=%s range=%u-%u points=%u/%u slots=%lu blocked=%lu canceled=%lu\n",
+              "sweep=%s range=%u-%u points=%u/%u repeat=%u slots=%lu blocked=%lu canceled=%lu\n",
               sa_radio_busy() ? "running" : (sa_radio_done() ? "done" : "idle"),
               (unsigned)m_cfg_start_mhz, (unsigned)(m_cfg_start_mhz + m_cfg_count - 1),
-              (unsigned)s.points_done, (unsigned)m_cfg_count,
+              (unsigned)s.points_done, (unsigned)m_cfg_count, (unsigned)m_cfg_repeat,
               (unsigned long)s.slots, (unsigned long)s.blocked, (unsigned long)s.canceled);
     STATUS_KV(out, out_max, len, "diag    rxen=%lu/%lu ed=%lu/%lu\n",
               (unsigned long)s.ready_ok, (unsigned long)s.ready_timeout,

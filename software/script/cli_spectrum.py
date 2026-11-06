@@ -50,6 +50,30 @@ def _classify_one(center: float, width: int) -> str:
     return "mid-width (unclassified)"
 
 
+def _draw_channel_refs(ax, f_lo, f_hi):
+    """Static WiFi/Zigbee/BLE-adv channel markers, independent of peak detection."""
+    from matplotlib.lines import Line2D
+    for ch, f in WIFI_CHANNELS.items():
+        if f_lo <= f <= f_hi:
+            ax.axvline(f, color="#3a7ca5", alpha=0.25, linewidth=0.8, linestyle="--")
+            ax.text(f, 1.0, str(ch), transform=ax.get_xaxis_transform(),
+                    ha="center", va="bottom", fontsize=6, color="#3a7ca5")
+    for ch, f in ZIGBEE_CHANNELS.items():
+        if f_lo <= f <= f_hi:
+            ax.axvline(f, color="#5a9e5a", alpha=0.2, linewidth=0.6, linestyle=":")
+            ax.text(f, -0.06, str(ch), transform=ax.get_xaxis_transform(),
+                    ha="center", va="top", fontsize=6, color="#5a9e5a", rotation=90)
+    for ch, f in BLE_ADV_CHANNELS.items():
+        if f_lo <= f <= f_hi:
+            ax.axvline(f, color="#d08f2a", alpha=0.4, linewidth=1.0, linestyle="-")
+    handles = [
+        Line2D([0], [0], color="#3a7ca5", linestyle="--", linewidth=0.8, label="WiFi ch (top)"),
+        Line2D([0], [0], color="#5a9e5a", linestyle=":", linewidth=0.6, label="Zigbee ch (bottom)"),
+        Line2D([0], [0], color="#d08f2a", linestyle="-", linewidth=1.0, label="BLE adv"),
+    ]
+    ax.legend(handles=handles, loc="upper right", fontsize=7, framealpha=0.7)
+
+
 def classify_peaks(freqs, vals):
     """Finds contiguous above-threshold runs and labels each by width/center.
 
@@ -146,6 +170,7 @@ class SpectrumPlot(DeviceRequiredUnit):
             print("   Use --raw to print the values instead.")
             return
         fig, ax = plt.subplots(figsize=(10, 4))
+        _draw_channel_refs(ax, freqs[0], freqs[-1])
         ax.plot(freqs, vals, color="#3a7ca5", linewidth=1.5, marker=".", markersize=4)
         ax.fill_between(freqs, vals, color="#3a7ca5", alpha=0.15)
         ymax = max(vals) if vals else 1

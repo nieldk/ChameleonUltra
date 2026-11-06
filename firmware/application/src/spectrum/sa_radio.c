@@ -3,9 +3,9 @@
  * picks the start/count within 2400-2483 MHz) in chained SoftDevice timeslots.
  *
  * Unlike zb_radio.c this never receives a packet -- each point is just
- * RXEN + one energy-detect sample at a directly-set RADIO->FREQUENCY (no
- * 802.15.4 channel numbering, no PACKETPTR). PCNF0/1/CRCCNF/SFD/MODECNF0 are
- * still set every point, matching zb_radio.c's proven-working ED config --
+ * RXEN + one or more energy-detect samples at a directly-set RADIO->FREQUENCY
+ * (no 802.15.4 channel numbering, no PACKETPTR). PCNF0/1/CRCCNF/SFD/MODECNF0
+ * are still set every point, matching zb_radio.c's proven-working ED config --
  * see sample_point(). That means a whole batch of points can be swept
  * synchronously inside the timeslot START callback itself and the result
  * returned immediately (REQUEST_AND_END or END) -- no RADIO/TIMER0 signal
@@ -14,6 +14,15 @@
  * Nordic's IEEE 802.15.4 ED value (EDSAMPLE) is used as a raw, uncalibrated
  * busy/quiet indicator across the whole band; see zb_radio.c's status docs
  * for the same caveat (not dBm, not temperature-compensated).
+ *
+ * A single ED sample is one brief fixed-duration measurement -- a default
+ * full-band sweep (84 points, repeat=1) completes in well under 50ms total,
+ * so it's effectively an instantaneous snapshot and can miss anything
+ * intermittent (WiFi beacon interval, hopping BT, bursty traffic) that just
+ * isn't transmitting during that instant. sa_radio_set_repeat() trades sweep
+ * time for a peak-hold over several ED cycles per point, improving the odds
+ * of catching a burst at the cost of a slower sweep; points_per_slot() keeps
+ * each timeslot's total busy time under budget as repeat grows.
  */
 
 #include "sa_radio.h"
@@ -28,7 +37,24 @@
 #define SLOT_US         50000u
 #define SLOT_MIN_US     5000u
 #define TIMEOUT_US      200000u
-#define POINTS_PER_SLOT 12u     /* budget per timeslot; see module doc for the estimate */
+#define POINTS_PER_SLOT  12u    /* safe point budget per timeslot at repeat=1 */
+#define ED_CYCLE_US      150u   /* ~one EDSTART->EDEND round trip (8-symbol ED window) */
+#define POINT_FIXED_US   400u   /* ramp + settle + disable, excluding ED cycles */
+#define SLOT_BUDGET_US   30000u /* stay well under SLOT_US with margin for scheduling jitter */
+
+static uint8_t m_repeat = 1;    /* ED samples per point, peak-hold -- see sa_radio_set_repeat() */
+
+/* Points-per-slot shrinks as repeat grows so a slot with many ED cycles per
+ * point still finishes comfortably inside SLOT_US; the sample loop below has
+ * no mid-slot time check, so this has to hold up front. Capped at the old
+ * fixed budget for repeat=1 -- unchanged behavior there. */
+static uint16_t points_per_slot(void) {
+    uint32_t per_point = POINT_FIXED_US + (uint32_t)m_repeat * ED_CYCLE_US;
+    uint32_t n = SLOT_BUDGET_US / per_point;
+    if (n < 1) n = 1;
+    if (n > POINTS_PER_SLOT) n = POINTS_PER_SLOT;
+    return (uint16_t)n;
+}
 
 static nrf_radio_request_t                      m_req;
 static nrf_radio_signal_callback_return_param_t m_ret;
@@ -87,18 +113,28 @@ static void sample_point(uint16_t i) {
      * front end some time to settle before trusting the reading. */
     nrf_delay_us(250);
 
-    NRF_RADIO->EVENTS_EDEND = 0;
-    NRF_RADIO->TASKS_EDSTART = 1;
+    /* Peak-hold over m_repeat EDSTART/EDEND cycles (default 1 == old behavior).
+     * A single ED sample is a brief, fixed-duration hardware measurement -- an
+     * intermittent emitter (WiFi beacon interval, hopping BT, bursty sensor)
+     * can easily sit between samples on a one-shot sweep. Repeating here and
+     * keeping the max catches a burst that happens any time during the dwell
+     * instead of only the instant of a single sample. Stays in RXIDLE between
+     * cycles (EDEND returns there), no re-ramp needed. */
     uint8_t v = 0;
-    for (uint32_t w = 0; w < 20000 && !NRF_RADIO->EVENTS_EDEND; w++) __NOP();
-    if (NRF_RADIO->EVENTS_EDEND) {
-        m_st.ed_ok++;
-        v = (uint8_t)NRF_RADIO->EDSAMPLE;
-    } else {
-        m_st.ed_timeout++;
-        NRF_RADIO->TASKS_EDSTOP = 1;
+    for (uint8_t r = 0; r < m_repeat; r++) {
+        NRF_RADIO->EVENTS_EDEND = 0;
+        NRF_RADIO->TASKS_EDSTART = 1;
+        for (uint32_t w = 0; w < 20000 && !NRF_RADIO->EVENTS_EDEND; w++) __NOP();
+        if (NRF_RADIO->EVENTS_EDEND) {
+            m_st.ed_ok++;
+            uint8_t sample = (uint8_t)NRF_RADIO->EDSAMPLE;
+            if (sample > v) v = sample;
+        } else {
+            m_st.ed_timeout++;
+            NRF_RADIO->TASKS_EDSTOP = 1;
+        }
+        NRF_RADIO->EVENTS_EDEND = 0;
     }
-    NRF_RADIO->EVENTS_EDEND = 0;
     m_result[i] = v;
 
     NRF_RADIO->EVENTS_DISABLED = 0;
@@ -112,7 +148,7 @@ static nrf_radio_signal_callback_return_param_t *radio_cb(uint8_t sig) {
     if (sig != NRF_RADIO_CALLBACK_SIGNAL_TYPE_START) return &m_ret;
 
     m_st.slots++;
-    uint16_t end = m_idx + POINTS_PER_SLOT;
+    uint16_t end = m_idx + points_per_slot();
     if (end > m_end) end = m_end;
     for (uint16_t i = m_idx; i < end; i++) sample_point(i);
     m_idx = end;
@@ -188,6 +224,12 @@ bool sa_radio_sweep_start(uint16_t start_offset, uint16_t count) {
         return false;
     }
     return true;
+}
+
+void sa_radio_set_repeat(uint8_t n) {
+    if (n < 1) n = 1;
+    if (n > 32) n = 32;
+    m_repeat = n;
 }
 
 bool sa_radio_busy(void) { return m_run || m_open; }

@@ -6039,6 +6039,10 @@ class StandaloneConfig(DeviceRequiredUnit):
                             help='[spectrum] sweep start MHz (2400-2483, default 2400)')
         parser.add_argument('--end', type=int, default=None,
                             help='[spectrum] sweep end MHz, inclusive (2400-2483, default 2483)')
+        parser.add_argument('--repeat', type=int, default=None,
+                            help='[spectrum] ED samples per point, peak-hold (1-32, default 1); '
+                                 'raises the odds of catching an intermittent/bursty emitter '
+                                 'at the cost of a slower sweep')
         return parser
 
     def on_exec(self, args):
@@ -6190,29 +6194,34 @@ class StandaloneConfig(DeviceRequiredUnit):
 
         if mode == StandaloneMode.SPECTRUM:
             if any(v is not None for v in (args.block, args.key_type, args.key, args.timeout)):
-                print(color_string((CR, "spectrum config uses only --start and --end")))
+                print(color_string((CR, "spectrum config uses only --start, --end and --repeat")))
                 return
             SA_MIN, SA_MAX = 2400, 2483
-            if args.start is not None or args.end is not None:
+            if args.start is not None or args.end is not None or args.repeat is not None:
                 cur = self.cmd.standalone_get_config(mode)
                 if cur and len(cur) >= 4 and cur[0] == 1:
-                    cur_start = cur[1] | (cur[2] << 8)
-                    cur_end   = cur_start + cur[3] - 1
+                    cur_start  = cur[1] | (cur[2] << 8)
+                    cur_end    = cur_start + cur[3] - 1
+                    cur_repeat = cur[4] if len(cur) >= 5 else 1
                 else:
-                    cur_start, cur_end = SA_MIN, SA_MAX
-                start = args.start if args.start is not None else cur_start
-                end   = args.end   if args.end   is not None else cur_end
+                    cur_start, cur_end, cur_repeat = SA_MIN, SA_MAX, 1
+                start  = args.start  if args.start  is not None else cur_start
+                end    = args.end    if args.end    is not None else cur_end
+                repeat = args.repeat if args.repeat is not None else cur_repeat
                 if not (SA_MIN <= start <= SA_MAX):
                     print(color_string((CR, f"--start must be {SA_MIN}..{SA_MAX}")))
                     return
                 if not (start <= end <= SA_MAX):
                     print(color_string((CR, f"--end must be between --start and {SA_MAX}")))
                     return
+                if not (1 <= repeat <= 32):
+                    print(color_string((CR, "--repeat must be 1..32")))
+                    return
                 count = end - start + 1
-                resp = self.cmd.standalone_set_config(mode, struct.pack('<BHB', 1, start, count))
+                resp = self.cmd.standalone_set_config(mode, struct.pack('<BHBB', 1, start, count, repeat))
                 if resp.status == Status.SUCCESS:
                     print(color_string((CG,
-                        f"spectrum set to {start}-{end} MHz ({count} point(s)); "
+                        f"spectrum set to {start}-{end} MHz ({count} point(s)), repeat={repeat}; "
                         f"applies to the next trigger")))
                 else:
                     print(color_string((CR, f"set-config failed: status={resp.status}")))
@@ -6221,10 +6230,12 @@ class StandaloneConfig(DeviceRequiredUnit):
             if blob and len(blob) >= 4 and blob[0] == 1:
                 start = blob[1] | (blob[2] << 8)
                 count = blob[3]
+                repeat = blob[4] if len(blob) >= 5 else 1
                 print(color_string((CG, "spectrum config:")))
-                print(f"  range:  {start}-{start + count - 1} MHz ({count} point(s))")
+                print(f"  range:   {start}-{start + count - 1} MHz ({count} point(s))")
+                print(f"  repeat:  {repeat} ED sample(s)/point (peak-hold)")
             else:
-                print(color_string((CY, f"no persisted config — full band {SA_MIN}-{SA_MAX} MHz (84 points)")))
+                print(color_string((CY, f"no persisted config — full band {SA_MIN}-{SA_MAX} MHz (84 points), repeat=1")))
             return
 
         if mode == StandaloneMode.USB_NET:
