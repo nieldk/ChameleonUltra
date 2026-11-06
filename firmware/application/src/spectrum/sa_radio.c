@@ -4,10 +4,12 @@
  *
  * Unlike zb_radio.c this never receives a packet -- each point is just
  * RXEN + one energy-detect sample at a directly-set RADIO->FREQUENCY (no
- * 802.15.4 channel numbering, no PCNF0/1/CRCCNF, no PACKETPTR). That means a
- * whole batch of points can be swept synchronously inside the timeslot
- * START callback itself and the result returned immediately
- * (REQUEST_AND_END or END) -- no RADIO/TIMER0 signal handling needed at all.
+ * 802.15.4 channel numbering, no PACKETPTR). PCNF0/1/CRCCNF/SFD/MODECNF0 are
+ * still set every point, matching zb_radio.c's proven-working ED config --
+ * see sample_point(). That means a whole batch of points can be swept
+ * synchronously inside the timeslot START callback itself and the result
+ * returned immediately (REQUEST_AND_END or END) -- no RADIO/TIMER0 signal
+ * handling needed at all.
  *
  * Nordic's IEEE 802.15.4 ED value (EDSAMPLE) is used as a raw, uncalibrated
  * busy/quiet indicator across the whole band; see zb_radio.c's status docs
@@ -19,6 +21,7 @@
 #include <string.h>
 
 #include "nrf.h"
+#include "nrf_delay.h"
 #include "nrf_sdh_soc.h"
 #include "nrf_soc.h"
 
@@ -53,18 +56,46 @@ static void fill_request(void) {
 static void sample_point(uint16_t i) {
     NRF_RADIO->POWER     = 1;
     NRF_RADIO->MODE      = RADIO_MODE_MODE_Ieee802154_250Kbit << RADIO_MODE_MODE_Pos;
+    /* Not used for anything (no packet is ever received here, no PACKETPTR,
+     * no SHORTS past RXIDLE) -- but zb_radio.c, the only other ED user on
+     * this hardware, sets exactly this before RXEN and reads real nonzero
+     * EDSAMPLE values; this file set none of it and read 0 on every point,
+     * busy-waits included, across the whole band. No documented reason ED
+     * should care about packet format, but matching the known-good
+     * configuration is the fastest way to find out. */
+    NRF_RADIO->PCNF0     = (8UL << RADIO_PCNF0_LFLEN_Pos) |
+                           (RADIO_PCNF0_PLEN_32bitZero << RADIO_PCNF0_PLEN_Pos) |
+                           (RADIO_PCNF0_CRCINC_Include << RADIO_PCNF0_CRCINC_Pos);
+    NRF_RADIO->PCNF1     = (127UL << RADIO_PCNF1_MAXLEN_Pos);
+    NRF_RADIO->CRCCNF    = (RADIO_CRCCNF_LEN_Two << RADIO_CRCCNF_LEN_Pos) |
+                           (RADIO_CRCCNF_SKIPADDR_Ieee802154 << RADIO_CRCCNF_SKIPADDR_Pos);
+    NRF_RADIO->CRCPOLY   = 0x11021UL;
+    NRF_RADIO->CRCINIT   = 0;
+    NRF_RADIO->SFD       = 0xA7UL;
+    NRF_RADIO->MODECNF0  = (RADIO_MODECNF0_RU_Fast << RADIO_MODECNF0_RU_Pos) |
+                           (RADIO_MODECNF0_DTX_Center << RADIO_MODECNF0_DTX_Pos);
     NRF_RADIO->FREQUENCY = i;                 /* FREQUENCY reg == MHz above 2400 */
     NRF_RADIO->EVENTS_READY = 0;
     NRF_RADIO->TASKS_RXEN = 1;
     for (uint32_t w = 0; w < 4000 && !NRF_RADIO->EVENTS_READY; w++) __NOP();
+    if (NRF_RADIO->EVENTS_READY) m_st.ready_ok++; else m_st.ready_timeout++;
+
+    /* zb_radio.c's ED always runs after the radio has already been actively
+     * receiving for most of a (5-50ms) slot; this fires EDSTART within
+     * microseconds of READY, with no settle time for AGC/DC-offset
+     * correction to converge. Untested hypothesis, cheap to try: give the
+     * front end some time to settle before trusting the reading. */
+    nrf_delay_us(250);
 
     NRF_RADIO->EVENTS_EDEND = 0;
     NRF_RADIO->TASKS_EDSTART = 1;
     uint8_t v = 0;
     for (uint32_t w = 0; w < 20000 && !NRF_RADIO->EVENTS_EDEND; w++) __NOP();
     if (NRF_RADIO->EVENTS_EDEND) {
+        m_st.ed_ok++;
         v = (uint8_t)NRF_RADIO->EDSAMPLE;
     } else {
+        m_st.ed_timeout++;
         NRF_RADIO->TASKS_EDSTOP = 1;
     }
     NRF_RADIO->EVENTS_EDEND = 0;

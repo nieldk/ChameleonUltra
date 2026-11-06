@@ -159,6 +159,9 @@ static size_t get_status(char *out, size_t out_max) {
               (unsigned)m_cfg_start_mhz, (unsigned)(m_cfg_start_mhz + m_cfg_count - 1),
               (unsigned)s.points_done, (unsigned)m_cfg_count,
               (unsigned long)s.slots, (unsigned long)s.blocked, (unsigned long)s.canceled);
+    STATUS_KV(out, out_max, len, "diag    rxen=%lu/%lu ed=%lu/%lu\n",
+              (unsigned long)s.ready_ok, (unsigned long)s.ready_timeout,
+              (unsigned long)s.ed_ok, (unsigned long)s.ed_timeout);
     return len;
 }
 

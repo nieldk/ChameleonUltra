@@ -16,6 +16,8 @@ typedef struct {
     uint32_t slots, blocked, canceled;
     uint32_t last_rc;
     uint16_t points_done;   /* out of SA_POINT_COUNT; == SA_POINT_COUNT when finished */
+    uint32_t ready_ok, ready_timeout;   /* per-point TASKS_RXEN -> EVENTS_READY wait */
+    uint32_t ed_ok, ed_timeout;         /* per-point TASKS_EDSTART -> EVENTS_EDEND wait */
 } sa_stats_t;
 
 /* Starts a new sweep over [start_offset, start_offset+count) MHz above 2400
