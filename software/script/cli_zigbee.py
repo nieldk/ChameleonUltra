@@ -150,6 +150,10 @@ class ZigbeeDevices(DeviceRequiredUnit):
         for (ch, pan, a), d in sorted(devs.items(), key=lambda kv: (kv[0][0], kv[0][1] or 0, str(kv[0][2]))):
             addr = zp.fmt_ieee(a) if isinstance(a, int) and a > 0xFFFF else f"{a:#06x}"
             extra = f"  ieee={zp.fmt_ieee(d['ieee'])}" if d["ieee"] is not None and addr != zp.fmt_ieee(d["ieee"]) else ""
+            if d["ieee"] is not None:
+                vendor = zp.oui_vendor(d["ieee"])
+                if vendor:
+                    extra += f" ({vendor})"
             pan_s = f"{pan:#06x}" if pan is not None else "  -   "
             print(f"  {ch:>3} {pan_s:>6} {addr:>20} {d['tx']:>5} {sum(d['lqi']) / len(d['lqi']):>11.0f}{extra}")
 
