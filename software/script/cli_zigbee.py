@@ -15,27 +15,6 @@ from chameleon_enum import StandaloneMode
 # devices that don't provision their own. Public: documented in the Zigbee
 # specification and shipped as a built-in default in Wireshark.
 ZIGBEE_DEFAULT_KEY = bytes.fromhex("5a6967426565416c6c69616e63653039")
-
-# Zigbee Light Link (ZLL/"touchlink") keys. Public, but narrower in scope than the
-# HA default key above:
-#  - Master key: leaked publicly (Twitter, March 2015); used to key-transport the ZLL
-#    link key during touchlink commissioning.
-#  - Certification keys: Silicon Labs' public zll-types.h; only ever used by
-#    manufacturers' own certification-lab test devices, included here for completeness.
-ZLL_MASTER_KEY = bytes.fromhex("9f5595f10257c8a96573ab53ee2d4c0d")
-ZLL_CERT_ENC_KEY = bytes.fromhex("c0c1c2c3c4c5c6c7c8c9cacbcccdcecf")
-ZLL_CERT_LINK_KEY = bytes.fromhex("d0d1d2d3d4d5d6d7d8d9dadbdcdddedf")
-
-# Candidate Trust Center link keys for decrypting an APS Transport-Key command seen
-# during a device's join (the correct way to recover a network's real, random NWK
-# key -- see ZigbeeDump's "found Transport Key" handling below). ZigBeeAlliance09 is
-# the one that matters in practice; the ZLL keys are included in case a touchlink/ZLL
-# device is joining instead of a HA one.
-APS_JOIN_KEYS = [
-    ("ZigBeeAlliance09 (HA default TC link key)", ZIGBEE_DEFAULT_KEY),
-    ("ZLL master key", ZLL_MASTER_KEY),
-    ("ZLL certification link key", ZLL_CERT_LINK_KEY),
-]
 from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, standalone
 
 
@@ -164,9 +143,7 @@ class ZigbeeDump(DeviceRequiredUnit):
                        help="16-byte NWK key (32 hex chars) to decrypt NWK payloads (AES-CCM*, MIC-32). "
                             "If omitted, the well-known Zigbee HA/ZLL default key is tried automatically.")
         p.add_argument("--no-default-key", action="store_true",
-                       help="don't fall back to the well-known default/ZLL keys when -k is not given or fails "
-                            "(these are key-transport keys, not real network keys -- a MIC-ok hit here means "
-                            "the device non-compliantly reused one as its actual NWK key)")
+                       help="don't fall back to the default key when -k is not given or fails")
         return _time_arg(p, 10)
 
     def on_exec(self, args: argparse.Namespace):
@@ -181,10 +158,8 @@ class ZigbeeDump(DeviceRequiredUnit):
                 return
             keys.append(("given key", user_key))
         if not args.no_default_key:
-            keys.append(("default key (ZigBeeAlliance09)", ZIGBEE_DEFAULT_KEY))
-            keys.append(("ZLL master key", ZLL_MASTER_KEY))
-            keys.append(("ZLL certification link key", ZLL_CERT_LINK_KEY))
-        count, found_keys = 0, 0
+            keys.append(("default key", ZIGBEE_DEFAULT_KEY))
+        count = 0
         for ch, lqi, f in _collect(self.cmd, args.time):
             count += 1
             m = zp.parse_mac(f)
@@ -203,30 +178,4 @@ class ZigbeeDump(DeviceRequiredUnit):
                         print(f"      nwk payload [{label}, {tag}]: {r[0].hex()}")
                         if r[1]:
                             break
-            # Join-time key recovery: an APS Transport-Key command travels as NWK data
-            # that's cleartext at the NWK layer (the joining device has no NWK key yet)
-            # but secured at the APS layer under a TC link key. Decrypting that reveals
-            # this network's real, random NWK key.
-            if n is not None and n["ftype"] == 0 and not n["security"] and n.get("hdr_len") is not None:
-                aps_payload = f[m["payload_off"] + n["hdr_len"]:]
-                a = zp.parse_aps(aps_payload)
-                if a and a["ftype"] == 1 and a["security"] and a.get("aux"):
-                    for label, key in APS_JOIN_KEYS:
-                        try:
-                            r = zp.aps_decrypt(aps_payload, a, key)
-                        except ImportError:
-                            break
-                        if r and r[0] and r[0][0] == zp.APS_CMD_TRANSPORT_KEY:
-                            tk = zp.parse_transport_key(r[0])
-                            tag = "MIC ok" if r[1] else "MIC FAIL"
-                            print(f"      *** APS Transport Key [{label}, {tag}] type={tk['key_type_name']} ***")
-                            if tk["decoded"]:
-                                print(f"          network key: {tk['key'].hex()}  seq={tk['seq']} "
-                                      f"dst={zp.fmt_ieee(tk['dst_ieee'])} src={zp.fmt_ieee(tk['src_ieee'])}")
-                                if r[1]:
-                                    found_keys += 1
-                            else:
-                                print(f"          (key type not decoded) raw={tk['raw'].hex()}")
-                            if r[1]:
-                                break
-        print(f" {count} frame(s)" + (f", {found_keys} network key(s) recovered via Transport Key" if found_keys else ""))
+        print(f" {count} frame(s)")

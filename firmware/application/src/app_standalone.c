@@ -57,6 +57,9 @@
 #ifndef CONFIG_STANDALONE_ZIGBEE
 #define CONFIG_STANDALONE_ZIGBEE  0
 #endif
+#ifndef CONFIG_STANDALONE_SPECTRUM
+#define CONFIG_STANDALONE_SPECTRUM  0
+#endif
 #ifndef CONFIG_STANDALONE_USB_NET
 #define CONFIG_STANDALONE_USB_NET  1
 #endif
@@ -150,6 +153,9 @@ static const standalone_mode_iface_t *const m_modes[] = {
 #endif
 #if CONFIG_STANDALONE_ZIGBEE
     &mode_zigbee_iface,
+#endif
+#if CONFIG_STANDALONE_SPECTRUM
+    &mode_spectrum_iface,
 #endif
 };
 

@@ -723,6 +723,46 @@ network's regular traffic with MIC ok?) rather than as unconditionally trusted.
 Radio setup and buffer layout follow the nRF52840 Product Specification (RADIO, IEEE 802.15.4
 operation). Not tested on hardware at the time of writing.
 
+## `spectrum` ,  one-shot 2.4 GHz ISM energy-detect sweep  *(Lite + Ultra, needs `STANDALONE_SPECTRUM=1`)*
+
+Receive only, nothing is transmitted. A single sweep, 1 MHz steps, using the radio's IEEE
+802.15.4 energy-detect circuit -- same primitive as `zigbee`'s per-channel `ed`, just
+stepped at 1 MHz instead of across the 16 fixed 802.15.4 channels, so it also picks up
+Wi-Fi/BLE/anything else in band, not just 802.15.4 traffic. Default range is the whole
+2.4 GHz ISM band (2400-2483 MHz, 84 points); `standalone config spectrum --start/--end`
+narrows it to a subrange (fewer points -> fewer timeslots -> a sweep that finishes faster,
+useful for repeatedly watching one patch of spectrum instead of a one-shot full-band
+snapshot). Arm it and trigger:
+
+```
+standalone set-mode spectrum
+standalone config spectrum --start 2412 --end 2423   # optional: narrow the range
+standalone trigger        # starts one sweep (or the TOGGLE button)
+standalone status         # sweep=running range=.. points=.../.. while it's going
+standalone spectrum plot                 # matplotlib line plot
+standalone spectrum plot -o sweep.png     # save instead of showing a window
+standalone spectrum plot --raw            # print values, no matplotlib needed
+standalone spectrum get-result            # text summary: min/max/mean + busiest point
+standalone trigger         # re-trigger for a fresh sweep (overwrites the old one)
+```
+
+A full-band sweep takes a handful of SoftDevice timeslots (12 points swept synchronously
+per slot, so ~7 slots for all 84 points; a narrowed range needs proportionally fewer) --
+fast, but still shares the radio with BLE like every other standalone RX mode, so
+`blocked`/`canceled` in `standalone status` can stretch it out under heavy BLE contention.
+Values are the raw IEEE 802.15.4 EDSAMPLE byte per point (0-255), **not** calibrated to
+dBm and not temperature-compensated (same caveat as `zigbee`'s `ed`) -- useful for relative
+"what's busy right now" shape, not absolute power readings. The result (4-byte header --
+version, start MHz, point count -- plus up to 84 EDSAMPLE bytes) is self-describing so it
+reads back correctly whatever range was configured; it persists to flash on disarm/clear
+like every other mode, re-triggering overwrites it, `standalone clear-result` discards it.
+
+Under active hardware testing. A drain-cursor bug (`on_tick()` reset the read cursor on
+every idle tick, so `get-result` could return the same sweep's record more than once) was
+found and fixed in `mode_spectrum.c`; as of this writing that fix is built but not yet
+confirmed clean on real hardware -- if `get-result` ever again returns what looks like a
+duplicate record, that's the first thing to re-check.
+
 ## `--opt-in` and quiet flags
 
 `set-mode` takes optional flags:

@@ -5684,6 +5684,22 @@ def _standalone_render_result(args, mode, raw: bytes):
                     print(text)
         return
 
+    if mode == StandaloneMode.SPECTRUM:
+        freqs, vals = cli_spectrum._parse(raw)
+        if freqs is None:
+            print(color_string((CY, "no sweep result yet -- run `standalone trigger` first")))
+            return
+        if args.json:
+            out = jsonlib.dumps([{"mhz": f, "ed": v} for f, v in zip(freqs, vals)], indent=2)
+            if args.file:
+                Path(args.file).write_text(out)
+                print(color_string((CG, f"-> {args.file}")))
+            else:
+                print(out)
+        else:
+            print(color_string((CG, cli_spectrum.summarize(freqs, vals))))
+        return
+
     if mode not in (StandaloneMode.AUTHTRACE, StandaloneMode.EMUL_TRACE,
                     StandaloneMode.RELAY, StandaloneMode.HF14A_TAP_SNIFF):
         print(color_string((CY,
@@ -5836,6 +5852,7 @@ for _mode in StandaloneMode:
 
 
 import cli_zigbee  # noqa: F401,E402  (standalone zigbee scan/devices/dump)
+import cli_spectrum  # noqa: F401,E402  (standalone spectrum plot)
 
 
 @standalone.command('modes')
@@ -6018,6 +6035,10 @@ class StandaloneConfig(DeviceRequiredUnit):
                             help='[zigbee] 802.15.4 channel 11-26, or 0 to hop over all (default 11)')
         parser.add_argument('--dwell', type=int, default=None,
                             help='[zigbee] hop dwell per channel in ms (50-60000, default 500)')
+        parser.add_argument('--start', type=int, default=None,
+                            help='[spectrum] sweep start MHz (2400-2483, default 2400)')
+        parser.add_argument('--end', type=int, default=None,
+                            help='[spectrum] sweep end MHz, inclusive (2400-2483, default 2483)')
         return parser
 
     def on_exec(self, args):
@@ -6165,6 +6186,45 @@ class StandaloneConfig(DeviceRequiredUnit):
                     print(f"  dwell:    {int.from_bytes(blob[2:4], 'little')} ms")
             else:
                 print(color_string((CY, "no persisted config — channel 11")))
+            return
+
+        if mode == StandaloneMode.SPECTRUM:
+            if any(v is not None for v in (args.block, args.key_type, args.key, args.timeout)):
+                print(color_string((CR, "spectrum config uses only --start and --end")))
+                return
+            SA_MIN, SA_MAX = 2400, 2483
+            if args.start is not None or args.end is not None:
+                cur = self.cmd.standalone_get_config(mode)
+                if cur and len(cur) >= 4 and cur[0] == 1:
+                    cur_start = cur[1] | (cur[2] << 8)
+                    cur_end   = cur_start + cur[3] - 1
+                else:
+                    cur_start, cur_end = SA_MIN, SA_MAX
+                start = args.start if args.start is not None else cur_start
+                end   = args.end   if args.end   is not None else cur_end
+                if not (SA_MIN <= start <= SA_MAX):
+                    print(color_string((CR, f"--start must be {SA_MIN}..{SA_MAX}")))
+                    return
+                if not (start <= end <= SA_MAX):
+                    print(color_string((CR, f"--end must be between --start and {SA_MAX}")))
+                    return
+                count = end - start + 1
+                resp = self.cmd.standalone_set_config(mode, struct.pack('<BHB', 1, start, count))
+                if resp.status == Status.SUCCESS:
+                    print(color_string((CG,
+                        f"spectrum set to {start}-{end} MHz ({count} point(s)); "
+                        f"applies to the next trigger")))
+                else:
+                    print(color_string((CR, f"set-config failed: status={resp.status}")))
+                return
+            blob = self.cmd.standalone_get_config(mode)
+            if blob and len(blob) >= 4 and blob[0] == 1:
+                start = blob[1] | (blob[2] << 8)
+                count = blob[3]
+                print(color_string((CG, "spectrum config:")))
+                print(f"  range:  {start}-{start + count - 1} MHz ({count} point(s))")
+            else:
+                print(color_string((CY, f"no persisted config — full band {SA_MIN}-{SA_MAX} MHz (84 points)")))
             return
 
         if mode == StandaloneMode.USB_NET:

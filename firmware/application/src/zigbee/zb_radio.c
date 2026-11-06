@@ -62,30 +62,43 @@ static void radio_rx_begin(void) {
                            (RADIO_CRCCNF_SKIPADDR_Ieee802154 << RADIO_CRCCNF_SKIPADDR_Pos);
     NRF_RADIO->CRCPOLY   = 0x11021UL;
     NRF_RADIO->CRCINIT   = 0;
+    NRF_RADIO->SFD       = 0xA7UL;   /* IEEE 802.15.4 start-of-frame delimiter; demod
+                                       * only raises FRAMESTART on a match against this.
+                                       * Never set before -- worth it even if it's already
+                                       * the reset default, since leaving it unset is the
+                                       * difference between "definitely right" and "assumed". */
     m_slot_ch            = m_channel;
     NRF_RADIO->FREQUENCY = 5UL * (m_slot_ch - 10u);      /* 2405 MHz + 5 * (ch - 11) */
     NRF_RADIO->PACKETPTR = (uint32_t)m_pkt;
+    NRF_RADIO->MODECNF0  = (RADIO_MODECNF0_RU_Fast << RADIO_MODECNF0_RU_Pos) |
+                           (RADIO_MODECNF0_DTX_Center << RADIO_MODECNF0_DTX_Pos);
     NRF_RADIO->SHORTS    = RADIO_SHORTS_RXREADY_START_Msk;   /* END->START is not allowed in this mode */
     NRF_RADIO->EVENTS_END = 0;
     NRF_RADIO->EVENTS_FRAMESTART = 0;
-    NRF_RADIO->INTENSET   = RADIO_INTENSET_END_Msk | RADIO_INTENSET_FRAMESTART_Msk;
     NRF_RADIO->EVENTS_READY = 0;
+    NRF_RADIO->INTENSET   = RADIO_INTENSET_END_Msk | RADIO_INTENSET_FRAMESTART_Msk;
+
+    NRF_TIMER0->CC[0]             = m_cur_us - STOP_GUARD_US;   /* TIMER0 runs at 1 MHz in a slot */
+    NRF_TIMER0->EVENTS_COMPARE[0] = 0;
+    NRF_TIMER0->INTENSET          = TIMER_INTENSET_COMPARE0_Msk;
+
+    /* The slot signals only arrive with these IRQs enabled (Nordic timeslot guide).
+     * Armed before TASKS_RXEN: previously this was armed after the EVENTS_READY
+     * busy-wait below, which left a window -- from TASKS_RXEN until NVIC_EnableIRQ --
+     * where the shortcut could already auto-start RX and a FRAMESTART/END landing in
+     * that window would set its EVENTS bit but never reach radio_cb(RADIO). Too narrow
+     * to explain a 100% miss rate by itself, but it was a real gap and is now closed. */
+    NVIC_ClearPendingIRQ(RADIO_IRQn);
+    NVIC_ClearPendingIRQ(TIMER0_IRQn);
+    NVIC_EnableIRQ(RADIO_IRQn);
+    NVIC_EnableIRQ(TIMER0_IRQn);
+
     NRF_RADIO->TASKS_RXEN = 1;
     for (uint32_t i = 0; i < 4000 && !NRF_RADIO->EVENTS_READY; i++) {
         __NOP();
     }
     if (NRF_RADIO->EVENTS_READY) m_st.ready_ok++; else m_st.ready_timeout++;
     m_st.state_after = (uint8_t)NRF_RADIO->STATE;
-
-    NRF_TIMER0->CC[0]             = m_cur_us - STOP_GUARD_US;   /* TIMER0 runs at 1 MHz in a slot */
-    NRF_TIMER0->EVENTS_COMPARE[0] = 0;
-    NRF_TIMER0->INTENSET          = TIMER_INTENSET_COMPARE0_Msk;
-
-    /* The slot signals only arrive with these IRQs enabled (Nordic timeslot guide). */
-    NVIC_ClearPendingIRQ(RADIO_IRQn);
-    NVIC_ClearPendingIRQ(TIMER0_IRQn);
-    NVIC_EnableIRQ(RADIO_IRQn);
-    NVIC_EnableIRQ(TIMER0_IRQn);
 }
 
 /* One energy-detect sample (Nordic PS, IEEE 802.15.4 ED); bounded wait, raw value. */

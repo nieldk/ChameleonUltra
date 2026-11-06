@@ -866,6 +866,7 @@ class StandaloneMode(enum.IntEnum):
     U2F         = 0x0B   # FIDO U2F (CTAP1) authenticator over NFC
     USB_NET     = 0x0C   # USB Ethernet (ECM/RNDIS); CLI frames over TCP port 18888
     ZIGBEE      = 0x0D   # passive 802.15.4 (Zigbee) receive
+    SPECTRUM    = 0x0E   # one-shot 2.4 GHz ISM energy-detect sweep
 
     @classmethod
     def from_name(cls, name: str) -> "StandaloneMode":
