@@ -10,6 +10,20 @@ import struct
 
 FRAME_TYPES = {0: "beacon", 1: "data", 2: "ack", 3: "command"}
 
+# OUI (top 3 bytes of an EUI-64) -> chip/module vendor. Identifies the radio
+# silicon, not the end-product brand. Verified against the IEEE MA-L registry.
+OUI_VENDORS = {
+    0x000D6F: "Ember/Silicon Labs",
+    0x00124B: "Texas Instruments",
+    0x0013A2: "MaxStream/Digi (XBee)",
+    0x00158D: "Jennic/NXP",
+}
+
+
+def oui_vendor(eui64: int):
+    """Vendor for eui64's OUI, or None if it's not in OUI_VENDORS."""
+    return OUI_VENDORS.get((eui64 >> 40) & 0xFFFFFF)
+
 
 def parse_records(blob: bytes):
     """Split the firmware log into (channel, lqi_raw, frame) tuples. Stops at a truncated record."""
@@ -327,4 +341,8 @@ def describe_frame(ch: int, lqi: int, f: bytes) -> str:
         line += (f" nwk[{['data', 'cmd', '?', 'interpan'][n['ftype']]} "
                  f"{n['src']:#06x}->{n['dst']:#06x} r={n['radius']} s={n['seq']}"
                  f"{' nwk-secured' if n['security'] else ''}]")
+        for tag, ieee in (("src", n["src_ieee"]), ("dst", n["dst_ieee"])):
+            if ieee is not None:
+                vendor = oui_vendor(ieee)
+                line += f" {tag}-ieee={fmt_ieee(ieee)}" + (f" ({vendor})" if vendor else "")
     return line
