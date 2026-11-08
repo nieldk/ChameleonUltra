@@ -210,6 +210,12 @@ function viewer(cfg){
       if(nw > 50 && nw !== w){ w = nw; paint(); }
     }).observe(canvas);
   }
+  // Optional hook: hands the caller the internal repaint function, so a
+  // viewer whose underlying data changes asynchronously (e.g. a new sweep
+  // row arriving) can force a redraw without the caller reaching into the
+  // canvas itself. Purely additive -- existing callers (waveform/logic)
+  // don't pass this and behave exactly as before.
+  if(typeof cfg.onReady === "function") cfg.onReady(paint);
   paint();
   return wrap;
 }
@@ -363,6 +369,6 @@ function logic(m, o){
   });
 }
 
-window.CUPlot = {waveform, logic, save};
+window.CUPlot = {waveform, logic, viewer, save};
 
 })();

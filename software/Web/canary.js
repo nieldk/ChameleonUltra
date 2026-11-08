@@ -5,13 +5,19 @@ const NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 const CMD_GET_RESULT = 7004, STATUS_OK = 0x68;
 const CMD_SET_MODE = 7001, CMD_CLEAR = 7005, MODE_EMUL = 6, CMD_GET_MODE = 7000, CMD_TRIGGER = 7006, CMD_DISARM = 7009, MODE_CANARY = 9;
 const STATES = ["disarmed","armed, waiting","mode select","armed, running"];
-const MODES = {0:"none",1:"autoclone",2:"read_replay",3:"authtrace",4:"slot_cycle",5:"dict_check",6:"emul_trace",7:"relay",8:"hf14a_tap_sniff",9:"nfc_canary",10:"gdb_gateway",11:"u2f",12:"usb_net"};
+const MODES = {0:"none",1:"autoclone",2:"read_replay",3:"authtrace",4:"slot_cycle",5:"dict_check",6:"emul_trace",7:"relay",8:"hf14a_tap_sniff",9:"nfc_canary",10:"gdb_gateway",11:"u2f",12:"usb_net",13:"zigbee",14:"spectrum",15:"esb",16:"esb_promisc"};
 const CMD_EVENT = 7010;
 const CMD_GET_CONFIG = 7002, CMD_SET_CONFIG = 7003, CMD_GET_SIZES = 7007, CMD_RELAY_DIAG = 7008;
+const CMD_GET_STATUS = 7014;
 const CMD_GET_DEVICE_CAPABILITIES = 1035;
 const MODE_AUTHTRACE = 3, MODE_SLOT = 4, MODE_RELAY = 7, MODE_TAP = 8;
 const MODE_AUTOCLONE = 1, MODE_READ_REPLAY = 2, MODE_DICT = 5, MODE_GDB = 10, MODE_U2F = 11, MODE_USBNET = 12;
-const ACTION_MODES = [MODE_READ_REPLAY, MODE_AUTOCLONE, MODE_DICT];  /* trigger-driven reader modes */
+const MODE_ZIGBEE = 13, MODE_SPECTRUM = 14, MODE_ESB = 15, MODE_ESB_PROMISC = 16;
+const ACTION_MODES = [MODE_READ_REPLAY, MODE_AUTOCLONE, MODE_DICT, MODE_SPECTRUM];  /* trigger-driven reader/sweep modes */
+/* zigbee/esb/esb_promisc are continuous passive-receive modes: trigger only
+ * arms/disarms them (same as nfc_canary), there is no secondary button
+ * action, so they stay out of ACTION_MODES and the "test" button stays
+ * hidden for them, same as u2f/gdb_gateway/usb_net. */
 /* gdb_gateway sets writes_slot, so the firmware gates it behind host opt-in too */
 const OPTIN_MODES = [MODE_AUTOCLONE, MODE_READ_REPLAY, MODE_GDB];
 const FLAG_OPTIN = 0x01;
@@ -382,6 +388,21 @@ async function fetchSaved(){
       const recs=parseDict(raw); renderDict(recs);
       const found=recs.filter(r=>r.foundA||r.foundB).length;
       st.textContent = recs.length ? found+"/"+recs.length+" sector(s) with a known key." : "No sectors checked.";
+    } else if(devMode===MODE_ZIGBEE){
+      const recs = (typeof parseZigbeeRecords==="function") ? parseZigbeeRecords(raw) : [];
+      if(typeof renderZigbee==="function") renderZigbee(recs);
+      st.textContent = recs.length ? recs.length+" frame(s) captured." : "No frames captured. Is the mode armed (hop needs channel 0 in its config)?";
+    } else if(devMode===MODE_ESB){
+      const recs=parseEsb(raw); renderEsb(recs);
+      st.textContent = recs.length ? summarizeEsb(recs) : "No frames captured.";
+    } else if(devMode===MODE_ESB_PROMISC){
+      const recs=parseEsbPromisc(raw); renderEsbPromisc(recs);
+      st.textContent = recs.length ? summarizeEsbPromisc(recs) : "No hits captured.";
+    } else if(devMode===MODE_SPECTRUM){
+      if(typeof renderSpectrumResult==="function"){
+        const msg = renderSpectrumResult(raw);
+        st.textContent = msg || "No sweep result. Arm the mode and press Trigger first.";
+      } else st.textContent = "spectrum_plot.js not loaded.";
     } else {
       const recs=parseRecords(raw);
       renderSaved(recs);
@@ -556,8 +577,38 @@ const CFG={
     fields:[["wtx","WTX ms","2000"]],
     enc(g){ const w=(+g.wtx||2000)>>>0; return [w&255,(w>>8)&255,(w>>16)&255,(w>>24)&255]; },
     dec(d){ return {wtx:d.length>=4?((d[0]|(d[1]<<8)|(d[2]<<16)|(d[3]<<24))>>>0):2000}; }},
+  [MODE_ZIGBEE]:{  // 4B: ver=1, channel (0=hop, 11..26), dwell_ms LE (see mode_zigbee.c)
+    fields:[["channel","Channel (0=hop, 11-26)","11"],["dwell","Hop dwell ms (50-60000)","500"]],
+    enc(g){ let ch=+g.channel; if(!(ch===0||(ch>=11&&ch<=26))) ch=11;
+      const a=[1,ch]; u16le(a, Math.min(60000,Math.max(50,+g.dwell||500))); return a; },
+    dec(d){ return {channel:d[1], dwell:d.length>=4?(d[2]|(d[3]<<8)):500}; }},
+  [MODE_SPECTRUM]:{  // 5B: ver=1, start_mhz LE (2400-2483), count (1-84), repeat (1-32) (see mode_spectrum.c)
+    fields:[["start","Start MHz (2400-2483)","2400"],["count","Point count (1-84)","84"],["repeat","Repeat (1-32)","1"]],
+    enc(g){ const a=[1]; u16le(a, Math.min(2483,Math.max(2400,+g.start||2400)));
+      a.push(Math.min(84,Math.max(1,+g.count||84)));
+      a.push(Math.min(32,Math.max(1,+g.repeat||1))); return a; },
+    dec(d){ return {start:d[1]|(d[2]<<8), count:d[3], repeat:d.length>=5?d[4]:1}; }},
+  [MODE_ESB]:{  // 10B: ver=1, addr[5], channel (0-100 or hop), bitrate (1M/2M), dwell_ms LE (see mode_esb.c)
+    fields:[["addr","Address (10 hex, e.g. a Unifying dongle's)","0000000000"],["channel","Channel (0-100, or \"hop\")","5"],["bitrate","Bitrate (1M/2M)","2M"],["dwell","Hop dwell ms (50-60000)","500"]],
+    enc(g){ const a=[1];
+      const hx=(g.addr||"").replace(/[^0-9a-f]/gi,"").padEnd(10,"0").slice(0,10);
+      for(let i=0;i<5;i++) a.push(parseInt(hx.substr(i*2,2),16)||0);
+      const chs=(g.channel||"5").trim().toLowerCase();
+      a.push(chs==="hop" ? 0xFF : Math.min(100,Math.max(0,+chs||0)));
+      a.push((g.bitrate||"2M").trim()==="1M" ? 0 : 1);
+      u16le(a, Math.min(60000,Math.max(50,+g.dwell||500))); return a; },
+    dec(d){ return {addr:hex(Array.from(d.slice(1,6))), channel:(d[6]===0xFF?"hop":d[6]),
+      bitrate:(d[7]?"2M":"1M"), dwell:d.length>=10?(d[8]|(d[9]<<8)):500}; }},
+  [MODE_ESB_PROMISC]:{  // 4B: ver=1, channel (0-100), prefix_lo, prefix_hi (see mode_esb_promisc.c)
+    fields:[["channel","Channel (0-100, point at a known-busy channel)","5"],["prefixLo","Prefix guess low","0"],["prefixHi","Prefix guess high","7"]],
+    enc(g){ const a=[1, Math.min(100,Math.max(0,+g.channel||5))];
+      let lo=Math.min(255,Math.max(0,+g.prefixLo||0)), hi=Math.min(255,Math.max(0,+g.prefixHi||7));
+      if(lo>hi){ const t=lo; lo=hi; hi=t; }
+      a.push(lo,hi); return a; },
+    dec(d){ return {channel:d[1], prefixLo:d[2], prefixHi:d[3]}; }},
 };
 function renderCfg(mode){
+  notifyModeUIChange(mode);
   const box=$("cfg"), spec=CFG[mode]; box.textContent="";
   if(!spec){ box.style.display="none"; return; }
   box.style.display="";
@@ -570,6 +621,12 @@ function renderCfg(mode){
   const ld=document.createElement("button"); ld.className="ghost"; ld.textContent="Load"; ld.onclick=()=>guarded(()=>loadCfg(mode));
   const sv=document.createElement("button"); sv.textContent="Save config"; sv.onclick=()=>guarded(()=>saveCfg(mode));
   box.append(ld,sv);
+}
+// spectrum_plot.js (loaded after this file) defines this to swap the saved-
+// events list for its plot/waterfall container when the selected mode is
+// spectrum, and back for every other mode.
+function notifyModeUIChange(mode){
+  if(typeof onStandaloneModeUIChange==="function") onStandaloneModeUIChange(mode);
 }
 async function loadCfg(mode){
   const f=await request(CMD_GET_CONFIG,[mode]);
@@ -585,6 +642,26 @@ async function saveCfg(mode){
   cmsg("Config saved. Set mode, then Arm, to apply.");
 }
 $("modeSel").addEventListener("change",()=>renderCfg(Number($("modeSel").value)));
+
+/* ---- standalone status (GET_STATUS 7014): UTF-8 "key=value" lines, generic
+ * ones first then the mode's own -- mirrors chameleon_cmd.py's
+ * standalone_get_status(). Used by spectrum_plot.js to poll the "sweep="
+ * field the same way cli_spectrum.py's _trigger_and_wait() does. */
+function statusLineToPairs(text){
+  const out=[];
+  for(const line of text.split("\n")){
+    const i=line.indexOf("=");
+    if(i<0) continue;
+    out.push([line.slice(0,i).trim(), line.slice(i+1).trim()]);
+  }
+  return out;
+}
+async function getStandaloneStatus(){
+  const f=await request(CMD_GET_STATUS);
+  if(f.status!==STATUS_OK || !f.data.length) return [];
+  const text=new TextDecoder("utf-8").decode(new Uint8Array(f.data));
+  return statusLineToPairs(text);
+}
 
 /* ---- relay live diagnostics (RELAY_DIAG 7008) ---- */
 const RELAY_SUB=["linking","waiting","card found","relaying","done"];
@@ -722,6 +799,94 @@ function renderDict(recs){
 
 
 
+/* ---- esb / esb-promisc result records (see mode_esb.c, mode_esb_promisc.c,
+ * ported faithfully from cli_esb.py -- no cryptography involved). ---- */
+
+// Logitech Unifying payload shapes (5, 10 or 22-byte payload + 1-byte vendor
+// checksum -> 6, 11 or 23 bytes captured here), from Bastille/MouseJack and
+// SensePost/Logitacker. Only shape + checksum validity is reported, same as
+// cli_esb.py -- what each shape carries is Logitacker-specific and not
+// decoded here.
+const UNIFYING_LENS = {6:"short(5)", 11:"short(10)", 23:"long(22)"};
+
+function parseEsb(raw){  // REC_HDR=2: channel, len, data[len]
+  const out=[]; let i=0;
+  while(i+2<=raw.length){
+    const ch=raw[i], ln=raw[i+1];
+    if(i+2+ln>raw.length) break;
+    out.push({channel:ch, data:raw.slice(i+2,i+2+ln)});
+    i+=2+ln;
+  }
+  return out;
+}
+function unifyingChecksumOk(f){  // byte-wise sum of the whole frame == 0 mod 256
+  if(!f.length) return false;
+  return (f.reduce((s,x)=>s+x,0)&0xFF)===0;
+}
+function esbShape(len){ return UNIFYING_LENS[len] || ("len="+len); }
+function summarizeEsb(recs){
+  if(!recs.length) return "no frames";
+  const byShape={};
+  for(const r of recs){ const s=esbShape(r.data.length); byShape[s]=(byShape[s]||0)+1; }
+  const parts=Object.keys(byShape).sort().map(s=>byShape[s]+" "+s).join(", ");
+  return recs.length+" frame(s): "+parts;
+}
+function renderEsb(recs){
+  const ul=$("saved"); ul.textContent="";
+  recs.forEach(r=>{
+    const ok=unifyingChecksumOk(r.data);
+    const li=document.createElement("li"); li.className="ev "+(ok?"l1":"l3");
+    const top=document.createElement("div"); top.className="top";
+    const s=document.createElement("strong"); s.textContent="ch "+r.channel+"  "+esbShape(r.data.length);
+    const tm=document.createElement("time"); tm.textContent="checksum "+(ok?"ok":"BAD");
+    top.append(s,tm);
+    const d=document.createElement("div"); d.className="det"; d.textContent=hex(Array.from(r.data));
+    li.append(top,d); ul.append(li);
+  });
+}
+
+function parseEsbPromisc(raw){  // REC_HDR=4: channel, prefix_guess, base_guess, len, raw[len]
+  const out=[]; let i=0;
+  while(i+4<=raw.length){
+    const ch=raw[i], prefix=raw[i+1], base=raw[i+2], ln=raw[i+3];
+    if(i+4+ln>raw.length) break;
+    out.push({channel:ch, prefix, base, raw:raw.slice(i+4,i+4+ln)});
+    i+=4+ln;
+  }
+  return out;
+}
+// (prefix, base) -> hit count. A guess with many hits is a real candidate;
+// one or two is likely noise (CRC is off in this mode).
+function promiscHitCounts(recs){
+  const counts=new Map();
+  for(const r of recs){ const k=r.prefix+"/"+r.base; counts.set(k,(counts.get(k)||0)+1); }
+  return counts;
+}
+function summarizeEsbPromisc(recs){
+  if(!recs.length) return "no hits";
+  const counts=promiscHitCounts(recs);
+  const top=[...counts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5)
+    .map(([k,n])=>{ const [p,b]=k.split("/").map(Number);
+      return "prefix=0x"+p.toString(16).padStart(2,"0")+"/base=0x"+b.toString(16).padStart(2,"0")+":"+n; })
+    .join(", ");
+  return recs.length+" hit(s) across "+counts.size+" guess(es); top: "+top;
+}
+function renderEsbPromisc(recs){
+  const ul=$("saved"); ul.textContent="";
+  const counts=promiscHitCounts(recs);
+  recs.forEach(r=>{
+    const n=counts.get(r.prefix+"/"+r.base)||0;
+    const li=document.createElement("li"); li.className="ev";
+    const top=document.createElement("div"); top.className="top";
+    const s=document.createElement("strong"); s.textContent="ch "+r.channel;
+    const tm=document.createElement("time");
+    tm.textContent="prefix 0x"+r.prefix.toString(16).padStart(2,"0")+" base 0x"+r.base.toString(16).padStart(2,"0")+"  ("+n+" hit"+(n===1?"":"s")+" at this guess)";
+    top.append(s,tm);
+    const d=document.createElement("div"); d.className="det"; d.textContent=hex(Array.from(r.raw));
+    li.append(top,d); ul.append(li);
+  });
+}
+
 $("fetch").addEventListener("click",fetchSaved);
 
 /* ---- arm / disarm / test (7000 GET_MODE, 7006 TRIGGER, 7009 DISARM) ---- */
@@ -795,7 +960,7 @@ $("clrdev").addEventListener("click",()=>guarded(async()=>{
 }));
 $("arm").addEventListener("click",()=>guarded(async()=>{
   await readState();
-  if(![MODE_CANARY,MODE_EMUL,MODE_AUTHTRACE,MODE_SLOT,MODE_RELAY,MODE_TAP,MODE_READ_REPLAY,MODE_AUTOCLONE,MODE_DICT,MODE_GDB,MODE_U2F,MODE_USBNET].includes(devMode)){ cmsg("Active mode "+(MODES[devMode]||devMode)+" can't be armed from here."); return; }
+  if(![MODE_CANARY,MODE_EMUL,MODE_AUTHTRACE,MODE_SLOT,MODE_RELAY,MODE_TAP,MODE_READ_REPLAY,MODE_AUTOCLONE,MODE_DICT,MODE_GDB,MODE_U2F,MODE_USBNET,MODE_ZIGBEE,MODE_SPECTRUM,MODE_ESB,MODE_ESB_PROMISC].includes(devMode)){ cmsg("Active mode "+(MODES[devMode]||devMode)+" can't be armed from here."); return; }
   if(devState!==0){ cmsg("Already armed."); return; }
   lastSeq=null;
   const f=await request(CMD_TRIGGER);
@@ -815,6 +980,14 @@ $("test").addEventListener("click",()=>guarded(async()=>{
   if(devState===0){ cmsg("Not armed. Arm first."); return; }
   const f=await request(CMD_TRIGGER);
   if(f.status!==STATUS_OK) throw new Error("status 0x"+f.status.toString(16));
+  // spectrum_plot.js defines this to poll GET_STATUS for "sweep=done" (same
+  // field cli_spectrum.py's _trigger_and_wait polls) and then auto-fetch/plot
+  // the result, instead of making the user press Fetch saved events too.
+  if(devMode===MODE_SPECTRUM && typeof spectrumWaitAndFetch==="function"){
+    cmsg("Sweep triggered, waiting for it to finish…");
+    await spectrumWaitAndFetch();
+    return;
+  }
   cmsg(devMode===MODE_EMUL ? "Commit requested. Press Fetch saved events to see the session." : ACTION_MODES.includes(devMode) ? "Triggered. Press Fetch saved events to see the result." : "Test event sent. It should appear in the live list.");
 }));
 $("btn").addEventListener("click",()=>{ (wantConn||(device&&device.gatt.connected)) ? disconnect() : connect(); });
