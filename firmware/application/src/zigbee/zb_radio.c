@@ -154,7 +154,9 @@ static void radio_off(void) {
     NRF_RADIO->EVENTS_END      = 0;
 }
 
-/* RAM: [PHR][MPDU: PHR-2 bytes][LQI]; the radio stays in RXIDLE after END. */
+/* RAM: [PHR][MPDU: PHR-2 bytes][LQI]. Restarts RX via a full DISABLE/RXEN cycle, not
+ * a bare TASKS_START -- nRF52840 anomaly 110 (BLE LR / 802.15.4 mode) can lose packets
+ * after one is received unless the radio is disabled first. */
 static void radio_frame(void) {
     NRF_RADIO->EVENTS_END = 0;
     uint8_t phr = m_pkt[0] & 0x7F;
@@ -179,7 +181,15 @@ static void radio_frame(void) {
         }
     }
     NRF_RADIO->PACKETPTR = (uint32_t)m_pkt;
-    NRF_RADIO->TASKS_START = 1;
+
+    NRF_RADIO->EVENTS_DISABLED = 0;
+    NRF_RADIO->TASKS_DISABLE   = 1;         /* anomaly 110 workaround */
+    for (uint32_t i = 0; i < 2000 && !NRF_RADIO->EVENTS_DISABLED; i++) {
+        __NOP();
+    }
+    NRF_RADIO->EVENTS_DISABLED = 0;
+    NRF_RADIO->EVENTS_READY    = 0;
+    NRF_RADIO->TASKS_RXEN      = 1;         /* SHORTS RXREADY->START carries it into RX */
 }
 
 static nrf_radio_signal_callback_return_param_t *radio_cb(uint8_t sig) {
