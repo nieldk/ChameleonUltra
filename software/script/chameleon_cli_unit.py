@@ -2088,18 +2088,19 @@ class HWButtonSettingsGet(DeviceRequiredUnit):
                 button_list = [ButtonType.B]
             else:
                 button_list = list(ButtonType)
+            lw = 14   # longest label: "Button A short"
+            lines = []
             for button in button_list:
                 if not args.long:
                     resp = self.cmd.get_button_press_config(button)
                     button_fn = ButtonPressFunction(resp)
-                    print(f"{color_string((CG, f'{button.name} short'))}: {button_fn}")
+                    lines.append(f"{f'Button {button.name} short':<{lw}} {color_string((CG, button_fn))}")
                 if not args.short:
                     resp_long = self.cmd.get_long_button_press_config(button)
                     button_long_fn = ButtonPressFunction(resp_long)
-                    print(
-                        f"{color_string((CG, f'{button.name} long'))}: {button_long_fn}"
-                    )
-                print("")
+                    lines.append(f"{f'Button {button.name} long':<{lw}} {color_string((CG, button_long_fn))}")
+            for line in _box("Button Press Config", lines, color=CC, min_width=34):
+                print(line)
 
 
 @hw_settings.command("blekey")
