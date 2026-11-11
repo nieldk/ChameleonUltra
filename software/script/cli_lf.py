@@ -36,6 +36,7 @@ from cli_core import (
     Status,
     TagSpecificType,
     Union,
+    _box,
     _fdxb_build_frame,
     _fdxb_crc16,
     _fdxb_crc_ok,
@@ -1526,13 +1527,17 @@ class LFT55xxConfig(BaseCLIUnit):
         elif args.r3:
             _T55_DETECTED["dl"] = 3
         d = _T55_DETECTED
-        print(f"{CY} --- t55xx config -----------------------------{C0}")
-        print(f"   rf         : {d['rf'] if d['rf'] is not None else '(unset, read defaults to 32)'}")
-        print(f"   modulation : {d['mod']}")
-        print(f"   max block  : {d['maxblock']}")
-        print(f"   password   : {d['pwd'].hex().upper() if d['pwd'] else '(none)'}"
-              f" (set: {'yes' if d['pwd_set'] else 'no'})")
-        print(f"   downlink   : {_T55_DL_NAMES[d['dl']]}")
+        lw = 10   # longest label: "modulation"
+        lines = [
+            f"{'rf':<{lw}} {d['rf'] if d['rf'] is not None else '(unset, read defaults to 32)'}",
+            f"{'modulation':<{lw}} {d['mod']}",
+            f"{'max block':<{lw}} {d['maxblock']}",
+            f"{'password':<{lw}} {d['pwd'].hex().upper() if d['pwd'] else '(none)'}"
+            f" (set: {'yes' if d['pwd_set'] else 'no'})",
+            f"{'downlink':<{lw}} {_T55_DL_NAMES[d['dl']]}",
+        ]
+        for line in _box("T55xx Config", lines, color=CY, min_width=34):
+            print(line)
 
 
 @lf_t55xx.command("p1detect")

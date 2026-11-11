@@ -21,6 +21,7 @@ from pathlib import Path
 from multiprocessing import Pool, cpu_count
 
 from cli_core import (
+    _box,
     _run_mfkey32v2,
     ArgsParserError,
     ArgumentParserNoExit,
@@ -2672,12 +2673,17 @@ def _gdm_resolve_wakeup(cmd, read_cmd, block, gen1a, gdm, wupa, key, prefer_auth
 
 
 def _gdm_print_cfg(data: bytes):
-    print(f" Raw config: {color_string((CY, data.hex().upper()))}")
     # Verified against cmdhfmf.c's own parse_gdm_cfg(): byte[2] literally
     # selects which raw-wakeup backdoor the card answers to (0x85=GDM-alt,
     # anything else=gen1a); this does not affect the WUPA magic-auth path.
     style = "GDM 20(7)/23" if len(data) > 2 and data[2] == 0x85 else "Gen1a 40(7)/43"
-    print(f" Raw-wakeup backdoor style: {color_string((CY, style))}")
+    lw = 21   # longest label: "Raw-wakeup backdoor"
+    lines = [
+        f"{'Raw config':<{lw}} {color_string((CY, data.hex().upper()))}",
+        f"{'Raw-wakeup backdoor':<{lw}} {color_string((CY, style))}",
+    ]
+    for line in _box("GDM Config", lines, color=CC, min_width=30):
+        print(line)
     print(color_string((CY,
         "Other config bits (shadow mode, CUID, signature sector, etc.) vary by "
         "vendor batch and are not decoded here -- use the raw hex above.")))
@@ -4096,31 +4102,24 @@ class HFMFEConfig(SlotIndexArgsAndGoUnit, HF14AAntiCollArgsUnit, DeviceRequiredU
             enabled_str = color_string((CG, "enabled"))
             disabled_str = color_string((CR, "disabled"))
             atqa_string = f"{atqa.hex().upper()} (0x{int.from_bytes(atqa, byteorder='little'):04x})"
-            print(f'- {"Type:":40}{color_string((CY, hf_tag_type))}')
-            print(f'- {"UID:":40}{color_string((CY, uid.hex().upper()))}')
-            print(f'- {"ATQA:":40}{color_string((CY, atqa_string))}')
-            print(f'- {"SAK:":40}{color_string((CY, sak.hex().upper()))}')
+            lw = 24   # longest label: "Use anti-collision data"
+            lines = [
+                f"{'Type':<{lw}} {color_string((CY, hf_tag_type))}",
+                f"{'UID':<{lw}} {color_string((CY, uid.hex().upper()))}",
+                f"{'ATQA':<{lw}} {color_string((CY, atqa_string))}",
+                f"{'SAK':<{lw}} {color_string((CY, sak.hex().upper()))}",
+            ]
             if len(ats) > 0:
-                print(f'- {"ATS:":40}{color_string((CY, ats.hex().upper()))}')
-            print(
-                f'- {"Gen1A magic mode:":40}{f"{enabled_str}" if gen1a_mode else f"{disabled_str}"}'
-            )
-            print(
-                f'- {"Gen2 magic mode:":40}{f"{enabled_str}" if gen2_mode else f"{disabled_str}"}'
-            )
-            print(
-                f'- {"Use anti-collision data from block 0:":40}'
-                f'{f"{enabled_str}" if block_anti_coll_mode else f"{disabled_str}"}'
-            )
+                lines.append(f"{'ATS':<{lw}} {color_string((CY, ats.hex().upper()))}")
+            lines.append(f"{'Gen1A magic mode':<{lw}} {enabled_str if gen1a_mode else disabled_str}")
+            lines.append(f"{'Gen2 magic mode':<{lw}} {enabled_str if gen2_mode else disabled_str}")
+            lines.append(f"{'Use anti-collision data':<{lw}} "
+                         f"{enabled_str if block_anti_coll_mode else disabled_str}")
             try:
-                print(
-                    f'- {"Write mode:":40}{color_string((CY, MifareClassicWriteMode(write_mode)))}'
-                )
+                lines.append(f"{'Write mode':<{lw}} {color_string((CY, MifareClassicWriteMode(write_mode)))}")
             except ValueError:
-                print(f'- {"Write mode:":40}{color_string((CR, "invalid value!"))}')
-            print(
-                f'- {"Log (mfkey32) mode:":40}{f"{enabled_str}" if detection else f"{disabled_str}"}'
-            )
-            print(
-                f'- {"FIELD_OFF_DO_RESET:":40}{f"{enabled_str}" if field_off_do_reset else f"{disabled_str}"}'
-            )
+                lines.append(f"{'Write mode':<{lw}} {color_string((CR, 'invalid value!'))}")
+            lines.append(f"{'Log (mfkey32) mode':<{lw}} {enabled_str if detection else disabled_str}")
+            lines.append(f"{'FIELD_OFF_DO_RESET':<{lw}} {enabled_str if field_off_do_reset else disabled_str}")
+            for line in _box("MIFARE Classic Emulator", lines, color=CC, min_width=44):
+                print(line)
