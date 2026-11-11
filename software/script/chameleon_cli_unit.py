@@ -4420,8 +4420,8 @@ class EMVScan(DeviceRequiredUnit):
         tags[0x9F12] = app_tags[0x9F12]
         tags[0x50] = app_tags[0x50]
 
-        print(f'')
-        print(f' {CG}── Card Details ──────────────────────{C0}')
+        lw = 14   # longest label: "Issuer Country"
+        details = []
 
         # App label — show first unique label only
         seen_labels = set()
@@ -4430,7 +4430,7 @@ class EMVScan(DeviceRequiredUnit):
                 lbl = v.decode('ascii', errors='replace').strip()
                 if lbl and lbl not in seen_labels:
                     seen_labels.add(lbl)
-                    print(f' {CG}App Label     :{C0} {CY}{lbl}{C0}')
+                    details.append(f"{'App Label':<{lw}} {CY}{lbl}{C0}")
             except Exception:
                 pass
 
@@ -4451,10 +4451,10 @@ class EMVScan(DeviceRequiredUnit):
             pan_fmt = ' '.join(pan_hex[i:i+4] for i in range(0, len(pan_hex), 4))
             luhn_ok = _pan_luhn(pan_hex)
             luhn_str = f'{CG}✓{C0}' if luhn_ok else f'{CR}✗{C0}'
-            print(f' {CG}PAN           :{C0} {CY}{pan_fmt}{C0}  Luhn: {luhn_str}')
+            details.append(f"{'PAN':<{lw}} {CY}{pan_fmt}{C0}  Luhn: {luhn_str}")
             result.setdefault('Decoded', {})['PAN'] = pan_hex
         else:
-            print(f' {CR}PAN           : not found{C0}')
+            details.append(f"{'PAN':<{lw}} {CR}not found{C0}")
 
         # Expiry — 5F24 is 3 bytes BCD: YYMMDD
         expiry_found = False
@@ -4462,7 +4462,7 @@ class EMVScan(DeviceRequiredUnit):
             if len(v) == 3:
                 exp = v.hex().upper()
                 exp_fmt = f'20{exp[0:2]}/{exp[2:4]}'
-                print(f' {CG}Expiry        :{C0} {CY}{exp_fmt}{C0}')
+                details.append(f"{'Expiry':<{lw}} {CY}{exp_fmt}{C0}")
                 result.setdefault('Decoded', {})['Expiry'] = exp_fmt
                 expiry_found = True
         # Fallback: extract expiry from Track2 after D separator (YYMM)
@@ -4474,12 +4474,12 @@ class EMVScan(DeviceRequiredUnit):
                     yymm = t2[sep+1:sep+5]
                     if yymm.isdigit():
                         exp_fmt = f'20{yymm[0:2]}/{yymm[2:4]}'
-                        print(f' {CG}Expiry        :{C0} {CY}{exp_fmt}{C0} (from Track2)')
+                        details.append(f"{'Expiry':<{lw}} {CY}{exp_fmt}{C0} (from Track2)")
                         result.setdefault('Decoded', {})['Expiry'] = exp_fmt
                         expiry_found = True
                         break
         if not expiry_found:
-            print(f' {CR}Expiry        : not found{C0}')
+            details.append(f"{'Expiry':<{lw}} {CR}not found{C0}")
 
         # Cardholder Name (tag 5F20: printable ASCII only)
         for v in tags[0x5F20]:
@@ -4487,7 +4487,7 @@ class EMVScan(DeviceRequiredUnit):
                 if v and all(0x20 <= b <= 0x7E for b in v):
                     name = v.decode('ascii').strip()
                     if name:
-                        print(f' {CG}Cardholder    :{C0} {CY}{name}{C0}')
+                        details.append(f"{'Cardholder':<{lw}} {CY}{name}{C0}")
                         result.setdefault('Decoded', {})['CardholderName'] = name
             except Exception:
                 pass
@@ -4503,7 +4503,7 @@ class EMVScan(DeviceRequiredUnit):
             except ValueError:
                 name = None
             shown = f'{country} ({name})' if name else country
-            print(f' {CG}Issuer Country:{C0} {CY}{shown}{C0}')
+            details.append(f"{'Issuer Country':<{lw}} {CY}{shown}{C0}")
             dec = result.setdefault('Decoded', {})
             dec['IssuerCountry'] = country
             if name:
@@ -4514,11 +4514,13 @@ class EMVScan(DeviceRequiredUnit):
             try:
                 name = v.decode('ascii', errors='replace').strip()
                 if name and name not in seen_labels:
-                    print(f' {CG}App Name      :{C0} {CY}{name}{C0}')
+                    details.append(f"{'App Name':<{lw}} {CY}{name}{C0}")
             except Exception:
                 pass
 
-        print(f' {CG}──────────────────────────────────────{C0}')
+        print('')
+        for line in _box('Card Details', details, color=CG, min_width=38):
+            print(line)
 
         json_str = jsonlib.dumps(result, indent=2)
         if args.file:
@@ -5286,47 +5288,10 @@ def _render_status_line(key: str, value: str, key_width: int, legend_done: set) 
 # --- `standalone status --fancy`: boxed dashboard, no extra dependency -------
 # Pure ANSI box-drawing + block-character bars. Opt-in only (-f/--fancy): the
 # plain key=value form stays the default since scripts parse it.
+# _box/_hjoin/_vlen/_vpad live in cli_core.py so any cli_*.py module can box
+# up its own dense output without importing this module (hf 14a, hf des, ...).
 
-_ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 _BLOCK_LEVELS = ' ▁▂▃▄▅▆▇█'  # ' ' + 1/8..8/8 blocks
-
-
-def _vlen(s: str) -> int:
-    """Length of s ignoring ANSI color escapes."""
-    return len(_ANSI_RE.sub('', s))
-
-
-def _vpad(s: str, width: int) -> str:
-    pad = width - _vlen(s)
-    return s + (' ' * pad if pad > 0 else '')
-
-
-def _box(title: str, lines: list, color: str = CC, min_width: int = 16) -> list:
-    """Render `lines` (may contain ANSI colors) inside a titled rounded box."""
-    inner_w = max(min_width, max((_vlen(l) for l in lines), default=0), _vlen(title) + 2)
-    top = f"{color}╭─ {C0}{title}{color} " + "─" * (inner_w - _vlen(title) - 1) + f"╮{C0}"
-    bot = f"{color}╰" + "─" * (inner_w + 2) + f"╯{C0}"
-    out = [top]
-    for l in lines:
-        out.append(f"{color}│{C0} {_vpad(l, inner_w)} {color}│{C0}")
-    out.append(bot)
-    return out
-
-
-def _hjoin(boxes: list, gap: int = 1) -> list:
-    """Place boxes (each a list of equal-width lines) side by side."""
-    boxes = [b for b in boxes if b]
-    if not boxes:
-        return []
-    h = max(len(b) for b in boxes)
-    widths = [_vlen(b[0]) for b in boxes]
-    rows = []
-    for i in range(h):
-        row = []
-        for b, w in zip(boxes, widths):
-            row.append(b[i] if i < len(b) else ' ' * w)
-        rows.append((' ' * gap).join(row))
-    return rows
 
 
 def _flash_gauge_bar(valid: int, dirty: int, width: int = 24) -> str:

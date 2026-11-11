@@ -10,6 +10,7 @@ import time
 
 from aid_database import lookup_desfire_aid
 from cli_core import (
+    _box,
     _decode_14a_frame_col,
     ArgumentParserNoExit,
     BaseCLIUnit,
@@ -1323,8 +1324,9 @@ class HfDesInfo(ReaderRequiredUnit):
             print(f" {CR}[!] {e}{C0}")
             return
 
-        print(f" UID           : {uid_bytes.hex().upper()}")
-        print(f" SAK           : 0x{sak:02X}")
+        lw = 14   # longest label: "Version (raw)"
+        lines = [f"{'UID':<{lw}} {uid_bytes.hex().upper()}",
+                 f"{'SAK':<{lw}} 0x{sak:02X}"]
 
         try:
             ver = _desfire_get_version(self.cmd)
@@ -1363,35 +1365,39 @@ class HfDesInfo(ReaderRequiredUnit):
                 vnd = _DESFIRE_VENDOR.get(
                     ver["hw_vendor"], f"0x{ver['hw_vendor']:02X}"
                 )
-                print(f" Vendor        : {vnd}")
-            print(f" HW version    : {hw_ver_str}  ({hw_gen})  storage: {hw_stor}")
-            print(f" SW version    : {sw_ver_str}  storage: {sw_stor}")
-            print(f" Protocol      : {proto}")
+                lines.append(f"{'Vendor':<{lw}} {vnd}")
+            lines.append(f"{'HW version':<{lw}} {hw_ver_str}  ({hw_gen})  storage: {hw_stor}")
+            lines.append(f"{'SW version':<{lw}} {sw_ver_str}  storage: {sw_stor}")
+            lines.append(f"{'Protocol':<{lw}} {proto}")
             if "uid" in ver:
-                print(f" Card UID      : {ver['uid']}")
+                lines.append(f"{'Card UID':<{lw}} {ver['uid']}")
             if "batch" in ver:
-                print(f" Batch no      : {ver['batch']}")
+                lines.append(f"{'Batch no':<{lw}} {ver['batch']}")
             if "prod_week" in ver and "prod_year" in ver:
                 # Week and year are vendor BCD, printed as hex digits (PM3:
                 # "%02x" / "20%02x") — 0x25 is week/year 25, not decimal 37.
-                print(
-                    f" Production    : week {ver['prod_week']:02X} / 20{ver['prod_year']:02X}"
+                lines.append(
+                    f"{'Production':<{lw}} week {ver['prod_week']:02X} / 20{ver['prod_year']:02X}"
                 )
             if "_frames" in ver:
-                print(f" Version (raw) : {' '.join(ver['_frames'])}")
+                lines.append(f"{'Version (raw)':<{lw}} {' '.join(ver['_frames'])}")
         except Exception as e:
+            for line in _box("DESFire Card", lines, color=CC, min_width=36):
+                print(line)
             print(f" {CY}[!] GetVersion failed: {e}{C0}")
+        else:
+            for line in _box("DESFire Card", lines, color=CC, min_width=36):
+                print(line)
 
         try:
             aids = _desfire_get_app_ids(self.cmd)
-            if aids:
-                print(f"\n Applications  : {len(aids)} found")
-                for aid in aids:
-                    print(
-                        f"   AID: {aid.hex().upper()}  ({int.from_bytes(aid, 'little'):06X})"
-                    )
-            else:
-                print(f"\n Applications  : none")
+            app_lines = (
+                [f"AID {aid.hex().upper()}  ({int.from_bytes(aid, 'little'):06X})" for aid in aids]
+                if aids else ["none"]
+            )
+            print('')
+            for line in _box(f"Applications ({len(aids)})", app_lines, color=CC, min_width=36):
+                print(line)
         except Exception as e:
             print(f" {CY}[!] GetApplicationIDs failed: {e}{C0}")
 

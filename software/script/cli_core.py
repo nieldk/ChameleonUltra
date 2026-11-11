@@ -85,6 +85,51 @@ type_id_SAK_dict = {
 }
 
 
+# --- shared box-drawing helpers (pure ANSI, no extra dependency) -------------
+# Used by any cli_*.py module that wants to frame a dense info dump instead of
+# a flat key/value list (standalone status, hf 14a, hf des, hw status, ...).
+
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+
+
+def _vlen(s: str) -> int:
+    """Length of s ignoring ANSI color escapes."""
+    return len(_ANSI_RE.sub('', s))
+
+
+def _vpad(s: str, width: int) -> str:
+    pad = width - _vlen(s)
+    return s + (' ' * pad if pad > 0 else '')
+
+
+def _box(title: str, lines: list, color: str = CC, min_width: int = 16) -> list:
+    """Render `lines` (may contain ANSI colors) inside a titled rounded box."""
+    inner_w = max(min_width, max((_vlen(l) for l in lines), default=0), _vlen(title) + 2)
+    top = f"{color}╭─ {C0}{title}{color} " + "─" * (inner_w - _vlen(title) - 1) + f"╮{C0}"
+    bot = f"{color}╰" + "─" * (inner_w + 2) + f"╯{C0}"
+    out = [top]
+    for l in lines:
+        out.append(f"{color}│{C0} {_vpad(l, inner_w)} {color}│{C0}")
+    out.append(bot)
+    return out
+
+
+def _hjoin(boxes: list, gap: int = 1) -> list:
+    """Place boxes (each a list of equal-width lines) side by side."""
+    boxes = [b for b in boxes if b]
+    if not boxes:
+        return []
+    h = max(len(b) for b in boxes)
+    widths = [_vlen(b[0]) for b in boxes]
+    rows = []
+    for i in range(h):
+        row = []
+        for b, w in zip(boxes, widths):
+            row.append(b[i] if i < len(b) else ' ' * w)
+        rows.append((' ' * gap).join(row))
+    return rows
+
+
 def load_key_file(import_key, keys):
     """
     Load binary key file and append its content to the provided set of keys.
