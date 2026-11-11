@@ -5431,17 +5431,19 @@ def _render_fancy_status(state, mode, flags, fds, extra: list) -> str:
 @standalone.command('status')
 class StandaloneStatus(DeviceRequiredUnit):
     """
-    Show the current standalone state, mode, flags and the mode's live status.
+    Show the current standalone state, mode, flags and the mode's live status
+    as a boxed dashboard. Use -p/--plain for flat key=value lines instead.
 
     Usage:
         standalone status
+        standalone status -p
     """
 
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
         parser.description = 'Show standalone subsystem state'
-        parser.add_argument('-f', '--fancy', action='store_true',
-                             help='render a boxed dashboard instead of plain key/value lines')
+        parser.add_argument('-p', '--plain', action='store_true',
+                             help='flat key=value lines instead of the boxed dashboard')
         return parser
 
     def on_exec(self, args):
@@ -5451,10 +5453,15 @@ class StandaloneStatus(DeviceRequiredUnit):
         except Exception:
             extra = []   # older firmware
 
-        if getattr(args, 'fancy', False):
+        if not getattr(args, 'plain', False):
             print(_render_fancy_status(state, mode, flags, fds, extra))
-            return
+        else:
+            self._print_plain(state, mode, flags, fds, extra)
 
+        if mode == StandaloneMode.RELAY:
+            self._print_relay_diag(outer_state=state)
+
+    def _print_plain(self, state, mode, flags, fds, extra):
         state_col = CG if state != StandaloneState.DISARMED else CY
         print(f" state: {color_string((state_col, state.name))}")
         print(f"  mode: {color_string((CC, mode.name))}")
@@ -5476,57 +5483,57 @@ class StandaloneStatus(DeviceRequiredUnit):
             legend_done = set()
             for k, v in extra:
                 print(_render_status_line(k, v, w, legend_done))
-        if mode == StandaloneMode.RELAY:
-            try:
-                d = self.cmd.relay_get_diag()
-                if not d:
-                    pass
-                else:
-                    reports = d['adv_reports']
-                    hits    = d['relay_hits']
-                    state   = d.get('ble_state', 0)
-                    role    = d.get('ble_role', 0)
-                    state_names = {0:'IDLE',1:'STARTING',2:'CONNECTING',
-                                   3:'DISCOVERING',4:'NEGOTIATING',5:'READY',
-                                   6:'ACTIVE',7:'ERROR'}
-                    role_names  = {0:'RELAY_CARD (faces reader)',
-                                   1:'RELAY_READER (faces real card)'}
-                    sub        = d.get('sub_state', 0)
-                    card_found  = d.get('card_found', 0)
-                    identity_rx = d.get('identity_rx', 0)
-                    uid_len     = d.get('uid_len', 0)
-                    uid_bytes   = d.get('uid', [])
-                    uid_str = ''.join(f'{b:02X}' for b in uid_bytes[:uid_len]) if uid_len else '-'
-                    sub_names = {0:'INIT',1:'LINKING',2:'CARD_AWAIT_IDENTITY',
-                                 3:'CARD_READY',4:'CARD_AWAIT_RESPONSE',5:'READER_SCAN',
-                                 6:'READER_READY',7:'READER_RELAY',8:'ERROR'}
-                    state_str = state_names.get(state, f'UNKNOWN({state})')
-                    role_str  = role_names.get(role, f'UNKNOWN({role})')
-                    sub_str   = sub_names.get(sub, f'UNKNOWN({sub})')
-                    print(f"   ble: {reports} scan reports  {hits} relay hits")
-                    print(f"        state={CG if state==5 else CY}{state_str}{C0}  "
-                          f"role={CC}{role_str}{C0}")
-                    print(f"        sub={CG if sub in (3,6) else CY}{sub_str}{C0}")
-                    relay_armed = (state != StandaloneState.DISARMED)
-                    if relay_armed and reports == 0:
-                        print(f"        {CR}WARNING: scanning not working{C0}")
-                    elif relay_armed and hits == 0:
-                        print(f"        {CY}no relay HELLO seen yet{C0}")
-                    elif relay_armed and state < 5:
-                        print(f"        {CY}HELLO seen but not connected — check both CUs armed{C0}")
+
+    def _print_relay_diag(self, outer_state):
+        try:
+            d = self.cmd.relay_get_diag()
+            if not d:
+                return
+            reports = d['adv_reports']
+            hits    = d['relay_hits']
+            state   = d.get('ble_state', 0)
+            role    = d.get('ble_role', 0)
+            state_names = {0:'IDLE',1:'STARTING',2:'CONNECTING',
+                           3:'DISCOVERING',4:'NEGOTIATING',5:'READY',
+                           6:'ACTIVE',7:'ERROR'}
+            role_names  = {0:'RELAY_CARD (faces reader)',
+                           1:'RELAY_READER (faces real card)'}
+            sub        = d.get('sub_state', 0)
+            card_found  = d.get('card_found', 0)
+            identity_rx = d.get('identity_rx', 0)
+            uid_len     = d.get('uid_len', 0)
+            uid_bytes   = d.get('uid', [])
+            uid_str = ''.join(f'{b:02X}' for b in uid_bytes[:uid_len]) if uid_len else '-'
+            sub_names = {0:'INIT',1:'LINKING',2:'CARD_AWAIT_IDENTITY',
+                         3:'CARD_READY',4:'CARD_AWAIT_RESPONSE',5:'READER_SCAN',
+                         6:'READER_READY',7:'READER_RELAY',8:'ERROR'}
+            state_str = state_names.get(state, f'UNKNOWN({state})')
+            role_str  = role_names.get(role, f'UNKNOWN({role})')
+            sub_str   = sub_names.get(sub, f'UNKNOWN({sub})')
+            print(f"   ble: {reports} scan reports  {hits} relay hits")
+            print(f"        state={CG if state==5 else CY}{state_str}{C0}  "
+                  f"role={CC}{role_str}{C0}")
+            print(f"        sub={CG if sub in (3,6) else CY}{sub_str}{C0}")
+            relay_armed = (outer_state != StandaloneState.DISARMED)
+            if relay_armed and reports == 0:
+                print(f"        {CR}WARNING: scanning not working{C0}")
+            elif relay_armed and hits == 0:
+                print(f"        {CY}no relay HELLO seen yet{C0}")
+            elif relay_armed and state < 5:
+                print(f"        {CY}HELLO seen but not connected — check both CUs armed{C0}")
+            else:
+                if role == 0:   # RELAY_CARD
+                    if identity_rx:
+                        print(f"        {CG}card identity received  UID={uid_str}{C0}")
                     else:
-                        if role == 0:   # RELAY_CARD
-                            if identity_rx:
-                                print(f"        {CG}card identity received  UID={uid_str}{C0}")
-                            else:
-                                print(f"        {CY}waiting for card identity from RELAY_READER{C0}")
-                        else:           # RELAY_READER
-                            if card_found:
-                                print(f"        {CG}real card found  UID={uid_str}{C0}")
-                            else:
-                                print(f"        {CY}scanning for real card — place card near CU{C0}")
-            except Exception:
-                pass
+                        print(f"        {CY}waiting for card identity from RELAY_READER{C0}")
+                else:           # RELAY_READER
+                    if card_found:
+                        print(f"        {CG}real card found  UID={uid_str}{C0}")
+                    else:
+                        print(f"        {CY}scanning for real card — place card near CU{C0}")
+        except Exception:
+            pass
 
 
 @standalone.command('set-mode')
