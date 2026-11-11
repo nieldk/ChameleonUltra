@@ -6211,6 +6211,8 @@ class StandaloneConfig(DeviceRequiredUnit):
         standalone config usb-net --gateway on
         standalone config usb-net --auto on --class rndis
         standalone config zigbee --channel 15
+        standalone config zigbee --channels 15,20,25
+        standalone config zigbee --channels 15,20-23 --dwell 1000
         standalone config esb --address 07A1B2C3D4
         standalone config esb --channel 5 --bitrate 2m
         standalone config esb-promisc --channel 5 --prefix-lo 0 --prefix-hi 7
@@ -6254,6 +6256,9 @@ class StandaloneConfig(DeviceRequiredUnit):
         parser.add_argument('--channel', type=int, default=None,
                             help='[zigbee] 802.15.4 channel 11-26, or 0 to hop over all (default 11); '
                                  '[esb] MHz offset from 2400, 0-100, or 255 to hop over the whole range (default 5)')
+        parser.add_argument('--channels', default=None, metavar='<list>',
+                            help='[zigbee] hop only over these channels, e.g. "15,20,25" or '
+                                 '"15,20-23" (11-26) -- instead of --channel 0\'s full 11-26 sweep')
         parser.add_argument('--dwell', type=int, default=None,
                             help='[zigbee/esb] hop dwell per channel in ms (50-60000, default 500)')
         parser.add_argument('--address', default=None,
@@ -6392,18 +6397,35 @@ class StandaloneConfig(DeviceRequiredUnit):
 
         if mode == StandaloneMode.ZIGBEE:
             if any(v is not None for v in (args.block, args.key_type, args.key, args.timeout)):
-                print(color_string((CR, "zigbee config uses only --channel and --dwell")))
+                print(color_string((CR, "zigbee config uses only --channel, --channels and --dwell")))
                 return
-            if args.channel is not None or args.dwell is not None:
+            if args.channel is not None and args.channels is not None:
+                print(color_string((CR, "use either --channel or --channels, not both")))
+                return
+            if args.channel is not None or args.channels is not None or args.dwell is not None:
                 cur = self.cmd.standalone_get_config(mode)
-                ch = args.channel if args.channel is not None else (cur[1] if cur and len(cur) >= 2 else 11)
                 dw = args.dwell if args.dwell is not None else (
                     int.from_bytes(cur[2:4], 'little') if cur and len(cur) >= 4 else 500)
-                if not (ch == 0 or 11 <= ch <= 26):
-                    print(color_string((CR, "channel must be 11..26, or 0 to hop")))
-                    return
                 if not (50 <= dw <= 60000):
                     print(color_string((CR, "dwell must be 50..60000 ms")))
+                    return
+                if args.channels is not None:
+                    try:
+                        mask = _parse_channel_set(args.channels, 11, 26)
+                    except ValueError as e:
+                        print(color_string((CR, f"bad --channels: {e}")))
+                        return
+                    resp = self.cmd.standalone_set_config(mode, struct.pack('<BBHH', 2, 0, dw, mask))
+                    if resp.status == Status.SUCCESS:
+                        chans = ','.join(str(11 + i) for i in range(16) if mask & (1 << i))
+                        print(color_string((CG,
+                            f"zigbee set to hop {{{chans}}}, dwell {dw} ms (applied immediately if armed)")))
+                    else:
+                        print(color_string((CR, f"set-config failed: status={resp.status}")))
+                    return
+                ch = args.channel if args.channel is not None else (cur[1] if cur and len(cur) >= 2 else 11)
+                if not (ch == 0 or 11 <= ch <= 26):
+                    print(color_string((CR, "channel must be 11..26, or 0 to hop")))
                     return
                 resp = self.cmd.standalone_set_config(mode, struct.pack('<BBH', 1, ch, dw))
                 if resp.status == Status.SUCCESS:
@@ -6415,7 +6437,12 @@ class StandaloneConfig(DeviceRequiredUnit):
             blob = self.cmd.standalone_get_config(mode)
             if blob and len(blob) >= 2:
                 print(color_string((CG, "zigbee config:")))
-                print(f"  channel:  {blob[1] or 'hop'}")
+                if blob[0] == 2 and len(blob) >= 6:
+                    mask = int.from_bytes(blob[4:6], 'little')
+                    chans = ','.join(str(11 + i) for i in range(16) if mask & (1 << i))
+                    print(f"  channels: {chans}")
+                else:
+                    print(f"  channel:  {blob[1] or 'hop'}")
                 if len(blob) >= 4:
                     print(f"  dwell:    {int.from_bytes(blob[2:4], 'little')} ms")
             else:

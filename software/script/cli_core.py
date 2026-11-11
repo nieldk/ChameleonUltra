@@ -150,6 +150,31 @@ def _colorize_json(text: str) -> str:
     return _JSON_TOKEN_RE.sub(repl, text)
 
 
+def _parse_channel_set(spec: str, lo: int, hi: int) -> int:
+    """Parse a comma/range channel list ("15,20,25" or "15,20-23") into a
+    bitmask, bit i = channel lo+i. Raises ValueError on anything outside
+    [lo, hi], a malformed token, or an empty result."""
+    mask = 0
+    for part in spec.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        if '-' in part:
+            a_str, b_str = part.split('-', 1)
+            a, b = int(a_str), int(b_str)
+        else:
+            a = b = int(part)
+        if a > b:
+            a, b = b, a
+        if a < lo or b > hi:
+            raise ValueError(f"channel {a if a < lo else b} out of range {lo}-{hi}")
+        for ch in range(a, b + 1):
+            mask |= 1 << (ch - lo)
+    if mask == 0:
+        raise ValueError("no channels specified")
+    return mask
+
+
 def load_key_file(import_key, keys):
     """
     Load binary key file and append its content to the provided set of keys.

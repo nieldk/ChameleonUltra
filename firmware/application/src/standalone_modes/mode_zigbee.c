@@ -7,9 +7,14 @@
  * `standalone zigbee get-result`. RX runs in chained SoftDevice timeslots, so frames
  * between slots are missed (see zb_radio.c).
  *
- * Config (4 bytes): u8 version=1, u8 channel (0 = hop, else 11..26; default 11),
- * u16 dwell_ms LE (hop dwell per channel, 50..60000, default 500). A 2-byte blob
- * (version, channel) is accepted too.
+ * Config, v1 (4 bytes): u8 version=1, u8 channel (0 = hop all 11..26, else a
+ * single 11..26; default 11), u16 dwell_ms LE (hop dwell per channel,
+ * 50..60000, default 500). A 2-byte blob (version, channel) is accepted too.
+ *
+ * Config, v2 (6 bytes): u8 version=2, u8 reserved0=0, u16 dwell_ms LE,
+ * u16 chan_mask LE (bit i = channel 11+i; hop only over the set channels).
+ * A zero mask is rejected (falls back to the default single channel) --
+ * same "bad config, use the default" rule as v1's out-of-range channel.
  *
  * Log record: u8 channel, u8 lqi_raw, u8 len, u8 data[len] (MPDU without FCS).
  * Draining (get-result/scan/devices/dump) advances the read cursor but does not
@@ -36,7 +41,8 @@
 _Static_assert(LOG_SZ + 4 <= STANDALONE_RESULT_PERSIST_MAX,
                "zigbee log must fit the framework's persisted result record");
 
-static uint8_t  m_channel = DEFAULT_CHANNEL;   /* 0 = hop */
+static uint8_t  m_channel  = DEFAULT_CHANNEL;   /* 0 = hop (mask has >1 bit) */
+static uint16_t m_chan_mask = (uint16_t)(1u << (DEFAULT_CHANNEL - 11));  /* bit i = ch 11+i */
 static uint16_t m_dwell   = DEFAULT_DWELL;
 static uint8_t  m_cur     = DEFAULT_CHANNEL;
 static uint32_t m_hop_at;
@@ -46,6 +52,29 @@ static uint32_t m_other;
 static uint32_t m_chan_rx[16];
 static uint8_t  m_last_len;
 
+static int mask_popcount(uint16_t m) {
+    int n = 0;
+    for (; m; m >>= 1) n += m & 1;
+    return n;
+}
+
+/* Lowest channel set in mask, or DEFAULT_CHANNEL if mask is somehow 0
+ * (shouldn't happen -- cfg_parse never leaves m_chan_mask at 0). */
+static uint8_t mask_first_channel(uint16_t m) {
+    for (int i = 0; i < 16; i++) if (m & (1u << i)) return (uint8_t)(11 + i);
+    return DEFAULT_CHANNEL;
+}
+
+/* Next channel in mask after `cur`, wrapping 26 -> 11. Assumes mask != 0. */
+static uint8_t mask_next_channel(uint16_t m, uint8_t cur) {
+    uint8_t next = cur;
+    for (int i = 0; i < 16; i++) {
+        next = (next >= 26) ? 11 : (uint8_t)(next + 1);
+        if (m & (1u << (next - 11))) return next;
+    }
+    return cur;   /* unreachable if mask != 0 */
+}
+
 static uint32_t m_log_words[(LOG_SZ + 3) / 4];
 #define m_log ((uint8_t *)m_log_words)
 static size_t   m_used, m_cursor;
@@ -53,11 +82,28 @@ static uint32_t m_overflow;
 static bool     m_loaded, m_dirty;
 
 static void cfg_parse(const uint8_t *cfg, size_t cfg_len) {
-    m_channel = DEFAULT_CHANNEL;
-    m_dwell   = DEFAULT_DWELL;
-    if (cfg == NULL || cfg_len < 2 || cfg[0] != 1) return;
-    if (cfg[1] == 0 || (cfg[1] >= 11 && cfg[1] <= 26)) m_channel = cfg[1];
-    if (cfg_len >= 4) {
+    m_channel   = DEFAULT_CHANNEL;
+    m_chan_mask = (uint16_t)(1u << (DEFAULT_CHANNEL - 11));
+    m_dwell     = DEFAULT_DWELL;
+    if (cfg == NULL || cfg_len < 2) return;
+    if (cfg[0] == 1) {
+        if (cfg[1] == 0) {
+            m_channel   = 0;
+            m_chan_mask = 0xFFFFU;
+        } else if (cfg[1] >= 11 && cfg[1] <= 26) {
+            m_channel   = cfg[1];
+            m_chan_mask = (uint16_t)(1u << (cfg[1] - 11));
+        }
+        if (cfg_len >= 4) {
+            uint16_t d = (uint16_t)(cfg[2] | (cfg[3] << 8));
+            if (d >= 50 && d <= 60000) m_dwell = d;
+        }
+    } else if (cfg[0] == 2 && cfg_len >= 6) {
+        uint16_t mask = (uint16_t)(cfg[4] | (cfg[5] << 8));
+        if (mask != 0) {
+            m_chan_mask = mask;
+            m_channel   = (mask_popcount(mask) == 1) ? mask_first_channel(mask) : 0;
+        }
         uint16_t d = (uint16_t)(cfg[2] | (cfg[3] << 8));
         if (d >= 50 && d <= 60000) m_dwell = d;
     }
@@ -72,7 +118,7 @@ static void on_config(const uint8_t *cfg, size_t cfg_len) {
      * mode would silently never take effect until an explicit disarm+trigger. */
     if (zb_radio_running()) {
         m_hop_init = false;
-        m_cur = (m_channel == 0) ? 11 : m_channel;
+        m_cur = mask_first_channel(m_chan_mask);
         zb_radio_set_channel(m_cur);
     }
 }
@@ -120,9 +166,9 @@ static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len) {
     m_hop_init = false;
     memset(m_chan_rx, 0, sizeof(m_chan_rx));
     for (int i = 0; i < 4; i++) m_type[i] = 0;
-    m_cur = (m_channel == 0) ? 11 : m_channel;
+    m_cur = mask_first_channel(m_chan_mask);
     if (!zb_radio_start(m_cur)) return STANDALONE_RC_INTERNAL;
-    NRF_LOG_INFO("zigbee: rx %s channel %u", m_channel ? "on" : "hop from", m_cur);
+    NRF_LOG_INFO("zigbee: rx %s channel %u", (mask_popcount(m_chan_mask) > 1) ? "hop from" : "on", m_cur);
     return STANDALONE_RC_OK;
 }
 
@@ -160,11 +206,11 @@ static standalone_rc_t on_tick(uint32_t now_ms) {
         if (f.channel >= 11 && f.channel <= 26) m_chan_rx[f.channel - 11]++;
         log_add(&f);
     }
-    if (m_channel == 0) {
+    if (mask_popcount(m_chan_mask) > 1) {
         if (!m_hop_init) { m_hop_init = true; m_hop_at = now_ms; }
         else if ((uint32_t)(now_ms - m_hop_at) >= m_dwell) {
             m_hop_at = now_ms;
-            m_cur = (m_cur >= 26) ? 11 : (uint8_t)(m_cur + 1);
+            m_cur = mask_next_channel(m_chan_mask, m_cur);
             zb_radio_set_channel(m_cur);
         }
     }
@@ -215,7 +261,7 @@ static size_t get_status(char *out, size_t out_max) {
     zb_stats_t s;
     zb_radio_get_stats(&s);
     STATUS_KV(out, out_max, len, "radio=%s ch=%u%s dwell=%u\n", zb_radio_running() ? "rx" : "off",
-              m_cur, m_channel ? "" : " hop", m_dwell);
+              m_cur, (mask_popcount(m_chan_mask) > 1) ? " hop" : "", m_dwell);
     STATUS_KV(out, out_max, len, "slots=%lu blocked=%lu canceled=%lu us=%lu\n",
               (unsigned long)s.slots, (unsigned long)s.blocked, (unsigned long)s.canceled,
               (unsigned long)s.slot_us);
@@ -227,7 +273,7 @@ static size_t get_status(char *out, size_t out_max) {
               (unsigned long)s.last_rc, (unsigned long)s.framestart);
     STATUS_KV(out, out_max, len, "frames ok=%lu bad_fcs=%lu dropped=%lu\n",
               (unsigned long)s.rx_ok, (unsigned long)s.rx_crc, (unsigned long)s.dropped);
-    /* Expect mode=15 pcnf0=06000008 crccnf=00000201 sfd=a7 freq=5*(ch-10) --
+    /* Expect mode=15 pcnf0=06000008 crccnf=00000202 sfd=a7 freq=5*(ch-10) --
      * anything else means the write didn't stick, not a demod/RF problem. */
     STATUS_KV(out, out_max, len, "rb mode=%lu pcnf0=%08lx crccnf=%08lx sfd=%02x freq=%lu\n",
               (unsigned long)s.rb_mode, (unsigned long)s.rb_pcnf0, (unsigned long)s.rb_crccnf,
@@ -241,7 +287,18 @@ static size_t get_status(char *out, size_t out_max) {
      * line.partition('=') and drops anything with no '='), so these must use
      * '=' too, not ':' -- a colon-only line is silently swallowed on the host
      * side and never reaches the printed table. */
-    if (m_channel == 0) {
+    if (mask_popcount(m_chan_mask) > 1) {
+        if (m_chan_mask != 0xFFFFU) {
+            STATUS_KV(out, out_max, len, "chanset=");
+            bool first = true;
+            for (int i = 0; i < 16; i++) {
+                if (m_chan_mask & (1u << i)) {
+                    STATUS_KV(out, out_max, len, "%s%u", first ? "" : ",", 11 + i);
+                    first = false;
+                }
+            }
+            STATUS_KV(out, out_max, len, "\n");
+        }
         STATUS_KV(out, out_max, len, "rx11-26=");
         for (int i = 0; i < 16; i++) STATUS_KV(out, out_max, len, "%s%lu", i ? "," : "", (unsigned long)m_chan_rx[i]);
         STATUS_KV(out, out_max, len, "\ned11-26=");

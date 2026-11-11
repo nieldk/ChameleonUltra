@@ -1900,6 +1900,7 @@ Read or write mode-specific config
 - `--auto` — [usb-net] keep USB Ethernet on whenever USB is attached, beside any other mode (choices: on, off)
 - `--class` — [usb-net] host class: ecm (Linux, macOS), rndis (Windows), default = build default (choices: ecm, rndis, default)
 - `--channel` — [zigbee] 802.15.4 channel 11-26, or 0 to hop over all (default 11); [esb] MHz offset from 2400, 0-100, or 255 to hop over the whole range (default 5)
+- `--channels` — [zigbee] hop only over these channels, e.g. "15,20,25" or "15,20-23" (11-26) -- instead of --channel 0's full 11-26 sweep
 - `--dwell` — [zigbee/esb] hop dwell per channel in ms (50-60000, default 500)
 - `--address` — [esb] 10-hex-char known address, prefix byte first (e.g. a paired Logitech Unifying receiver's address)
 - `--bitrate` — [esb] PHY bitrate (default 2m) (choices: 1m, 2m)
@@ -2253,13 +2254,14 @@ Read zigbee result buffer
 
 #### `standalone zigbee hunt`
 
-Scan all channels (11-26) for activity -- rx frame counts and energy-detect peaks -- rank them, and optionally lock the mode onto the busiest one. The radio only listens on one channel at a time, so --lock always picks a single channel; if several show activity, re-run with --rank N to try the Nth busiest instead of hopping between them.
+Scan all channels (11-26) for activity -- rx frame counts and energy-detect peaks -- rank them, and optionally lock the mode onto the result. --lock locks a single channel (--rank N picks the Nth busiest, default 1 = busiest); --lock-top N instead hops only over the N busiest channels (less dwell time per channel than a single lock, but covers more than one).
 
-Requires zigbee already armed and hopping: `standalone config zigbee --channel 0` then `standalone trigger`.
+Requires zigbee already armed and hopping: `standalone config zigbee --channel 0` (or --channels) then `standalone trigger`.
 
 - `-t`, `--time` — scan duration in seconds (default 120) (default: 120)
-- `--lock` — after scanning, reconfigure the armed mode onto the ranked channel
+- `--lock` — after scanning, reconfigure the armed mode onto the ranked channel(s)
 - `--rank` — with --lock, lock onto the Nth busiest channel (default 1 = busiest) (default: 1)
+- `--lock-top` — with --lock, hop only over the N busiest channels instead of locking a single one
 
 #### `standalone zigbee scan`
 

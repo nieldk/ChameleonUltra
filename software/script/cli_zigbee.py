@@ -259,6 +259,21 @@ def _poll_channel_arrays(cmd, seconds, poll_interval=1.0):
     return rx, ed
 
 
+def _zigbee_decode_cfg(cfg):
+    """Return (chan_mask, dwell_ms) for a zigbee config blob (v1 or v2),
+    defaulting to (channel 11 only, 500 ms) when cfg is missing/short."""
+    if cfg and len(cfg) >= 6 and cfg[0] == 2:
+        mask = int.from_bytes(cfg[4:6], 'little') or 1
+        dwell = int.from_bytes(cfg[2:4], 'little') if len(cfg) >= 4 else 500
+        return mask, dwell
+    if cfg and len(cfg) >= 2:
+        ch = cfg[1]
+        mask = 0xFFFF if ch == 0 else (1 << (ch - 11)) if 11 <= ch <= 26 else 1
+        dwell = int.from_bytes(cfg[2:4], 'little') if len(cfg) >= 4 else 500
+        return mask, dwell
+    return 1, 500
+
+
 @zb.command("hunt")
 class ZigbeeHunt(DeviceRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
@@ -266,19 +281,24 @@ class ZigbeeHunt(DeviceRequiredUnit):
         p.description = (
             "Scan all channels (11-26) for activity -- rx frame counts and "
             "energy-detect peaks -- rank them, and optionally lock the mode "
-            "onto the busiest one. The radio only listens on one channel at "
-            "a time, so --lock always picks a single channel; if several "
-            "show activity, re-run with --rank N to try the Nth busiest "
-            "instead of hopping between them.\n\n"
+            "onto the result. --lock locks a single channel (--rank N picks "
+            "the Nth busiest, default 1 = busiest); --lock-top N instead hops "
+            "only over the N busiest channels (less dwell time per channel "
+            "than a single lock, but covers more than one).\n\n"
             "Requires zigbee already armed and hopping: "
-            "`standalone config zigbee --channel 0` then `standalone trigger`."
+            "`standalone config zigbee --channel 0` (or --channels) then "
+            "`standalone trigger`."
         )
         p.add_argument("-t", "--time", type=float, default=120, metavar="<sec>",
                         help="scan duration in seconds (default 120)")
         p.add_argument("--lock", action="store_true",
-                        help="after scanning, reconfigure the armed mode onto the ranked channel")
-        p.add_argument("--rank", type=int, default=1, metavar="<N>",
-                        help="with --lock, lock onto the Nth busiest channel (default 1 = busiest)")
+                        help="after scanning, reconfigure the armed mode onto the ranked channel(s)")
+        lock_grp = p.add_mutually_exclusive_group()
+        lock_grp.add_argument("--rank", type=int, default=1, metavar="<N>",
+                              help="with --lock, lock onto the Nth busiest channel (default 1 = busiest)")
+        lock_grp.add_argument("--lock-top", type=int, default=None, metavar="<N>",
+                              help="with --lock, hop only over the N busiest channels "
+                                   "instead of locking a single one")
         return p
 
     def on_exec(self, args: argparse.Namespace):
@@ -290,9 +310,12 @@ class ZigbeeHunt(DeviceRequiredUnit):
             print(" - Zigbee mode is disarmed. Run `standalone trigger` to arm it.")
             return
         cfg = self.cmd.standalone_get_config(mode)
-        if cfg and len(cfg) >= 2 and cfg[1] != 0:
-            print(f" - Locked to channel {cfg[1]}, not hopping -- a scan needs every channel covered.\n"
-                  f"   Run `standalone config zigbee --channel 0` first (applies live, no re-arm needed).")
+        mask, dwell = _zigbee_decode_cfg(cfg)
+        if bin(mask).count('1') <= 1:
+            locked_ch = 11 + (mask.bit_length() - 1 if mask else 0)
+            print(f" - Locked to channel {locked_ch}, not hopping -- a scan needs every channel covered.\n"
+                  f"   Run `standalone config zigbee --channel 0` (or --channels) first "
+                  f"(applies live, no re-arm needed).")
             return
 
         print(f"Scanning {args.time:g}s across channels 11-26 ...")
@@ -311,10 +334,29 @@ class ZigbeeHunt(DeviceRequiredUnit):
             print(f"  {ch:>3} {rx[i]:>6} {ed[i]:>6}{quiet}")
 
         active = [11 + i for i in ranking if rx[i] or ed[i]]
-        if len(active) > 1:
+        if len(active) > 1 and args.lock_top is None:
             print(color_string((CY,
                 f" {len(active)} channels show activity ({', '.join(map(str, active))}); "
-                f"the radio can only lock one at a time.")))
+                f"re-run with --lock-top {len(active)} to hop only over those, "
+                f"or --lock --rank N to pick one.")))
+
+        if args.lock and args.lock_top is not None:
+            if not (1 <= args.lock_top <= 16):
+                print(" - --lock-top must be 1..16")
+                return
+            top_idxs = ranking[:args.lock_top]
+            new_mask = 0
+            for i in top_idxs:
+                new_mask |= 1 << i
+            chans = ','.join(str(11 + i) for i in top_idxs)
+            if not any(rx[i] or ed[i] for i in top_idxs):
+                print(color_string((CY, f" - None of {{{chans}}} showed activity; locking anyway.")))
+            resp = self.cmd.standalone_set_config(mode, struct.pack('<BBHH', 2, 0, dwell, new_mask))
+            if resp.status == Status.SUCCESS:
+                print(color_string((CG, f"locked onto hop set {{{chans}}} (applied immediately)")))
+            else:
+                print(color_string((CR, f"set-config failed: status={resp.status}")))
+            return
 
         if args.lock:
             if not (1 <= args.rank <= 16):
@@ -325,7 +367,6 @@ class ZigbeeHunt(DeviceRequiredUnit):
             if not rx[idx] and not ed[idx]:
                 print(color_string((CY,
                     f" - Channel {target} (rank {args.rank}) showed no activity; locking anyway.")))
-            dwell = int.from_bytes(cfg[2:4], 'little') if cfg and len(cfg) >= 4 else 500
             resp = self.cmd.standalone_set_config(mode, struct.pack('<BBH', 1, target, dwell))
             if resp.status == Status.SUCCESS:
                 print(color_string((CG, f"locked onto channel {target} (applied immediately)")))

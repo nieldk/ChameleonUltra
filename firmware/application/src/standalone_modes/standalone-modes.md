@@ -621,6 +621,8 @@ BLE shares the radio time (`blocked`/`canceled` count refused or revoked slots).
 ```
 standalone config zigbee --channel 15      # 11..26, default 11
 standalone config zigbee --channel 0 --dwell 500   # hop 11..26, 500 ms per channel
+standalone config zigbee --channels 15,20,25       # hop only over this subset
+standalone config zigbee --channels 15,20-23 --dwell 1000
 standalone set-mode zigbee
 standalone trigger                         # or the TOGGLE button
 standalone status
@@ -631,16 +633,24 @@ standalone zigbee dump -t 10               # each frame decoded + hex; also auto
 standalone zigbee dump -k <32 hex>         # also decrypt NWK payloads with your network key
 standalone zigbee hunt -t 120              # hop mode only: rank channels 11-26 by activity
 standalone zigbee hunt -t 120 --lock       # ...then retune onto the busiest one, live
+standalone zigbee hunt -t 120 --lock --lock-top 3  # ...or hop only over the 3 busiest
 ```
 
-`zigbee hunt` only works while hopping (channel 0) -- it reads the `rx11-26`/`ed11-26`
-per-channel arrays from `status`, so there is nothing to rank once locked to one channel.
-It polls for the given duration, prints a table ranked by rx-frame-count then
-energy-detect peak, and with `--lock` (`--rank N` for the Nth busiest instead of the
-top one) retunes the already-armed mode onto that channel via `standalone config`,
-which `on_config()` applies immediately -- no disarm/re-arm needed. The radio only
-listens on one channel at a time, so `--lock` always targets a single channel even
-when several show activity.
+`--channels` takes a comma/range list ("15,20,25" or "15,20-23") and hops only over
+that subset instead of all 16 -- a shorter sweep means more dwell time on the channels
+that actually matter, e.g. the channel(s) a known Zigbee network actually uses. It's a
+separate config version (v2) from the plain `--channel`/`0` form (v1); `standalone
+config zigbee` (no setter flags) shows whichever is currently in effect.
+
+`zigbee hunt` only works while hopping (channel 0, or `--channels` with more than one
+channel) -- it reads the `rx11-26`/`ed11-26` per-channel arrays from `status`, so there
+is nothing to rank once locked to a single channel. It polls for the given duration,
+prints a table ranked by rx-frame-count then energy-detect peak, and with `--lock`
+retunes the already-armed mode via `standalone config`, which `on_config()` applies
+immediately -- no disarm/re-arm needed. Two ways to apply the ranking: `--rank N`
+locks a single channel (the Nth busiest, default 1 = busiest); `--lock-top N` instead
+builds a `--channels` hop set from the N busiest, trading some dwell time per channel
+for covering more than one.
 
 If BLE activity leaves no gap for a slot, the SoftDevice cancels or blocks the request (`canceled`/`blocked`
 rise). Requests time out after 200 ms and are re-issued from the 20 ms tick. The slot length is halved on each cancel or block down to 5 ms (`slot_us` in `status`) and grown again after
