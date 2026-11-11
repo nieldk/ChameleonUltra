@@ -130,6 +130,26 @@ def _hjoin(boxes: list, gap: int = 1) -> list:
     return rows
 
 
+_JSON_TOKEN_RE = re.compile(
+    r'(?P<key>"(?:\\.|[^"\\])*"(?=\s*:))'
+    r'|(?P<string>"(?:\\.|[^"\\])*")'
+    r'|(?P<literal>\btrue\b|\bfalse\b|\bnull\b)'
+    r'|(?P<number>-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)'
+)
+
+
+def _colorize_json(text: str) -> str:
+    """Syntax-color a json.dumps(...) string for terminal viewing (keys cyan,
+    string values yellow, numbers green, true/false/null magenta). Output is
+    for human reading only -- the ANSI codes make it invalid JSON, so use
+    -f/--file to save a clean copy for scripts/jq."""
+    def repl(m):
+        kind = m.lastgroup
+        color = {"key": CC, "string": CY, "literal": CM, "number": CG}[kind]
+        return f"{color}{m.group(0)}{C0}"
+    return _JSON_TOKEN_RE.sub(repl, text)
+
+
 def load_key_file(import_key, keys):
     """
     Load binary key file and append its content to the provided set of keys.

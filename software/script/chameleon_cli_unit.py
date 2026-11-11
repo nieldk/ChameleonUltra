@@ -4532,7 +4532,8 @@ class EMVScan(DeviceRequiredUnit):
             except Exception as e:
                 print(f' {CR}Save failed: {e}{C0}')
         else:
-            print(f'\n{json_str}')
+            print(f'\n {CY}Raw EMV data (PM3-compatible JSON) -- use -f to save a clean copy:{C0}')
+            print(_colorize_json(json_str))
 
         if args.slot is not None and pairs:
             target_slot = SlotNumber(args.slot)
