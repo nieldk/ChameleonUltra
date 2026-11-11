@@ -74,7 +74,7 @@ class ZigbeeScan(DeviceRequiredUnit):
         p = ArgumentParserNoExit()
         p.description = ("Passively list Zigbee networks seen in beacons and traffic, per channel. "
                          "Arm the mode with channel 0 (hop) to cover 11-26: "
-                         "`standalone config -m zigbee --channel 0`.")
+                         "`standalone config zigbee --channel 0`.")
         return _time_arg(p, 30)
 
     def on_exec(self, args: argparse.Namespace):
@@ -271,7 +271,7 @@ class ZigbeeHunt(DeviceRequiredUnit):
             "show activity, re-run with --rank N to try the Nth busiest "
             "instead of hopping between them.\n\n"
             "Requires zigbee already armed and hopping: "
-            "`standalone config -m zigbee --channel 0` then `standalone trigger`."
+            "`standalone config zigbee --channel 0` then `standalone trigger`."
         )
         p.add_argument("-t", "--time", type=float, default=120, metavar="<sec>",
                         help="scan duration in seconds (default 120)")
@@ -292,7 +292,7 @@ class ZigbeeHunt(DeviceRequiredUnit):
         cfg = self.cmd.standalone_get_config(mode)
         if cfg and len(cfg) >= 2 and cfg[1] != 0:
             print(f" - Locked to channel {cfg[1]}, not hopping -- a scan needs every channel covered.\n"
-                  f"   Run `standalone config -m zigbee --channel 0` first (applies live, no re-arm needed).")
+                  f"   Run `standalone config zigbee --channel 0` first (applies live, no re-arm needed).")
             return
 
         print(f"Scanning {args.time:g}s across channels 11-26 ...")
