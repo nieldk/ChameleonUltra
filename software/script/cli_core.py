@@ -49,7 +49,7 @@ from chameleon_utils import (
 )
 
 from chameleon_utils import CLITree
-from chameleon_utils import CR, CG, CB, CC, CY, C0, color_string
+from chameleon_utils import CR, CG, CB, CC, CY, CM, C0, color_string
 from chameleon_utils import print_mem_dump
 from chameleon_enum import Command, Status, SlotNumber, TagSenseType, TagSpecificType
 from chameleon_enum import (

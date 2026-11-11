@@ -5280,6 +5280,152 @@ def _render_status_line(key: str, value: str, key_width: int, legend_done: set) 
     return f"   {key:<{key_width}}  {_color_status_value(value)}"
 
 
+# --- `standalone status --fancy`: boxed dashboard, no extra dependency -------
+# Pure ANSI box-drawing + block-character bars. Opt-in only (-f/--fancy): the
+# plain key=value form stays the default since scripts parse it.
+
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+_BLOCK_LEVELS = ' ▁▂▃▄▅▆▇█'  # ' ' + 1/8..8/8 blocks
+
+
+def _vlen(s: str) -> int:
+    """Length of s ignoring ANSI color escapes."""
+    return len(_ANSI_RE.sub('', s))
+
+
+def _vpad(s: str, width: int) -> str:
+    pad = width - _vlen(s)
+    return s + (' ' * pad if pad > 0 else '')
+
+
+def _box(title: str, lines: list, color: str = CC, min_width: int = 16) -> list:
+    """Render `lines` (may contain ANSI colors) inside a titled rounded box."""
+    inner_w = max(min_width, max((_vlen(l) for l in lines), default=0), _vlen(title) + 2)
+    top = f"{color}╭─ {C0}{title}{color} " + "─" * (inner_w - _vlen(title) - 1) + f"╮{C0}"
+    bot = f"{color}╰" + "─" * (inner_w + 2) + f"╯{C0}"
+    out = [top]
+    for l in lines:
+        out.append(f"{color}│{C0} {_vpad(l, inner_w)} {color}│{C0}")
+    out.append(bot)
+    return out
+
+
+def _hjoin(boxes: list, gap: int = 1) -> list:
+    """Place boxes (each a list of equal-width lines) side by side."""
+    boxes = [b for b in boxes if b]
+    if not boxes:
+        return []
+    h = max(len(b) for b in boxes)
+    widths = [_vlen(b[0]) for b in boxes]
+    rows = []
+    for i in range(h):
+        row = []
+        for b, w in zip(boxes, widths):
+            row.append(b[i] if i < len(b) else ' ' * w)
+        rows.append((' ' * gap).join(row))
+    return rows
+
+
+def _flash_gauge_bar(valid: int, dirty: int, width: int = 24) -> str:
+    """A dirty/(valid+dirty) proportion bar -- what actually drives the GC
+    recommendation, unlike words-used-vs-pages-free (different units)."""
+    total = valid + dirty
+    frac = (dirty / total) if total else 0.0
+    filled = round(frac * width)
+    color = CR if frac > 0.5 else (CY if dirty > 4 else CG)
+    return f"{color}{'█' * filled}{C0}{'░' * (width - filled)}"
+
+
+def _render_channel_bar_chart(groups: dict) -> list:
+    """groups: {(lo, hi): [(key, color, [int, ...]), ...]} -> chart lines.
+
+    Rows are drawn top-down with 1/8-block resolution per row (8 sub-levels
+    of the unicode block glyphs), each series its own color, channels side
+    by side with a one-line legend above and a channel-index axis below.
+    Exact numbers live in the Radio & Diagnostics panel -- this is a glance
+    chart, not the source of truth.
+    """
+    palette = [CG, CY, CC, CM]
+    rows = 6
+    units_per_row = 8
+    out = []
+    for (lo, hi), raw_series in groups.items():
+        series = [(k, palette[i % len(palette)], vals) for i, (k, _, vals) in enumerate(raw_series)]
+        out.append('  '.join(f"{color}■ {k}{C0}" for k, color, _ in series))
+
+        max_val = max((v for _, _, vals in series for v in vals), default=0) or 1
+        col_w = max(2, len(str(max_val)))
+        total_units = rows * units_per_row
+        heights = [[round(v / max_val * total_units) for v in vals] for _, _, vals in series]
+
+        for row in range(rows - 1, -1, -1):
+            row_floor = row * units_per_row
+            line = ''
+            for ch_idx in range(hi - lo + 1):
+                for s_idx, (_, color, _) in enumerate(series):
+                    level = max(0, min(units_per_row, heights[s_idx][ch_idx] - row_floor))
+                    line += f"{color}{_BLOCK_LEVELS[level] * col_w}{C0}"
+                line += ' '
+            out.append(line)
+
+        axis = ''.join(f"{CC}{ch:^{col_w * len(series)}}{C0} " for ch in range(lo, hi + 1))
+        out.append(axis)
+        out.append('')
+    if out and out[-1] == '':
+        out.pop()
+    return out
+
+
+def _render_fancy_status(state, mode, flags, fds, extra: list) -> str:
+    flag_str = ", ".join(f.name for f in StandaloneFlag
+                         if f != StandaloneFlag.NONE and (flags & f)) or "(none)"
+    state_col = CG if state != StandaloneState.DISARMED else CY
+    main_box = _box("Main Status", [
+        f"state: {color_string((state_col, state.name))}",
+        f" mode: {color_string((CC, mode.name))}",
+        f"flags: {flag_str}",
+    ], color=CG, min_width=24)
+
+    flash_lines = ["(no flash-store data)"]
+    if fds is not None:
+        used, pages = fds['words_used'], fds['pages_available']
+        valid, dirty = fds['valid_records'], fds['dirty_records']
+        gc_hint = f"  {CY}GC recommended{C0}" if dirty > 4 else ""
+        flash_lines = [
+            f"{used} words used  {pages} pages free",
+            f"{_flash_gauge_bar(valid, dirty)}",
+            f"valid={valid} dirty={dirty}{gc_hint}",
+        ]
+    flash_box = _box("System Flash Memory", flash_lines, color=CY, min_width=30)
+
+    out = _hjoin([main_box, flash_box], gap=2)
+
+    chan_groups = {}
+    plain_lines = []
+    if extra:
+        w = max(len(k) for k, _ in extra)
+        for k, v in extra:
+            m = _STATUS_CHAN_RANGE_RE.match(k)
+            if m and ',' in v:
+                lo, hi = int(m.group(2)), int(m.group(3))
+                items = v.split(',')
+                if len(items) == hi - lo + 1:
+                    try:
+                        vals = [int(x) for x in items]
+                    except ValueError:
+                        vals = None
+                    if vals is not None:
+                        chan_groups.setdefault((lo, hi), []).append((k, None, vals))
+                        continue
+            plain_lines.append(f"{k:<{w}}  {_color_status_value(v)}")
+    if plain_lines:
+        out += [''] + _box("Radio & Diagnostics", plain_lines, color=CC, min_width=40)
+    if chan_groups:
+        out += [''] + _box("Channel Activity", _render_channel_bar_chart(chan_groups),
+                            color=CM, min_width=40)
+    return '\n'.join(out)
+
+
 # --- Commands ----------------------------------------------------------------
 
 @standalone.command('status')
@@ -5294,10 +5440,21 @@ class StandaloneStatus(DeviceRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
         parser.description = 'Show standalone subsystem state'
+        parser.add_argument('-f', '--fancy', action='store_true',
+                             help='render a boxed dashboard instead of plain key/value lines')
         return parser
 
     def on_exec(self, args):
         state, mode, flags, fds = self.cmd.standalone_get_mode()
+        try:
+            extra = self.cmd.standalone_get_status()
+        except Exception:
+            extra = []   # older firmware
+
+        if getattr(args, 'fancy', False):
+            print(_render_fancy_status(state, mode, flags, fds, extra))
+            return
+
         state_col = CG if state != StandaloneState.DISARMED else CY
         print(f" state: {color_string((state_col, state.name))}")
         print(f"  mode: {color_string((CC, mode.name))}")
@@ -5313,10 +5470,6 @@ class StandaloneStatus(DeviceRequiredUnit):
             gc_hint = f"  {CY}(GC recommended){C0}" if dirty > 4 else ""
             print(f" flash: {used} words used  {pages} pages free  "
                   f"valid={valid} dirty={dirty}{gc_hint}")
-        try:
-            extra = self.cmd.standalone_get_status()
-        except Exception:
-            extra = []   # older firmware
         if extra:
             w = max(len(k) for k, _ in extra)
             print(" status:")
