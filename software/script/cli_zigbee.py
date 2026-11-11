@@ -5,11 +5,12 @@ Receive only; frames are parsed here, not on the device.
 """
 
 import argparse
+import struct
 import time
 from collections import defaultdict
 
 import zb_parse as zp
-from chameleon_enum import StandaloneMode
+from chameleon_enum import StandaloneMode, StandaloneState, Status
 
 # The Zigbee HA/ZLL "default" Trust Center link key, used by many consumer
 # devices that don't provision their own. Public: documented in the Zigbee
@@ -36,7 +37,7 @@ APS_JOIN_KEYS = [
     ("ZLL master key", ZLL_MASTER_KEY),
     ("ZLL certification link key", ZLL_CERT_LINK_KEY),
 ]
-from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, standalone
+from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, standalone, color_string, CG, CR, CY
 
 
 def _group():
@@ -234,3 +235,99 @@ class ZigbeeDump(DeviceRequiredUnit):
                             if r[1]:
                                 break
         print(f" {count} frame(s)" + (f", {found_keys} network key(s) recovered via Transport Key" if found_keys else ""))
+
+
+def _poll_channel_arrays(cmd, seconds, poll_interval=1.0):
+    """Poll standalone_get_status() for `seconds`, return the last-seen
+    rx11-26/ed11-26 arrays (16 ints each, channel 11 first), or None for
+    either that never appeared."""
+    rx = ed = None
+    end = time.time() + seconds
+    while True:
+        try:
+            extra = dict(cmd.standalone_get_status())
+        except Exception:
+            extra = {}
+        if 'rx11-26' in extra:
+            rx = [int(x) for x in extra['rx11-26'].split(',')]
+        if 'ed11-26' in extra:
+            ed = [int(x) for x in extra['ed11-26'].split(',')]
+        remaining = end - time.time()
+        if remaining <= 0:
+            break
+        time.sleep(min(poll_interval, remaining))
+    return rx, ed
+
+
+@zb.command("hunt")
+class ZigbeeHunt(DeviceRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        p = ArgumentParserNoExit()
+        p.description = (
+            "Scan all channels (11-26) for activity -- rx frame counts and "
+            "energy-detect peaks -- rank them, and optionally lock the mode "
+            "onto the busiest one. The radio only listens on one channel at "
+            "a time, so --lock always picks a single channel; if several "
+            "show activity, re-run with --rank N to try the Nth busiest "
+            "instead of hopping between them.\n\n"
+            "Requires zigbee already armed and hopping: "
+            "`standalone config -m zigbee --channel 0` then `standalone trigger`."
+        )
+        p.add_argument("-t", "--time", type=float, default=120, metavar="<sec>",
+                        help="scan duration in seconds (default 120)")
+        p.add_argument("--lock", action="store_true",
+                        help="after scanning, reconfigure the armed mode onto the ranked channel")
+        p.add_argument("--rank", type=int, default=1, metavar="<N>",
+                        help="with --lock, lock onto the Nth busiest channel (default 1 = busiest)")
+        return p
+
+    def on_exec(self, args: argparse.Namespace):
+        state, mode, flags, fds = self.cmd.standalone_get_mode()
+        if mode != StandaloneMode.ZIGBEE:
+            print(" - Not in zigbee mode. Run `standalone set-mode zigbee` first.")
+            return
+        if state == StandaloneState.DISARMED:
+            print(" - Zigbee mode is disarmed. Run `standalone trigger` to arm it.")
+            return
+        cfg = self.cmd.standalone_get_config(mode)
+        if cfg and len(cfg) >= 2 and cfg[1] != 0:
+            print(f" - Locked to channel {cfg[1]}, not hopping -- a scan needs every channel covered.\n"
+                  f"   Run `standalone config -m zigbee --channel 0` first (applies live, no re-arm needed).")
+            return
+
+        print(f"Scanning {args.time:g}s across channels 11-26 ...")
+        rx, ed = _poll_channel_arrays(self.cmd, args.time)
+        if rx is None and ed is None:
+            print(" - No rx11-26/ed11-26 in status -- older firmware, or still on the first hop pass.")
+            return
+        rx = rx or [0] * 16
+        ed = ed or [0] * 16
+
+        ranking = sorted(range(16), key=lambda i: (rx[i], ed[i]), reverse=True)
+        print(f"  {'ch':>3} {'rx':>6} {'ed':>6}")
+        for i in ranking:
+            ch = 11 + i
+            quiet = "  (quiet)" if not rx[i] and not ed[i] else ""
+            print(f"  {ch:>3} {rx[i]:>6} {ed[i]:>6}{quiet}")
+
+        active = [11 + i for i in ranking if rx[i] or ed[i]]
+        if len(active) > 1:
+            print(color_string((CY,
+                f" {len(active)} channels show activity ({', '.join(map(str, active))}); "
+                f"the radio can only lock one at a time.")))
+
+        if args.lock:
+            if not (1 <= args.rank <= 16):
+                print(" - --rank must be 1..16")
+                return
+            idx = ranking[args.rank - 1]
+            target = 11 + idx
+            if not rx[idx] and not ed[idx]:
+                print(color_string((CY,
+                    f" - Channel {target} (rank {args.rank}) showed no activity; locking anyway.")))
+            dwell = int.from_bytes(cfg[2:4], 'little') if cfg and len(cfg) >= 4 else 500
+            resp = self.cmd.standalone_set_config(mode, struct.pack('<BBH', 1, target, dwell))
+            if resp.status == Status.SUCCESS:
+                print(color_string((CG, f"locked onto channel {target} (applied immediately)")))
+            else:
+                print(color_string((CR, f"set-config failed: status={resp.status}")))
