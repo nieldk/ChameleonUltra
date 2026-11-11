@@ -28,6 +28,11 @@ typedef struct {
     uint32_t ready_ok, ready_timeout;       /* RXEN ramp-up finished / not within 400 us */
     uint8_t  power_was, state_after;        /* RADIO->POWER at slot start, STATE after the ramp wait */
     uint32_t framestart;                    /* length field seen (frame began) */
+    uint32_t evt_end_raw, evt_fs_raw;       /* END/FRAMESTART found set at slot end, read
+                                                * directly off the peripheral -- independent of
+                                                * sig_radio, to tell a dispatch failure (these
+                                                * nonzero while sig_radio stays 0) from a true
+                                                * demod miss (these stay 0 too) */
     uint8_t  ed_max[16];                    /* per channel 11..26: max EDSAMPLE at slot end, raw */
     uint32_t slot_us;               /* length requested for the next slot */
     uint32_t rb_mode, rb_pcnf0, rb_crccnf, rb_freq;  /* registers read straight back after the

@@ -271,6 +271,12 @@ static size_t get_status(char *out, size_t out_max) {
               (unsigned long)s.ed_ok, (unsigned long)s.ed_timeout,
               (unsigned)s.state_after, (unsigned)s.state_end, (unsigned)s.power_was,
               (unsigned long)s.last_rc, (unsigned long)s.framestart);
+    /* raw: END/FRAMESTART found set at slot end without sig_radio ever having run --
+     * nonzero here with cb's first field still 0 means the hardware IS seeing frames
+     * and only the interrupt dispatch is broken; both staying 0 means the demod itself
+     * never triggers. */
+    STATUS_KV(out, out_max, len, "raw end=%lu fs=%lu\n",
+              (unsigned long)s.evt_end_raw, (unsigned long)s.evt_fs_raw);
     STATUS_KV(out, out_max, len, "frames ok=%lu bad_fcs=%lu dropped=%lu\n",
               (unsigned long)s.rx_ok, (unsigned long)s.rx_crc, (unsigned long)s.dropped);
     /* Expect mode=15 pcnf0=06000008 crccnf=00000202 sfd=a7 freq=5*(ch-10) --

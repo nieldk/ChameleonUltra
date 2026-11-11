@@ -117,6 +117,12 @@ static void radio_rx_begin(void) {
 /* One energy-detect sample (Nordic PS, IEEE 802.15.4 ED); bounded wait, raw value. */
 static void ed_sample(void) {
     m_st.state_end = (uint8_t)NRF_RADIO->STATE;
+    /* Peek at END/FRAMESTART before radio_off() touches them. Neither is cleared by
+     * anything except radio_cb(RADIO) (never ran, since sig_radio=0) and radio_off()
+     * (not called yet at this point) -- so a set bit here can only mean the hardware
+     * raised it and nothing has consumed it. */
+    if (NRF_RADIO->EVENTS_END) m_st.evt_end_raw++;
+    if (NRF_RADIO->EVENTS_FRAMESTART) m_st.evt_fs_raw++;
     NRF_RADIO->EVENTS_EDEND = 0;
     NRF_RADIO->TASKS_EDSTART = 1;
     for (uint32_t i = 0; i < 20000 && !NRF_RADIO->EVENTS_EDEND; i++) {
