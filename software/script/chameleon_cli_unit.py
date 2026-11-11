@@ -295,60 +295,64 @@ class HWStatus(DeviceRequiredUnit):
         fw_version = f"v{fw_version_tuple[0]}.{fw_version_tuple[1]}"
         git_version = self.cmd.get_git_version()
 
-        print(" - Device status")
-        print(f"   connection  -> {transport_name}")
+        w = 11   # longest label: "application"/"active slot"
+        not_supported = f"{CY}not supported by current firmware{C0}"
+        lines = [f"{'connection':<{w}}  {transport_name}"]
         link_speed = self.get_link_speed()
         if link_speed:
-            print(f"   link speed  -> {link_speed}")
-        print(f"   latency     -> {latency_ms:.1f} ms (round-trip)")
-        print(f"   model       -> Phreakbyte edition ({model})")
-        print(f"   firmware    -> {fw_version} ({git_version})")
+            lines.append(f"{'link speed':<{w}}  {link_speed}")
+        lines.append(f"{'latency':<{w}}  {latency_ms:.1f} ms (round-trip)")
+        lines.append(f"{'model':<{w}}  Phreakbyte edition ({model})")
+        lines.append(f"{'firmware':<{w}}  {fw_version} ({git_version})")
 
         try:
             bl_version = self.cmd.get_bootloader_version()
-            print(f"   bootloader  -> {bl_version}")
+            lines.append(f"{'bootloader':<{w}}  {bl_version}")
         except chameleon_com.CMDInvalidException:
-            print("   bootloader  -> not supported by current firmware")
+            lines.append(f"{'bootloader':<{w}}  {not_supported}")
 
         try:
             app_version = self.cmd.get_dfu_app_version()
-            print(f"   application -> {app_version}")
+            lines.append(f"{'application':<{w}}  {app_version}")
         except chameleon_com.CMDInvalidException:
-            print("   application -> not supported by current firmware")
+            lines.append(f"{'application':<{w}}  {not_supported}")
 
-        print(f"   chip ID     -> {self.cmd.get_device_chip_id()}")
-        print(f"   address     -> {self.cmd.get_device_address()}")
+        lines.append(f"{'chip ID':<{w}}  {self.cmd.get_device_chip_id()}")
+        lines.append(f"{'address':<{w}}  {self.cmd.get_device_address()}")
 
         try:
             ble_name = self.cmd.get_ble_name()
             ble_name_display = ble_name if ble_name else color_string((CY, "(default)"))
-            print(f"   ble name    -> {ble_name_display}")
+            lines.append(f"{'ble name':<{w}}  {ble_name_display}")
         except chameleon_com.CMDInvalidException:
-            print("   ble name    -> not supported by current firmware")
+            lines.append(f"{'ble name':<{w}}  {not_supported}")
 
-        print(f"   mode        -> Tag {'Reader' if self.cmd.is_device_reader_mode() else 'Emulator'}")
+        lines.append(f"{'mode':<{w}}  Tag {'Reader' if self.cmd.is_device_reader_mode() else 'Emulator'}")
 
         try:
             active_slot = SlotNumber.from_fw(self.cmd.get_active_slot())
-            print(f"   active slot -> {active_slot.value}")
+            lines.append(f"{'active slot':<{w}}  {active_slot.value}")
         except Exception:
             pass
 
         try:
             voltage, percentage = self.cmd.get_battery_info()
-            low = " " + color_string((CR, "[!] Low battery")) if percentage < self.BATTERY_LOW_LEVEL else ""
-            print(f"   battery     -> {voltage} mV, {percentage}%{low}")
+            low = f"  {CR}[!] Low battery{C0}" if percentage < self.BATTERY_LOW_LEVEL else ""
+            lines.append(f"{'battery':<{w}}  {voltage} mV, {percentage}%{low}")
         except chameleon_com.CMDInvalidException:
-            print("   battery     -> not supported by current firmware")
+            lines.append(f"{'battery':<{w}}  {not_supported}")
 
         try:
             mem = self.cmd.get_free_memory()
             free, total = mem['free'], mem['total']
             used = total - free
             pct = (used / total * 100.0) if total > 0 else 0.0
-            print(f"   heap        -> {used:,}/{total:,} bytes used ({pct:.1f}%)")
+            lines.append(f"{'heap':<{w}}  {used:,}/{total:,} bytes used ({pct:.1f}%)")
         except chameleon_com.CMDInvalidException:
-            print("   heap        -> not supported by current firmware")
+            lines.append(f"{'heap':<{w}}  {not_supported}")
+
+        for line in _box("Device Status", lines, color=CG, min_width=44):
+            print(line)
 
 @hf_14a.command("config")
 class HF14AConfig(DeviceRequiredUnit):
