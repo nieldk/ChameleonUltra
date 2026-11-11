@@ -27,7 +27,7 @@ def _stop_pressed() -> bool:
     except Exception:
         return False
 
-from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, hw
+from cli_core import ArgumentParserNoExit, CG, CR, C0, DeviceRequiredUnit, _box, hw
 
 hw_log = hw.subgroup("log", "Persistent debug log (kept in flash, readable as LOG.TXT in UF2 mode)")
 
@@ -48,17 +48,25 @@ class HWLogStatus(DeviceRequiredUnit):
 
     def on_exec(self, args: argparse.Namespace):
         st = _status(self.cmd)
-        print(f" - Level   : {st['level']} ({LEVELS[st['level']]})")
-        print(f" - Stored  : {st['stored']:,} bytes in flash ({st['pages']} pages)")
-        print(f" - Pending : {st['pending']:,} bytes in RAM, not yet in flash")
-        print(f" - Dropped : {st['dropped']:,} bytes (RAM buffer was full)")
-        print(f" - Boots   : {st['boots']}")
+        lw = 8   # longest label: "Dropped"
+        lines = [
+            f"{'Level':<{lw}} {st['level']} ({LEVELS[st['level']]})",
+            f"{'Stored':<{lw}} {st['stored']:,} bytes in flash ({st['pages']} pages)",
+            f"{'Pending':<{lw}} {st['pending']:,} bytes in RAM, not yet in flash",
+            f"{'Dropped':<{lw}} {st['dropped']:,} bytes (RAM buffer was full)",
+            f"{'Boots':<{lw}} {st['boots']}",
+        ]
+        color = CG
         if st['failed']:
-            print(" - Flash writes FAILED, logging to RAM only until reboot")
+            color = CR
+            lines.append(f"{CR}Flash writes FAILED, logging to RAM only until reboot{C0}")
             err = st.get('err', 0)
             if err:
-                print(f" - Error   : stage {err >> 24} (1 call, 2 event, 3 init), op {(err >> 16) & 0xFF}"
-                      f" (1 erase, 2 hdr, 3 data, 4 clear), code 0x{err & 0xFFFF:04X}")
+                lines.append(f"{'Error':<{lw}} stage {err >> 24} (1 call, 2 event, 3 init), op "
+                              f"{(err >> 16) & 0xFF} (1 erase, 2 hdr, 3 data, 4 clear), "
+                              f"code 0x{err & 0xFFFF:04X}")
+        for line in _box("Debug Log", lines, color=color, min_width=46):
+            print(line)
 
 
 @hw_log.command("level")

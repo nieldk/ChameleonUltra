@@ -19,6 +19,7 @@ from cli_core import (
     DeviceRequiredUnit,
     SlotIndexArgsAndGoUnit,
     TagSpecificType,
+    _box,
     color_string,
     hf_mfplus,
 )
@@ -72,16 +73,20 @@ class HFMfPlusInfo(SlotIndexArgsAndGoUnit, DeviceRequiredUnit):
         info = self.cmd.mfplus_get_info()
         anti = self.cmd.hf14a_get_anti_coll_data()
 
+        lw = 14   # longest label: "Security level"
+        lines = []
         if anti:
-            print(f"{'UID:':20}{color_string((CY, anti['uid'].hex().upper()))}")
-            print(f"{'ATQA:':20}{color_string((CY, anti['atqa'].hex().upper()))}")
-            print(f"{'SAK:':20}{color_string((CY, anti['sak'].hex().upper()))}")
-            print(f"{'ATS:':20}{color_string((CY, anti['ats'].hex().upper()))}")
+            lines.append(f"{'UID':<{lw}} {color_string((CY, anti['uid'].hex().upper()))}")
+            lines.append(f"{'ATQA':<{lw}} {color_string((CY, anti['atqa'].hex().upper()))}")
+            lines.append(f"{'SAK':<{lw}} {color_string((CY, anti['sak'].hex().upper()))}")
+            lines.append(f"{'ATS':<{lw}} {color_string((CY, anti['ats'].hex().upper()))}")
         level = info["level"]
         level_str = {MFPLUS_LEVEL_SL0: "SL0 (not personalized)",
                      MFPLUS_LEVEL_SL3: "SL3 (AES)"}.get(level, f"unknown ({level})")
-        print(f"{'Security level:':20}{color_string((CY, level_str))}")
-        print(f"{'Blocks:':20}{info['block_max']}")
+        lines.append(f"{'Security level':<{lw}} {color_string((CY, level_str))}")
+        lines.append(f"{'Blocks':<{lw}} {info['block_max']}")
+        for line in _box("MIFARE Plus", lines, color=CG, min_width=34):
+            print(line)
         if level == MFPLUS_LEVEL_SL0:
             print()
             print(color_string((CY,

@@ -11,6 +11,7 @@ from cli_core import (
     HF14AAntiCollArgsUnit,
     SlotIndexArgsAndGoUnit,
     TagSpecificType,
+    _box,
     color_string,
     hf_st25ta,
 )
@@ -57,18 +58,22 @@ class HFSt25taInfo(SlotIndexArgsAndGoUnit, DeviceRequiredUnit):
         cc = info["cc"]
         msg_len = int.from_bytes(self.cmd.st25ta_read_ndef(0, 2), "big")
 
+        lw = 14   # longest label: "Write password"
+        lines = []
         if anti:
-            print(f"{'UID:':20}{color_string((CY, anti['uid'].hex().upper()))}")
-            print(f"{'ATQA:':20}{color_string((CY, anti['atqa'].hex().upper()))}")
-            print(f"{'SAK:':20}{color_string((CY, anti['sak'].hex().upper()))}")
-            print(f"{'ATS:':20}{color_string((CY, anti['ats'].hex().upper()))}")
-        print(f"{'NDEF file size:':20}{info['ndef_size']} bytes")
-        print(f"{'NDEF message:':20}{msg_len} bytes")
-        print(f"{'File type:':20}0x{cc[7]:02X}")
-        print(f"{'Read access:':20}{_access_str(cc[CC_READ_ACCESS], READ_ACCESS)}")
-        print(f"{'Write access:':20}{_access_str(cc[CC_WRITE_ACCESS], WRITE_ACCESS)}")
-        print(f"{'Read password:':20}{info['pwd_read'].hex().upper()}")
-        print(f"{'Write password:':20}{info['pwd_write'].hex().upper()}")
+            lines.append(f"{'UID':<{lw}} {color_string((CY, anti['uid'].hex().upper()))}")
+            lines.append(f"{'ATQA':<{lw}} {color_string((CY, anti['atqa'].hex().upper()))}")
+            lines.append(f"{'SAK':<{lw}} {color_string((CY, anti['sak'].hex().upper()))}")
+            lines.append(f"{'ATS':<{lw}} {color_string((CY, anti['ats'].hex().upper()))}")
+        lines.append(f"{'NDEF file size':<{lw}} {info['ndef_size']} bytes")
+        lines.append(f"{'NDEF message':<{lw}} {msg_len} bytes")
+        lines.append(f"{'File type':<{lw}} 0x{cc[7]:02X}")
+        lines.append(f"{'Read access':<{lw}} {_access_str(cc[CC_READ_ACCESS], READ_ACCESS)}")
+        lines.append(f"{'Write access':<{lw}} {_access_str(cc[CC_WRITE_ACCESS], WRITE_ACCESS)}")
+        lines.append(f"{'Read password':<{lw}} {info['pwd_read'].hex().upper()}")
+        lines.append(f"{'Write password':<{lw}} {info['pwd_write'].hex().upper()}")
+        for line in _box("ST25TA", lines, color=CG, min_width=38):
+            print(line)
 
 
 @hf_st25ta.command("eview")

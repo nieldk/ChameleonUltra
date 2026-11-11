@@ -5,7 +5,7 @@ import struct
 import time
 import zlib
 
-from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, hw
+from cli_core import ArgumentParserNoExit, CC, DeviceRequiredUnit, _box, hw
 from chameleon_enum import Status
 
 hw_bl = hw.subgroup("bl", "Bootloader update through the running firmware")
@@ -105,13 +105,18 @@ class HWBlInfo(DeviceRequiredUnit):
             return "blank" if x == 0xFFFFFFFF else f"0x{x:08X}"
 
         vout = {0: "1.8V", 1: "2.1V", 2: "2.4V", 3: "2.7V", 4: "3.0V", 5: "3.3V", 7: "default 1.8V"}
-        print(f" UICR NRFFW[0] bootloader addr : {a(nrffw0)}")
-        print(f" UICR NRFFW[1] MBR param page  : {a(nrffw1)}")
-        print(f" MBR flash 0xFF8 (bl addr)     : {a(mbr_bl)}")
-        print(f" MBR flash 0xFFC (param page)  : {a(mbr_pp)}")
         rv = 7 if regout0 == 0xFFFFFFFF else (regout0 & 7)
-        print(f" UICR REGOUT0                  : {a(regout0)}  (VOUT {vout.get(rv, rv)})")
-        print(f" Vector @0xF3000  SP / reset   : 0x{sp:08X} / 0x{rst:08X}")
+        lw = 29   # longest label: "UICR NRFFW[0] bootloader addr"
+        lines = [
+            f"{'UICR NRFFW[0] bootloader addr':<{lw}} {a(nrffw0)}",
+            f"{'UICR NRFFW[1] MBR param page':<{lw}} {a(nrffw1)}",
+            f"{'MBR flash 0xFF8 (bl addr)':<{lw}} {a(mbr_bl)}",
+            f"{'MBR flash 0xFFC (param page)':<{lw}} {a(mbr_pp)}",
+            f"{'UICR REGOUT0':<{lw}} {a(regout0)}  (VOUT {vout.get(rv, rv)})",
+            f"{'Vector @0xF3000  SP / reset':<{lw}} 0x{sp:08X} / 0x{rst:08X}",
+        ]
+        for line in _box("Bootloader Forwarding", lines, color=CC, min_width=46):
+            print(line)
         boot = nrffw0 if nrffw0 != 0xFFFFFFFF else (mbr_bl if mbr_bl != 0xFFFFFFFF else None)
         if boot is None:
             print(" - MBR has no bootloader address: it boots the SoftDevice/app directly,")

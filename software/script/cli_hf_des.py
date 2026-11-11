@@ -1231,13 +1231,18 @@ class HfDesEInfo(SlotIndexArgsAndGoUnit):
 
     def on_exec(self, args: argparse.Namespace):
         info = self.cmd.desfire_get_info()
-        print(f" UID           : {info['uid'].hex().upper()}")
-        print(f" Applications  : {info['num_apps']} / {info['max_apps']}")
-        print(f" Files         : {info['num_files']} / {info['max_files']}")
-        print(f" File data pool: {info['pool_used']} / {info['pool_size']} bytes")
-        print(f" Keys per app  : up to {info['max_keys']}")
-        print(f" PICC auth     : 0x{info['picc_auth_command']:02X}")
-        print(f" Credential    : {info['cred_size']} bytes on device")
+        lw = 14   # longest label: "File data pool"
+        lines = [
+            f"{'UID':<{lw}} {info['uid'].hex().upper()}",
+            f"{'Applications':<{lw}} {info['num_apps']} / {info['max_apps']}",
+            f"{'Files':<{lw}} {info['num_files']} / {info['max_files']}",
+            f"{'File data pool':<{lw}} {info['pool_used']} / {info['pool_size']} bytes",
+            f"{'Keys per app':<{lw}} up to {info['max_keys']}",
+            f"{'PICC auth':<{lw}} 0x{info['picc_auth_command']:02X}",
+            f"{'Credential':<{lw}} {info['cred_size']} bytes on device",
+        ]
+        for line in _box("DESFire Emulation Slot", lines, color=CC, min_width=36):
+            print(line)
 
 
 @hf_des.command("eblank")
@@ -1293,20 +1298,25 @@ class HfDesEStats(DeviceRequiredUnit):
 
     def on_exec(self, args: argparse.Namespace):
         st = self.cmd.desfire_get_stats()
-        print(f" Frames received : {st['frames_rx']}")
-        print(f" Frames sent     : {st['frames_tx']}")
-        print(f" Engine errors   : {st['engine_errors']}")
-        print(f" Max handler time: {st['max_handler_us']} us")
+        lw = 16   # longest label: "Activation reqs"
+        lines = [
+            f"{'Frames received':<{lw}} {st['frames_rx']}",
+            f"{'Frames sent':<{lw}} {st['frames_tx']}",
+            f"{'Engine errors':<{lw}} {st['engine_errors']}",
+            f"{'Max handler time':<{lw}} {st['max_handler_us']} us",
+        ]
         if "activation_requests" in st:
-            print(f" Activation reqs : {st['activation_requests']}")
-            print(f" ATQA sent       : {st['atqa_tx']}")
+            lines.append(f"{'Activation reqs':<{lw}} {st['activation_requests']}")
+            lines.append(f"{'ATQA sent':<{lw}} {st['atqa_tx']}")
             timeouts = st["fdt_timeouts"]
             colour = CR if timeouts else CG
-            print(f" FDT timeouts    : {colour}{timeouts}{C0}")
-            print(f" Max reset time  : {st['max_reset_us']} us")
+            lines.append(f"{'FDT timeouts':<{lw}} {colour}{timeouts}{C0}")
+            lines.append(f"{'Max reset time':<{lw}} {st['max_reset_us']} us")
         starv = st["entropy_starvations"]
         colour = CR if starv else CG
-        print(f" Entropy misses  : {colour}{starv}{C0}")
+        lines.append(f"{'Entropy misses':<{lw}} {colour}{starv}{C0}")
+        for line in _box("DESFire Emulation Stats", lines, color=CC, min_width=36):
+            print(line)
 
 
 @hf_des.command("info")
