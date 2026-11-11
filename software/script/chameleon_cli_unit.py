@@ -5245,6 +5245,41 @@ def relay_result_summary(sessions) -> str:
     return '\n'.join(lines)
 
 
+# Standalone `get_status()` values are often themselves "sub=val sub=val ..."
+# chains (diag counters, radio config) or comma-separated per-channel arrays
+# (rx11-26=0,0,1,...). Dress those up instead of dumping the raw string.
+_STATUS_SUBKV_RE = re.compile(r'(?<!\S)([A-Za-z_][A-Za-z0-9_.]*)=(\S*)')
+_STATUS_CHAN_RANGE_RE = re.compile(r'^([A-Za-z_]+)(\d+)-(\d+)$')
+
+
+def _color_status_value(value: str) -> str:
+    """Color the `name=` part of each sub-key/value token in a status value."""
+    return _STATUS_SUBKV_RE.sub(lambda m: f"{CC}{m.group(1)}{C0}={m.group(2)}", value)
+
+
+def _render_status_line(key: str, value: str, key_width: int, legend_done: set) -> str:
+    """Render one `standalone status` key/value line. A per-channel array
+    (key like 'rx11-26', comma-separated value matching that channel span)
+    gets right-aligned columns and a one-time channel-index legend above the
+    first such array, instead of one long raw comma string."""
+    m = _STATUS_CHAN_RANGE_RE.match(key)
+    if m and ',' in value:
+        lo, hi = int(m.group(2)), int(m.group(3))
+        items = value.split(',')
+        if len(items) == hi - lo + 1:
+            pad = max(len(v) for v in items)
+            indent = ' ' * (key_width + 5)
+            cols = '  '.join(f"{v:>{pad}}" for v in items)
+            out = []
+            if lo not in legend_done:
+                legend = '  '.join(f"{CC}{ch:>{pad}}{C0}" for ch in range(lo, hi + 1))
+                out.append(f"{indent}{legend}")
+                legend_done.add(lo)
+            out.append(f"   {key:<{key_width}}  {cols}")
+            return '\n'.join(out)
+    return f"   {key:<{key_width}}  {_color_status_value(value)}"
+
+
 # --- Commands ----------------------------------------------------------------
 
 @standalone.command('status')
@@ -5285,8 +5320,9 @@ class StandaloneStatus(DeviceRequiredUnit):
         if extra:
             w = max(len(k) for k, _ in extra)
             print(" status:")
+            legend_done = set()
             for k, v in extra:
-                print(f"   {k:<{w}}  {v}")
+                print(_render_status_line(k, v, w, legend_done))
         if mode == StandaloneMode.RELAY:
             try:
                 d = self.cmd.relay_get_diag()
