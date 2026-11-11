@@ -629,7 +629,18 @@ standalone zigbee devices -t 60            # sources per PAN: addresses, tx coun
 standalone zigbee dump -t 10               # each frame decoded + hex; also auto-tries known
                                             # keys (NWK fallback + APS join-key capture, see below)
 standalone zigbee dump -k <32 hex>         # also decrypt NWK payloads with your network key
+standalone zigbee hunt -t 120              # hop mode only: rank channels 11-26 by activity
+standalone zigbee hunt -t 120 --lock       # ...then retune onto the busiest one, live
 ```
+
+`zigbee hunt` only works while hopping (channel 0) -- it reads the `rx11-26`/`ed11-26`
+per-channel arrays from `status`, so there is nothing to rank once locked to one channel.
+It polls for the given duration, prints a table ranked by rx-frame-count then
+energy-detect peak, and with `--lock` (`--rank N` for the Nth busiest instead of the
+top one) retunes the already-armed mode onto that channel via `standalone config`,
+which `on_config()` applies immediately -- no disarm/re-arm needed. The radio only
+listens on one channel at a time, so `--lock` always targets a single channel even
+when several show activity.
 
 If BLE activity leaves no gap for a slot, the SoftDevice cancels or blocks the request (`canceled`/`blocked`
 rise). Requests time out after 200 ms and are re-issued from the 20 ms tick. The slot length is halved on each cancel or block down to 5 ms (`slot_us` in `status`) and grown again after

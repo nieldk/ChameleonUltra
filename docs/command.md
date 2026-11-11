@@ -4,7 +4,7 @@
 > [Legal / responsible use](../README.md#legal--responsible-use) in the
 > top-level README.
 
-Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 48 command groups, 233 commands.
+Complete reference for the Phreakbyte edition ChameleonUltra client (`chameleon_cli_main.py`), auto-generated from the live CLI parser: 50 command groups, 239 commands.
 
 Notation: `<...>` are values you supply. Each option lists its flags, help, allowed `choices`, whether it is `required`, and its `default`. Run any command with `-h` in the client for the same information live.
 
@@ -1899,10 +1899,15 @@ Read or write mode-specific config
 - `--gateway` — [usb-net] DHCP offers the CU as default gateway (default off) (choices: on, off)
 - `--auto` — [usb-net] keep USB Ethernet on whenever USB is attached, beside any other mode (choices: on, off)
 - `--class` — [usb-net] host class: ecm (Linux, macOS), rndis (Windows), default = build default (choices: ecm, rndis, default)
-- `--channel` — [zigbee] 802.15.4 channel 11-26, or 0 to hop over all (default 11)
-- `--dwell` — [zigbee] hop dwell per channel in ms (50-60000, default 500)
+- `--channel` — [zigbee] 802.15.4 channel 11-26, or 0 to hop over all (default 11); [esb] MHz offset from 2400, 0-100, or 255 to hop over the whole range (default 5)
+- `--dwell` — [zigbee/esb] hop dwell per channel in ms (50-60000, default 500)
+- `--address` — [esb] 10-hex-char known address, prefix byte first (e.g. a paired Logitech Unifying receiver's address)
+- `--bitrate` — [esb] PHY bitrate (default 2m) (choices: 1m, 2m)
+- `--prefix-lo` — [esb-promisc] low end of the device-ID guess range (0-255, default 0)
+- `--prefix-hi` — [esb-promisc] high end of the device-ID guess range, inclusive (0-255, default 7)
 - `--start` — [spectrum] sweep start MHz (2400-2483, default 2400)
 - `--end` — [spectrum] sweep end MHz, inclusive (2400-2483, default 2483)
+- `--repeat` — [spectrum] ED samples per point, peak-hold (1-32, default 1); raises the odds of catching an intermittent/bursty emitter at the cost of a slower sweep
 
 ### `standalone dict-check`
 
@@ -1940,6 +1945,44 @@ Clear emul-trace result buffer
 #### `standalone emul-trace get-result`
 
 Read emul-trace result buffer
+
+- `-f`, `--file` — write output to file instead of stdout
+- `--raw` — dump raw bytes (no parsing)
+- `--json` — emit parsed sessions as JSON
+- `--dump` — dump every frame in each session
+- `--pm3` — write each session as a Proxmark3 .trace (<prefix>-NN.trace)
+
+### `standalone esb`
+
+Result data for the esb mode
+
+#### `standalone esb clear-result`
+
+Clear esb result buffer
+
+
+#### `standalone esb get-result`
+
+Read esb result buffer
+
+- `-f`, `--file` — write output to file instead of stdout
+- `--raw` — dump raw bytes (no parsing)
+- `--json` — emit parsed sessions as JSON
+- `--dump` — dump every frame in each session
+- `--pm3` — write each session as a Proxmark3 .trace (<prefix>-NN.trace)
+
+### `standalone esb-promisc`
+
+Result data for the esb-promisc mode
+
+#### `standalone esb-promisc clear-result`
+
+Clear esb-promisc result buffer
+
+
+#### `standalone esb-promisc get-result`
+
+Read esb-promisc result buffer
 
 - `-f`, `--file` — write output to file instead of stdout
 - `--raw` — dump raw bytes (no parsing)
@@ -2116,10 +2159,21 @@ Plot the last 2.4 GHz ISM sweep (matplotlib). Run `standalone trigger` first to 
 - `-o`, `--out` — save to a file instead of opening an interactive window
 - `--raw` — print raw values instead of plotting
 
+#### `standalone spectrum waterfall`
+
+Live frequency-vs-time waterfall: repeatedly fires sweeps (like calling `standalone trigger` + `spectrum plot` in a loop) and scrolls them into a heatmap, newest row on top. Needs the mode already armed. Close the window or Ctrl+C to stop.
+
+- `--rows` — sweep history kept on screen (default 60) (default: 60)
+- `--max-sweeps` — stop after N sweeps instead of running until closed/interrupted (default: unlimited live, 30 when saving with --out)
+- `--sweep-timeout` — seconds to wait for each sweep to finish before giving up (default 30; raise this if `standalone config spectrum --repeat` is set high -- more repeats means a slower sweep) (default: 30.0)
+- `-o`, `--out` — save the session as an animated GIF instead of a live window
+- `--vmax` — pin the color scale's top to this raw EDSAMPLE value instead of autoscaling to the loudest point seen so far. Real readings rarely get near the 0-255 theoretical ceiling -- a quiet room is often single digits -- so autoscale (the default) is what keeps weak signals visible instead of washed out to near-black.
+
 ### `standalone status`
 
 Show standalone subsystem state
 
+- `-p`, `--plain` — flat key=value lines instead of the boxed dashboard
 
 ### `standalone trigger`
 
@@ -2197,9 +2251,19 @@ Read zigbee result buffer
 - `--dump` — dump every frame in each session
 - `--pm3` — write each session as a Proxmark3 .trace (<prefix>-NN.trace)
 
+#### `standalone zigbee hunt`
+
+Scan all channels (11-26) for activity -- rx frame counts and energy-detect peaks -- rank them, and optionally lock the mode onto the busiest one. The radio only listens on one channel at a time, so --lock always picks a single channel; if several show activity, re-run with --rank N to try the Nth busiest instead of hopping between them.
+
+Requires zigbee already armed and hopping: `standalone config zigbee --channel 0` then `standalone trigger`.
+
+- `-t`, `--time` — scan duration in seconds (default 120) (default: 120)
+- `--lock` — after scanning, reconfigure the armed mode onto the ranked channel
+- `--rank` — with --lock, lock onto the Nth busiest channel (default 1 = busiest) (default: 1)
+
 #### `standalone zigbee scan`
 
-Passively list Zigbee networks seen in beacons and traffic, per channel. Arm the mode with channel 0 (hop) to cover 11-26: `standalone config -m zigbee --channel 0`.
+Passively list Zigbee networks seen in beacons and traffic, per channel. Arm the mode with channel 0 (hop) to cover 11-26: `standalone config zigbee --channel 0`.
 
 - `-t`, `--time` — capture duration in seconds (default 30) (default: 30)
 
