@@ -681,23 +681,24 @@ class HF14AScan(ReaderRequiredUnit):
 
     def _print_basic(self, data_tag, hw=None):
         uid = data_tag["uid"]
-        print(f"- UID  : {uid.hex().upper()} {hf14a_info.uid_type(uid)}".rstrip())
-        print(
-            f"- ATQA : {data_tag['atqa'].hex().upper()} "
-            f"(0x{int.from_bytes(data_tag['atqa'], byteorder='little'):04x})"
-        )
-        print(f"- SAK  : {data_tag['sak'].hex().upper()}")
+        lines = [f"UID   {uid.hex().upper()} {hf14a_info.uid_type(uid)}".rstrip()]
+        atqa_le = int.from_bytes(data_tag["atqa"], byteorder="little")
+        lines.append(f"ATQA  {data_tag['atqa'].hex().upper()} (0x{atqa_le:04x})")
+        lines.append(f"SAK   {data_tag['sak'].hex().upper()}")
         if len(uid) > 4:
-            print(f"- Manufacturer: {CY}{hf14a_info.manufacturer(uid[0])}{C0}")
+            lines.append(f"Mfr   {CY}{hf14a_info.manufacturer(uid[0])}{C0}")
             label = hf14a_info.UID_LABELS.get((uid[0], uid[1]))
             if label:
-                print(f"    {CY}{label}{C0}")
+                lines.append(f"      {CY}{label}{C0}")
         types, flags = self._types(data_tag, hw)
-        print("- Possible types:")
-        for t in types:
-            print(f"    {CY}{t}{C0}")
-        if not types:
-            print(f"    {CR}failed to fingerprint{C0}")
+        if types:
+            lines.append("Type:")
+            for t in types:
+                lines.append(f"  {CY}{t}{C0}")
+        else:
+            lines.append(f"Type: {CR}failed to fingerprint{C0}")
+        for line in _box("ISO14443-A Tag", lines, color=CC, min_width=34):
+            print(line)
         return flags
 
     def _print_ats_deep(self, ats):
@@ -715,8 +716,6 @@ class HF14AScan(ReaderRequiredUnit):
     def scan(self, deep=False):
         resp = self.cmd.hf14a_scan()
         if resp is not None:
-            if deep:
-                print(f"---------- {CC}ISO14443-A Information{C0} ----------")
             for data_tag in resp:
                 hw = self._get_version(data_tag) if deep and len(resp) == 1 else None
                 flags = self._print_basic(data_tag, hw)
