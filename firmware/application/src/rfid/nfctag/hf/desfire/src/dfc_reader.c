@@ -81,6 +81,52 @@ const char* dfc_reader_status_name(DfcReaderStatus status) {
     return "unknown";
 }
 
+DfcReaderStatus dfc_reader_iso_append_record_apdu(
+    uint8_t short_file_id,
+    const uint8_t* data,
+    size_t data_len,
+    uint8_t* out,
+    size_t out_cap,
+    size_t* out_len) {
+    if(!out_len) return DfcReaderInvalid;
+    *out_len = 0;
+    if(short_file_id > 0x1E || !data || data_len == 0 || data_len > UINT16_MAX)
+        return DfcReaderInvalid;
+
+    size_t header_len = data_len <= UINT8_MAX ? 5 : 7;
+    if(!out || out_cap < header_len + data_len) return DfcReaderBufferTooSmall;
+
+    out[0] = 0x00;
+    out[1] = 0xE2;
+    out[2] = 0x00;
+    out[3] = (uint8_t)(short_file_id << 3);
+    if(data_len <= UINT8_MAX) {
+        out[4] = (uint8_t)data_len;
+    } else {
+        out[4] = 0x00;
+        out[5] = (uint8_t)(data_len >> 8);
+        out[6] = (uint8_t)data_len;
+    }
+    memcpy(out + header_len, data, data_len);
+    *out_len = header_len + data_len;
+    return DfcReaderOk;
+}
+
+DfcReaderStatus dfc_reader_iso7816_parse_response(
+    const uint8_t* response,
+    size_t response_len,
+    const uint8_t** data,
+    size_t* data_len,
+    uint16_t* status_word) {
+    if(!response || response_len < 2 || !data || !data_len || !status_word)
+        return DfcReaderInvalid;
+    *data = response;
+    *data_len = response_len - 2;
+    *status_word = (uint16_t)((uint16_t)response[response_len - 2] << 8) |
+                   response[response_len - 1];
+    return DfcReaderOk;
+}
+
 // ------------------------------------------------------------ session ---
 
 void dfc_reader_session_init(DfcReaderSession* session) {
@@ -919,7 +965,8 @@ static bool command_requires_response_data(const DfcCommand* command) {
     // record read has data. An empty record file reports an error instead.
     if(command->ins == DFC_CMD_READ_RECORDS || command->ins == DFC_CMD_READ_RECORDS_ISO)
         return true;
-    if(command->ins == DFC_CMD_READ_DATA && command->data_len >= DfcEv2FileHeaderLength) {
+    if((command->ins == DFC_CMD_READ_DATA || command->ins == DFC_CMD_READ_DATA_ISO) &&
+       command->data_len >= DfcEv2FileHeaderLength) {
         return command->data[4] != 0 || command->data[5] != 0 || command->data[6] != 0;
     }
     return false;

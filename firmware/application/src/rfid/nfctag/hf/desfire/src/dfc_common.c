@@ -14,14 +14,16 @@ bool dfc_iso_file_id_is_reserved(uint16_t value) {
 }
 
 bool dfc_communication_settings_is_valid(uint8_t value) {
-    uint8_t mode = value & DFC_COMM_MODE_MASK;
-    uint8_t flags = 0;
+    // The stored octet carries the mode in bits 0-1, the "additional access rights" flag in
+    // bit 7 and, when SDM is built in, the SDM flag in bit 6. A genuine EV3 accepts every
+    // mode value 0-3 and the bit-7 flag when a file is created and reports them back as
+    // given (hardware_physical_ev3_2k_create_comm_bytes.vec).
+    uint8_t flags = DFC_FILE_OPTION_ADDITIONAL_RIGHTS;
 #if DFC_ENABLE_SDM
     // SDM shares the serialized octet with the communication mode.
-    flags = DFC_SDM_ENABLED_MASK;
+    flags |= DFC_SDM_ENABLED_MASK;
 #endif
-    return (value & (uint8_t)~(flags | DFC_COMM_MODE_MASK)) == 0 &&
-           (mode == DFC_COMM_PLAIN || mode == DFC_COMM_MAC || mode == DFC_COMM_ENCIPHERED);
+    return (value & (uint8_t)~(flags | DFC_COMM_MODE_MASK)) == 0;
 }
 
 static bool access_nibble_is_valid(uint8_t value, size_t key_count) {

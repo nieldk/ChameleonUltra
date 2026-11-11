@@ -4,7 +4,7 @@
 
 static DfcEv2CommandMetadata expected_metadata(uint8_t command) {
     DfcEv2CommandMetadata expected = {.encrypted_header_length = DfcEv2NoEncryptedHeader};
-    switch(dfc_record_command_base(command)) {
+    switch(dfc_file_command_base(command)) {
     case DFC_CMD_READ_DATA:
     case DFC_CMD_READ_RECORDS:
     case DFC_CMD_GET_VALUE:
@@ -87,8 +87,29 @@ static MunitResult test_every_instruction(const MunitParameter params[], void* d
     return MUNIT_OK;
 }
 
+static MunitResult test_iso_chaining_aliases(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    static const uint8_t aliases[][2] = {
+        {DFC_CMD_READ_DATA_ISO, DFC_CMD_READ_DATA},
+        {DFC_CMD_WRITE_DATA_ISO, DFC_CMD_WRITE_DATA},
+        {DFC_CMD_READ_RECORDS_ISO, DFC_CMD_READ_RECORDS},
+        {DFC_CMD_WRITE_RECORD_ISO, DFC_CMD_WRITE_RECORD},
+        {DFC_CMD_UPDATE_RECORD_ISO, DFC_CMD_UPDATE_RECORD},
+    };
+    for(size_t index = 0; index < sizeof(aliases) / sizeof(aliases[0]); index++) {
+        DfcEv2CommandMetadata alternate = dfc_ev2_command_metadata(aliases[index][0]);
+        DfcEv2CommandMetadata canonical = dfc_ev2_command_metadata(aliases[index][1]);
+        munit_assert_uint8(alternate.flags, ==, canonical.flags);
+        munit_assert_uint8(
+            alternate.encrypted_header_length, ==, canonical.encrypted_header_length);
+    }
+    return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/every-instruction", test_every_instruction, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/iso-chaining-aliases", test_iso_chaining_aliases, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
 };
 

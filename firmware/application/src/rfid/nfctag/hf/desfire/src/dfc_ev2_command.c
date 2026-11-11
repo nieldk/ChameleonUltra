@@ -2,7 +2,7 @@
 
 DfcEv2CommandMetadata dfc_ev2_command_metadata(uint8_t command) {
     DfcEv2CommandMetadata metadata = {.encrypted_header_length = DfcEv2NoEncryptedHeader};
-    uint8_t base = dfc_record_command_base(command);
+    uint8_t base = dfc_file_command_base(command);
 
     switch(base) {
     case DFC_CMD_READ_DATA:

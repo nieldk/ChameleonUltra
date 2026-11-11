@@ -320,11 +320,14 @@ static DfcCommandStatus
     }
     if(strcmp(name, "get-value") == 0)
         return dfc_command_get_value(command, (uint8_t)strtoul(arguments, NULL, 10));
-    if(strcmp(name, "read-data") == 0) {
+    if(strcmp(name, "read-data") == 0 || strcmp(name, "read-data-iso-chaining") == 0) {
         if(sscanf(arguments, "%u,%u,%u", &first, &second, &third) != 3) return DfcCommandInvalid;
+        if(strcmp(name, "read-data-iso-chaining") == 0)
+            return dfc_command_read_data_iso_chaining(command, (uint8_t)first, second, third);
         return dfc_command_read_data(command, (uint8_t)first, second, third);
     }
-    if(strcmp(name, "write-data") == 0 || strcmp(name, "write-record") == 0) {
+    if(strcmp(name, "write-data") == 0 || strcmp(name, "write-data-iso-chaining") == 0 ||
+       strcmp(name, "write-record") == 0 || strcmp(name, "write-record-iso-chaining") == 0) {
         char payload_text[DFC_COMMAND_MAX_DATA * 2 + 1];
         if(sscanf(arguments, "%u,%u,%510s", &first, &second, payload_text) != 3)
             return DfcCommandInvalid;
@@ -333,14 +336,24 @@ static DfcCommandStatus
         if(strcmp(name, "write-data") == 0) {
             return dfc_command_write_data(command, (uint8_t)first, second, payload, payload_len);
         }
+        if(strcmp(name, "write-data-iso-chaining") == 0) {
+            return dfc_command_write_data_iso_chaining(
+                command, (uint8_t)first, second, payload, payload_len);
+        }
         return dfc_command_write_record(
-            command, (uint8_t)first, second, payload, payload_len, false);
+            command,
+            (uint8_t)first,
+            second,
+            payload,
+            payload_len,
+            strcmp(name, "write-record-iso-chaining") == 0);
     }
-    if(strcmp(name, "read-records") == 0) {
+    if(strcmp(name, "read-records") == 0 || strcmp(name, "read-records-iso-chaining") == 0) {
         if(sscanf(arguments, "%u,%u,%u", &first, &second, &third) != 3) return DfcCommandInvalid;
-        return dfc_command_read_records(command, (uint8_t)first, second, third, false);
+        return dfc_command_read_records(
+            command, (uint8_t)first, second, third, strcmp(name, "read-records-iso-chaining") == 0);
     }
-    if(strcmp(name, "update-record") == 0) {
+    if(strcmp(name, "update-record") == 0 || strcmp(name, "update-record-iso-chaining") == 0) {
         unsigned fourth = 0;
         char payload_text[DFC_COMMAND_MAX_DATA * 2 + 1];
         if(sscanf(arguments, "%u,%u,%u,%510s", &first, &second, &third, payload_text) != 4)
@@ -348,7 +361,13 @@ static DfcCommandStatus
         uint8_t payload[DFC_COMMAND_MAX_DATA];
         fourth = (unsigned)hex(payload_text, payload);
         return dfc_command_update_record(
-            command, (uint8_t)first, second, third, payload, fourth, false);
+            command,
+            (uint8_t)first,
+            second,
+            third,
+            payload,
+            fourth,
+            strcmp(name, "update-record-iso-chaining") == 0);
     }
     if(strcmp(name, "credit") == 0 || strcmp(name, "debit") == 0 ||
        strcmp(name, "limited-credit") == 0) {

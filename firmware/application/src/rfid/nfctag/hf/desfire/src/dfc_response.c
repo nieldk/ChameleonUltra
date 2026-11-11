@@ -185,8 +185,9 @@ DfcResponseDecodeStatus dfc_response_decode_file_settings(
         decoded.settings.value.lower_limit = read_i32_le(response + 4);
         decoded.settings.value.upper_limit = read_i32_le(response + 8);
         decoded.settings.value.limited_credit_value = read_i32_le(response + 12);
-        if(response[16] > 1) return DfcResponseDecodeUnsupported;
-        decoded.settings.value.limited_credit_enabled = response[16] != 0;
+        if((response[16] & (uint8_t)~0x03u) != 0) return DfcResponseDecodeUnsupported;
+        decoded.settings.value.limited_credit_options = response[16];
+        decoded.settings.value.limited_credit_enabled = (response[16] & 0x01u) != 0;
     } else {
         decoded.settings.records.record_size = read_u24_le(response + 4);
         decoded.settings.records.max_records = read_u24_le(response + 7);

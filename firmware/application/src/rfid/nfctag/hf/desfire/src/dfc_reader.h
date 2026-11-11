@@ -199,6 +199,25 @@ _Static_assert(
 
 const char* dfc_reader_status_name(DfcReaderStatus status);
 
+// Build the standard ISO/IEC 7816-4 APPEND RECORD APDU. `short_file_id` is
+// zero for the currently selected record file or 1 through 30 for an SFI.
+DfcReaderStatus dfc_reader_iso_append_record_apdu(
+    uint8_t short_file_id,
+    const uint8_t* data,
+    size_t data_len,
+    uint8_t* out,
+    size_t out_cap,
+    size_t* out_len);
+
+// Split a standard ISO response into its data and two-byte status word. The
+// returned data points into `response` and remains owned by the caller.
+DfcReaderStatus dfc_reader_iso7816_parse_response(
+    const uint8_t* response,
+    size_t response_len,
+    const uint8_t** data,
+    size_t* data_len,
+    uint16_t* status_word);
+
 // An unauthenticated session.
 void dfc_reader_session_init(DfcReaderSession* session);
 // Forget the session's keys, as the card does when it ends a session.

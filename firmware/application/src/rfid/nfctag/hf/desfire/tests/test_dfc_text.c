@@ -324,7 +324,7 @@ static MunitResult test_rejections(const MunitParameter params[], void* data) {
     munit_assert_int(
         mutate(
             "Application 00 File 00 Communication Settings: 00",
-            "Application 00 File 00 Communication Settings: 02",
+            "Application 00 File 00 Communication Settings: 04",
             &detail),
         ==,
         DfcTextMalformed);

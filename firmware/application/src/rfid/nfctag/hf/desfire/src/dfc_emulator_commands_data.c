@@ -46,12 +46,18 @@ static bool sdm_range_fits(const DfcFile* file, uint32_t offset, size_t length) 
     return offset <= file->data_len && length <= file->data_len - offset;
 }
 
-static bool sdm_read_cache_matches(const DfcEmulator* emulator, const DfcFile* file) {
-    return emulator->sdm_read_cache_valid && emulator->sdm_read_cache_file_number == file->number;
+static bool sdm_read_cache_matches(
+    const DfcEmulator* emulator,
+    const DfcFile* file,
+    DfcSdmReadFamily family) {
+    return emulator->sdm_read_cache_valid &&
+           emulator->sdm_read_cache_file_number == file->number &&
+           emulator->sdm_read_cache_family == family;
 }
 
-static DfcSdmRenderStatus render_sdm_read_in_place(DfcEmulator* emulator, DfcFile* file) {
-    if(sdm_read_cache_matches(emulator, file)) return DfcSdmRenderOk;
+static DfcSdmRenderStatus
+    render_sdm_read_in_place(DfcEmulator* emulator, DfcFile* file, DfcSdmReadFamily family) {
+    if(sdm_read_cache_matches(emulator, file, family)) return DfcSdmRenderOk;
     DfcSdmRenderStatus status = DfcSdmRenderFailed;
     size_t pending_scratch_len = 0;
     uint8_t picc_clear[DFC_SDM_PICC_DATA_BLOCK_LENGTH * 2] = {0};
@@ -277,6 +283,7 @@ static DfcSdmRenderStatus render_sdm_read_in_place(DfcEmulator* emulator, DfcFil
     DFC_UNUSED(counter);
     emulator->sdm_read_cache_valid = true;
     emulator->sdm_read_cache_file_number = file->number;
+    emulator->sdm_read_cache_family = family;
     emulator->sdm_read_cache_len = file->data_len;
     status = DfcSdmRenderOk;
 
@@ -295,7 +302,10 @@ cleanup:
     return status;
 }
 
-DfcSdmRenderStatus dfc_emulator_render_sdm_read_status(DfcEmulator* emulator, DfcFile* file) {
+DfcSdmRenderStatus dfc_emulator_render_sdm_read_status(
+    DfcEmulator* emulator,
+    DfcFile* file,
+    DfcSdmReadFamily family) {
     if(!emulator || !file) return DfcSdmRenderFailed;
     _Static_assert(
         DFC_EMULATOR_CHAIN_BUFFER_SIZE >= DFC_SDM_READ_CACHE_SIZE * 2,
@@ -305,19 +315,21 @@ DfcSdmRenderStatus dfc_emulator_render_sdm_read_status(DfcEmulator* emulator, Df
         return DfcSdmRenderFailed;
     }
     /* A matching cache is already the committed result. Leave rollback scratch untouched. */
-    if(sdm_read_cache_matches(emulator, file)) return DfcSdmRenderOk;
+    if(sdm_read_cache_matches(emulator, file, family)) return DfcSdmRenderOk;
     uint8_t* saved_cache = emulator->pending_chain + DFC_SDM_READ_CACHE_SIZE;
     memcpy(saved_cache, emulator->sdm_read_cache, sizeof(emulator->sdm_read_cache));
     uint32_t saved_counter = file->state.data.sdm_read_counter;
     bool saved_valid = emulator->sdm_read_cache_valid;
     uint8_t saved_file_number = emulator->sdm_read_cache_file_number;
+    uint8_t saved_family = emulator->sdm_read_cache_family;
     size_t saved_len = emulator->sdm_read_cache_len;
-    DfcSdmRenderStatus status = render_sdm_read_in_place(emulator, file);
+    DfcSdmRenderStatus status = render_sdm_read_in_place(emulator, file, family);
     if(status != DfcSdmRenderOk) {
         memcpy(emulator->sdm_read_cache, saved_cache, sizeof(emulator->sdm_read_cache));
         file->state.data.sdm_read_counter = saved_counter;
         emulator->sdm_read_cache_valid = saved_valid;
         emulator->sdm_read_cache_file_number = saved_file_number;
+        emulator->sdm_read_cache_family = saved_family;
         emulator->sdm_read_cache_len = saved_len;
     }
     dfc_secure_wipe(saved_cache, sizeof(emulator->sdm_read_cache));
@@ -325,7 +337,17 @@ DfcSdmRenderStatus dfc_emulator_render_sdm_read_status(DfcEmulator* emulator, Df
 }
 
 bool dfc_emulator_render_sdm_read(DfcEmulator* emulator, DfcFile* file) {
-    return dfc_emulator_render_sdm_read_status(emulator, file) == DfcSdmRenderOk;
+    return dfc_emulator_render_sdm_read_status(emulator, file, DfcSdmReadFamilyNative) ==
+           DfcSdmRenderOk;
+}
+
+void dfc_emulator_retire_sdm_read_cache(DfcEmulator* emulator) {
+    if(!emulator) return;
+    emulator->sdm_read_cache_valid = false;
+    emulator->sdm_read_cache_file_number = 0;
+    emulator->sdm_read_cache_family = 0;
+    emulator->sdm_read_cache_len = 0;
+    dfc_secure_wipe(emulator->sdm_read_cache, sizeof(emulator->sdm_read_cache));
 }
 #endif
 
@@ -335,12 +357,19 @@ bool dfc_emulator_command_read_data(
     size_t apdu_len,
     DfcByteBuf* tx_buffer,
     Dfc* dfc) {
-    DFC_UNUSED(apdu_len);
+    // ReadData takes exactly file number, 3-byte offset and 3-byte length. On a
+    // plain session any other length is a length error (measured). A secure
+    // session appends a MAC after the parameters, so its checks happen later.
+    if(apdu_len != 8 && !dfc_emulator_command_secure_session_open(emulator)) {
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
+        return true;
+    }
     uint8_t file_no = apdu[1];
     DfcFile* file = dfc_credential_find_file_in_app(
         emulator->credential, emulator->selected_app_index, file_no);
     if(!file) {
-        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_FILE_NOT_FOUND);
+        dfc_bytebuf_append_byte(
+            tx_buffer, dfc_emulator_file_lookup_failure_status(file_no, false));
         return true;
     }
     if(file->type != DFC_FILE_TYPE_STANDARD_DATA && file->type != DFC_FILE_TYPE_BACKUP_DATA &&
@@ -390,7 +419,10 @@ bool dfc_emulator_command_read_data(
             dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PERMISSION_DENIED);
             return true;
         }
-        DfcSdmRenderStatus render_status = dfc_emulator_render_sdm_read_status(emulator, file);
+        DfcSdmReadFamily family = apdu[0] == DFC_CMD_READ_DATA_ISO ? DfcSdmReadFamilyNativeIsoDep :
+                                                                     DfcSdmReadFamilyNative;
+        DfcSdmRenderStatus render_status =
+            dfc_emulator_render_sdm_read_status(emulator, file, family);
         if(render_status == DfcSdmRenderRandomExhausted) {
             dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_MEMORY_ERROR);
             return true;
@@ -427,18 +459,11 @@ bool dfc_emulator_command_read_data(
         emulator, file, DfcFileAccessRead, file->comm_settings);
     if(committed_data_is_zero) {
         if(!dfc_emulator_command_emit_zero_payload_with_chaining_comm(
-               emulator, tx_buffer, DFC_CMD_READ_DATA, read_len, comm))
+               emulator, tx_buffer, apdu[0], read_len, comm))
             dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_BOUNDARY_ERROR);
     } else {
         dfc_emulator_command_emit_payload_with_chaining_comm(
-            emulator,
-            tx_buffer,
-            DFC_CMD_READ_DATA,
-            read_data,
-            read_len,
-            1,
-            comm,
-            requested_len == 0);
+            emulator, tx_buffer, apdu[0], read_data, read_len, 1, comm, requested_len == 0);
     }
 
     if(dfc && read_len > 0) {
@@ -522,7 +547,7 @@ void dfc_emulator_command_get_file_counters(
         1,
         authenticated ? DFC_COMM_ENCIPHERED : DFC_COMM_PLAIN,
         false);
-    emulator->sdm_read_cache_valid = false;
+    dfc_emulator_retire_sdm_read_cache(emulator);
 }
 #endif
 
@@ -535,7 +560,14 @@ void dfc_emulator_command_write_data(
     DfcFile* file = dfc_credential_find_file_in_app(
         emulator->credential, emulator->selected_app_index, file_no);
     if(!file) {
-        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_FILE_NOT_FOUND);
+        dfc_bytebuf_append_byte(
+            tx_buffer, dfc_emulator_file_lookup_failure_status(file_no, false));
+        return;
+    }
+    if(file->type != DFC_FILE_TYPE_STANDARD_DATA && file->type != DFC_FILE_TYPE_BACKUP_DATA) {
+        // WriteData cannot reinterpret a value or record file as an octet
+        // stream (measured: permission denied, nothing written).
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PERMISSION_DENIED);
         return;
     }
     if(!dfc_emulator_command_file_allows_write(file, emulator)) {
@@ -557,9 +589,14 @@ void dfc_emulator_command_write_data(
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_BOUNDARY_ERROR);
         return;
     }
+    if(declared_len == 0) {
+        // Measured: a WriteData of zero bytes is a parameter error.
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PARAMETER_ERROR);
+        return;
+    }
 
     bool ev1_sm = dfc_emulator_native_authentication_active(emulator) &&
-                  dfc_secure_messaging_applies_ev1(emulator->secure_messaging, DFC_CMD_WRITE_DATA);
+                  dfc_secure_messaging_applies_ev1(emulator->secure_messaging, apdu[0]);
     const uint8_t* clear = NULL;
     size_t scratch_len = 0;
     size_t out_len = dfc_emulator_command_unwrap_write_payload(

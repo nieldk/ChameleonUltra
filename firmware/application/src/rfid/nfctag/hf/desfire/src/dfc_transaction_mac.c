@@ -18,6 +18,13 @@ enum {
     TransactionReaderIdHeaderLength = 1 + DFC_TRANSACTION_READER_ID_LENGTH,
 };
 
+typedef struct {
+    uint8_t header[TransactionReaderIdHeaderLength];
+    size_t header_length;
+    const uint8_t* data;
+    size_t data_length;
+} TransactionMacEntry;
+
 static bool uint24_is_valid(uint32_t value) {
     return value <= 0xFFFFFFu;
 }
@@ -28,36 +35,42 @@ static bool verifier_is_valid(const DfcTransactionMacVerifier* verifier) {
            verifier->input_length <= verifier->input_capacity;
 }
 
+static bool padded_length(size_t length, size_t* padded) {
+    if(!padded || length > SIZE_MAX - (TRANSACTION_BLOCK_SIZE - 1)) return false;
+    *padded =
+        (length + TRANSACTION_BLOCK_SIZE - 1) / TRANSACTION_BLOCK_SIZE * TRANSACTION_BLOCK_SIZE;
+    return true;
+}
+
+static bool entry_is_valid(const TransactionMacEntry* entry) {
+    return entry && entry->header_length > 0 && entry->header_length <= sizeof(entry->header) &&
+           (!entry->data_length || entry->data);
+}
+
 static bool append_entry(
     uint8_t* input,
     size_t input_capacity,
     size_t* input_length,
-    const uint8_t* header,
-    size_t header_length,
-    const uint8_t* data,
-    size_t data_length) {
-    if(!input || !input_length || !header || (data_length && !data) ||
-       *input_length > input_capacity)
+    const TransactionMacEntry* entry) {
+    if(!input || !input_length || !entry_is_valid(entry) || *input_length > input_capacity)
         return false;
-    size_t header_padding =
-        (TRANSACTION_BLOCK_SIZE - header_length % TRANSACTION_BLOCK_SIZE) % TRANSACTION_BLOCK_SIZE;
-    size_t data_padding =
-        (TRANSACTION_BLOCK_SIZE - data_length % TRANSACTION_BLOCK_SIZE) % TRANSACTION_BLOCK_SIZE;
-    if(header_length > SIZE_MAX - header_padding ||
-       header_length + header_padding > SIZE_MAX - data_length ||
-       header_length + header_padding + data_length > SIZE_MAX - data_padding)
+    size_t padded_header_length;
+    size_t padded_data_length;
+    if(!padded_length(entry->header_length, &padded_header_length) ||
+       !padded_length(entry->data_length, &padded_data_length) ||
+       padded_header_length > SIZE_MAX - padded_data_length)
         return false;
-    size_t entry_length = header_length + header_padding + data_length + data_padding;
+    size_t entry_length = padded_header_length + padded_data_length;
     if(entry_length > input_capacity - *input_length) return false;
 
     size_t offset = *input_length;
-    memcpy(input + offset, header, header_length);
-    offset += header_length;
-    memset(input + offset, 0, header_padding);
-    offset += header_padding;
-    if(data_length) memcpy(input + offset, data, data_length);
-    offset += data_length;
-    memset(input + offset, 0, data_padding);
+    memcpy(input + offset, entry->header, entry->header_length);
+    offset += entry->header_length;
+    memset(input + offset, 0, padded_header_length - entry->header_length);
+    offset = *input_length + padded_header_length;
+    if(entry->data_length) memcpy(input + offset, entry->data, entry->data_length);
+    offset += entry->data_length;
+    memset(input + offset, 0, padded_data_length - entry->data_length);
     *input_length += entry_length;
     return true;
 }
@@ -68,16 +81,13 @@ static bool input_has_capacity(
     size_t header_length,
     size_t data_length) {
     if(input_length > input_capacity) return false;
-    size_t header_padding =
-        (TRANSACTION_BLOCK_SIZE - header_length % TRANSACTION_BLOCK_SIZE) % TRANSACTION_BLOCK_SIZE;
-    size_t data_padding =
-        (TRANSACTION_BLOCK_SIZE - data_length % TRANSACTION_BLOCK_SIZE) % TRANSACTION_BLOCK_SIZE;
-    if(header_length > SIZE_MAX - header_padding ||
-       header_length + header_padding > SIZE_MAX - data_length ||
-       header_length + header_padding + data_length > SIZE_MAX - data_padding)
+    size_t padded_header_length;
+    size_t padded_data_length;
+    if(!padded_length(header_length, &padded_header_length) ||
+       !padded_length(data_length, &padded_data_length) ||
+       padded_header_length > SIZE_MAX - padded_data_length)
         return false;
-    return header_length + header_padding + data_length + data_padding <=
-           input_capacity - input_length;
+    return padded_header_length + padded_data_length <= input_capacity - input_length;
 }
 
 bool dfc_transaction_mac_input_can_add_data(
@@ -121,6 +131,89 @@ static void write_uint24_le(uint8_t output[3], uint32_t value) {
     output[2] = (uint8_t)(value >> 16);
 }
 
+static bool entry_data(
+    TransactionMacEntry* entry,
+    uint8_t command,
+    uint8_t file_number,
+    uint32_t offset,
+    uint32_t length,
+    const uint8_t* data,
+    size_t data_length) {
+    if(!entry || !uint24_is_valid(offset) || !uint24_is_valid(length) || (data_length && !data))
+        return false;
+    *entry = (TransactionMacEntry){
+        .header = {command, file_number},
+        .header_length = TransactionDataHeaderLength,
+        .data = data,
+        .data_length = data_length,
+    };
+    write_uint24_le(entry->header + 2, offset);
+    write_uint24_le(entry->header + 5, length);
+    return true;
+}
+
+static bool entry_record_update(
+    TransactionMacEntry* entry,
+    uint8_t command,
+    uint8_t file_number,
+    uint32_t record_number,
+    uint32_t offset,
+    uint32_t length,
+    const uint8_t* data,
+    size_t data_length) {
+    if(!entry || !uint24_is_valid(record_number) || !uint24_is_valid(offset) ||
+       !uint24_is_valid(length) || (data_length && !data))
+        return false;
+    *entry = (TransactionMacEntry){
+        .header = {command, file_number},
+        .header_length = TransactionRecordUpdateHeaderLength,
+        .data = data,
+        .data_length = data_length,
+    };
+    write_uint24_le(entry->header + 2, record_number);
+    write_uint24_le(entry->header + 5, offset);
+    write_uint24_le(entry->header + 8, length);
+    return true;
+}
+
+static bool entry_value(
+    TransactionMacEntry* entry,
+    uint8_t command,
+    uint8_t file_number,
+    const uint8_t value[4]) {
+    if(!entry || !value) return false;
+    *entry = (TransactionMacEntry){
+        .header = {command, file_number},
+        .header_length = TransactionValueHeaderLength,
+    };
+    memcpy(entry->header + 2, value, 4);
+    return true;
+}
+
+static bool entry_clear_record(TransactionMacEntry* entry, uint8_t file_number) {
+    if(!entry) return false;
+    *entry = (TransactionMacEntry){
+        .header = {DFC_CMD_CLEAR_RECORD_FILE, file_number},
+        .header_length = TransactionClearRecordHeaderLength,
+    };
+    return true;
+}
+
+static bool entry_reader_id(
+    TransactionMacEntry* entry,
+    const uint8_t current_reader_id[DFC_TRANSACTION_READER_ID_LENGTH],
+    const uint8_t encrypted_previous_reader_id[DFC_TRANSACTION_READER_ID_LENGTH]) {
+    if(!entry || !current_reader_id) return false;
+    *entry = (TransactionMacEntry){
+        .header = {DFC_CMD_COMMIT_READER_ID},
+        .header_length = TransactionReaderIdHeaderLength,
+        .data = encrypted_previous_reader_id,
+        .data_length = encrypted_previous_reader_id ? DFC_TRANSACTION_READER_ID_LENGTH : 0,
+    };
+    memcpy(entry->header + 1, current_reader_id, DFC_TRANSACTION_READER_ID_LENGTH);
+    return true;
+}
+
 bool dfc_transaction_mac_derive_session_key(
     const uint8_t key[DFC_AES_KEY_LENGTH],
     const uint8_t* uid,
@@ -162,6 +255,22 @@ bool dfc_transaction_mac_accumulator_init(
     return true;
 }
 
+static bool accumulator_push_block(
+    DfcTransactionMacAccumulator* accumulator,
+    DfcAesCmacContext* context,
+    const uint8_t block[TRANSACTION_BLOCK_SIZE],
+    uint8_t chained[TRANSACTION_BLOCK_SIZE]) {
+    if(accumulator->has_pending) {
+        for(size_t index = 0; index < TRANSACTION_BLOCK_SIZE; index++)
+            chained[index] = accumulator->chain[index] ^ accumulator->pending[index];
+        if(!dfc_crypto_aes_block_encrypt(&context->cipher, chained, accumulator->chain))
+            return false;
+    }
+    memcpy(accumulator->pending, block, TRANSACTION_BLOCK_SIZE);
+    accumulator->has_pending = true;
+    return true;
+}
+
 static bool accumulator_add_segments_and_zeroes(
     DfcTransactionMacAccumulator* accumulator,
     const DfcCryptoSegment* segments,
@@ -192,14 +301,7 @@ static bool accumulator_add_segments_and_zeroes(
             data += take;
             remaining -= take;
             if(block_length != sizeof(block)) continue;
-            if(candidate.has_pending) {
-                for(size_t index = 0; index < sizeof(chained); index++)
-                    chained[index] = candidate.chain[index] ^ candidate.pending[index];
-                if(!dfc_crypto_aes_block_encrypt(&context.cipher, chained, candidate.chain))
-                    goto clear_context;
-            }
-            memcpy(candidate.pending, block, sizeof(candidate.pending));
-            candidate.has_pending = true;
+            if(!accumulator_push_block(&candidate, &context, block, chained)) goto clear_context;
             block_length = 0;
         }
     }
@@ -209,14 +311,7 @@ static bool accumulator_add_segments_and_zeroes(
         block_length += take;
         zero_length -= take;
         if(block_length != sizeof(block)) continue;
-        if(candidate.has_pending) {
-            for(size_t index = 0; index < sizeof(chained); index++)
-                chained[index] = candidate.chain[index] ^ candidate.pending[index];
-            if(!dfc_crypto_aes_block_encrypt(&context.cipher, chained, candidate.chain))
-                goto clear_context;
-        }
-        memcpy(candidate.pending, block, sizeof(candidate.pending));
-        candidate.has_pending = true;
+        if(!accumulator_push_block(&candidate, &context, block, chained)) goto clear_context;
         block_length = 0;
     }
     if(total_length == 0 || block_length != 0 || total_length % DFC_AES_KEY_LENGTH != 0)
@@ -242,24 +337,20 @@ static bool accumulator_add_segments(
 
 static bool accumulator_add_entry(
     DfcTransactionMacAccumulator* accumulator,
-    const uint8_t* header,
-    size_t header_length,
-    const uint8_t* data,
-    size_t data_length) {
+    const TransactionMacEntry* entry) {
     uint8_t padded_header[2 * DFC_AES_KEY_LENGTH] = {0};
     static const uint8_t zero_padding[DFC_AES_KEY_LENGTH] = {0};
-    if(!header || header_length == 0 || header_length > sizeof(padded_header) ||
-       (data_length && !data))
+    size_t padded_header_length;
+    size_t padded_data_length;
+    if(!entry_is_valid(entry) || !padded_length(entry->header_length, &padded_header_length) ||
+       !padded_length(entry->data_length, &padded_data_length) ||
+       padded_header_length > sizeof(padded_header))
         return false;
-    size_t padded_header_length =
-        (header_length + DFC_AES_KEY_LENGTH - 1) / DFC_AES_KEY_LENGTH * DFC_AES_KEY_LENGTH;
-    size_t data_padding =
-        (DFC_AES_KEY_LENGTH - data_length % DFC_AES_KEY_LENGTH) % DFC_AES_KEY_LENGTH;
-    memcpy(padded_header, header, header_length);
+    memcpy(padded_header, entry->header, entry->header_length);
     const DfcCryptoSegment segments[] = {
         {.data = padded_header, .length = padded_header_length},
-        {.data = data, .length = data_length},
-        {.data = zero_padding, .length = data_padding},
+        {.data = entry->data, .length = entry->data_length},
+        {.data = zero_padding, .length = padded_data_length - entry->data_length},
     };
     bool ok =
         accumulator_add_segments(accumulator, segments, sizeof(segments) / sizeof(segments[0]));
@@ -275,11 +366,9 @@ bool dfc_transaction_mac_accumulator_add_data(
     uint32_t length,
     const uint8_t* data,
     size_t data_length) {
-    if(!uint24_is_valid(offset) || !uint24_is_valid(length)) return false;
-    uint8_t header[TransactionDataHeaderLength] = {command, file_number};
-    write_uint24_le(header + 2, offset);
-    write_uint24_le(header + 5, length);
-    return accumulator_add_entry(accumulator, header, sizeof(header), data, data_length);
+    TransactionMacEntry entry;
+    return entry_data(&entry, command, file_number, offset, length, data, data_length) &&
+           accumulator_add_entry(accumulator, &entry);
 }
 
 bool dfc_transaction_mac_accumulator_add_zero_data(
@@ -289,22 +378,15 @@ bool dfc_transaction_mac_accumulator_add_zero_data(
     uint32_t offset,
     uint32_t length,
     size_t data_length) {
-    if(!uint24_is_valid(offset) || !uint24_is_valid(length)) return false;
-    uint8_t header[TransactionDataHeaderLength] = {command, file_number};
-    write_uint24_le(header + 2, offset);
-    write_uint24_le(header + 5, length);
+    TransactionMacEntry entry;
+    if(!entry_data(&entry, command, file_number, offset, length, NULL, 0)) return false;
     uint8_t padded_header[DFC_AES_KEY_LENGTH] = {0};
-    memcpy(padded_header, header, sizeof(header));
-    if(data_length > SIZE_MAX - (DFC_AES_KEY_LENGTH - 1)) {
-        dfc_secure_wipe(header, sizeof(header));
-        dfc_secure_wipe(padded_header, sizeof(padded_header));
-        return false;
-    }
-    size_t padded_data_length =
-        (data_length + DFC_AES_KEY_LENGTH - 1) / DFC_AES_KEY_LENGTH * DFC_AES_KEY_LENGTH;
+    memcpy(padded_header, entry.header, entry.header_length);
+    size_t padded_data_length;
+    if(!padded_length(data_length, &padded_data_length)) return false;
     DfcCryptoSegment segment = {.data = padded_header, .length = sizeof(padded_header)};
     bool ok = accumulator_add_segments_and_zeroes(accumulator, &segment, 1, padded_data_length);
-    dfc_secure_wipe(header, sizeof(header));
+    dfc_secure_wipe(&entry, sizeof(entry));
     dfc_secure_wipe(padded_header, sizeof(padded_header));
     return ok;
 }
@@ -318,13 +400,10 @@ bool dfc_transaction_mac_accumulator_add_record_update(
     uint32_t length,
     const uint8_t* data,
     size_t data_length) {
-    if(!uint24_is_valid(record_number) || !uint24_is_valid(offset) || !uint24_is_valid(length))
-        return false;
-    uint8_t header[TransactionRecordUpdateHeaderLength] = {command, file_number};
-    write_uint24_le(header + 2, record_number);
-    write_uint24_le(header + 5, offset);
-    write_uint24_le(header + 8, length);
-    return accumulator_add_entry(accumulator, header, sizeof(header), data, data_length);
+    TransactionMacEntry entry;
+    return entry_record_update(
+               &entry, command, file_number, record_number, offset, length, data, data_length) &&
+           accumulator_add_entry(accumulator, &entry);
 }
 
 bool dfc_transaction_mac_accumulator_add_value(
@@ -332,33 +411,25 @@ bool dfc_transaction_mac_accumulator_add_value(
     uint8_t command,
     uint8_t file_number,
     const uint8_t value[4]) {
-    if(!value) return false;
-    uint8_t header[TransactionValueHeaderLength] = {command, file_number};
-    memcpy(header + 2, value, 4);
-    return accumulator_add_entry(accumulator, header, sizeof(header), NULL, 0);
+    TransactionMacEntry entry;
+    return entry_value(&entry, command, file_number, value) &&
+           accumulator_add_entry(accumulator, &entry);
 }
 
 bool dfc_transaction_mac_accumulator_add_reader_id(
     DfcTransactionMacAccumulator* accumulator,
     const uint8_t current_reader_id[DFC_TRANSACTION_READER_ID_LENGTH],
     const uint8_t encrypted_previous_reader_id[DFC_TRANSACTION_READER_ID_LENGTH]) {
-    if(!current_reader_id) return false;
-    uint8_t header[TransactionReaderIdHeaderLength] = {DFC_CMD_COMMIT_READER_ID};
-    memcpy(header + 1, current_reader_id, DFC_TRANSACTION_READER_ID_LENGTH);
-    return accumulator_add_entry(
-        accumulator,
-        header,
-        sizeof(header),
-        encrypted_previous_reader_id,
-        encrypted_previous_reader_id ? DFC_TRANSACTION_READER_ID_LENGTH : 0);
+    TransactionMacEntry entry;
+    return entry_reader_id(&entry, current_reader_id, encrypted_previous_reader_id) &&
+           accumulator_add_entry(accumulator, &entry);
 }
 
 bool dfc_transaction_mac_accumulator_add_clear_record(
     DfcTransactionMacAccumulator* accumulator,
     uint8_t file_number) {
-    const uint8_t header[TransactionClearRecordHeaderLength] = {
-        DFC_CMD_CLEAR_RECORD_FILE, file_number};
-    return accumulator_add_entry(accumulator, header, sizeof(header), NULL, 0);
+    TransactionMacEntry entry;
+    return entry_clear_record(&entry, file_number) && accumulator_add_entry(accumulator, &entry);
 }
 
 bool dfc_transaction_mac_accumulator_finalize(
@@ -431,7 +502,9 @@ DfcTransactionMacStatus dfc_transaction_mac_add_data(
         return DfcTransactionMacInvalid;
     switch(command) {
     case DFC_CMD_READ_DATA:
+    case DFC_CMD_READ_DATA_ISO:
     case DFC_CMD_WRITE_DATA:
+    case DFC_CMD_WRITE_DATA_ISO:
         if(data_length != length) return DfcTransactionMacInvalid;
         break;
     case DFC_CMD_READ_RECORDS:
@@ -468,12 +541,9 @@ bool dfc_transaction_mac_input_add_data(
     uint32_t length,
     const uint8_t* data,
     size_t data_length) {
-    if(!uint24_is_valid(offset) || !uint24_is_valid(length)) return false;
-    uint8_t header[8] = {command, file_number};
-    write_uint24_le(header + 2, offset);
-    write_uint24_le(header + 5, length);
-    return append_entry(
-        input, input_capacity, input_length, header, sizeof(header), data, data_length);
+    TransactionMacEntry entry;
+    return entry_data(&entry, command, file_number, offset, length, data, data_length) &&
+           append_entry(input, input_capacity, input_length, &entry);
 }
 
 DfcTransactionMacStatus dfc_transaction_mac_add_record_update(
@@ -516,14 +586,10 @@ bool dfc_transaction_mac_input_add_record_update(
     uint32_t length,
     const uint8_t* data,
     size_t data_length) {
-    if(!uint24_is_valid(record_number) || !uint24_is_valid(offset) || !uint24_is_valid(length))
-        return false;
-    uint8_t header[11] = {command, file_number};
-    write_uint24_le(header + 2, record_number);
-    write_uint24_le(header + 5, offset);
-    write_uint24_le(header + 8, length);
-    return append_entry(
-        input, input_capacity, input_length, header, sizeof(header), data, data_length);
+    TransactionMacEntry entry;
+    return entry_record_update(
+               &entry, command, file_number, record_number, offset, length, data, data_length) &&
+           append_entry(input, input_capacity, input_length, &entry);
 }
 
 bool dfc_transaction_mac_input_add_value(
@@ -533,10 +599,9 @@ bool dfc_transaction_mac_input_add_value(
     uint8_t command,
     uint8_t file_number,
     const uint8_t value[4]) {
-    uint8_t header[6] = {command, file_number};
-    if(!value) return false;
-    memcpy(header + 2, value, 4);
-    return append_entry(input, input_capacity, input_length, header, sizeof(header), NULL, 0);
+    TransactionMacEntry entry;
+    return entry_value(&entry, command, file_number, value) &&
+           append_entry(input, input_capacity, input_length, &entry);
 }
 
 DfcTransactionMacStatus dfc_transaction_mac_add_value(
@@ -575,8 +640,9 @@ bool dfc_transaction_mac_input_add_clear_record(
     size_t input_capacity,
     size_t* input_length,
     uint8_t file_number) {
-    const uint8_t header[] = {DFC_CMD_CLEAR_RECORD_FILE, file_number};
-    return append_entry(input, input_capacity, input_length, header, sizeof(header), NULL, 0);
+    TransactionMacEntry entry;
+    return entry_clear_record(&entry, file_number) &&
+           append_entry(input, input_capacity, input_length, &entry);
 }
 
 bool dfc_transaction_mac_input_add_reader_id(
@@ -585,17 +651,9 @@ bool dfc_transaction_mac_input_add_reader_id(
     size_t* input_length,
     const uint8_t current_reader_id[16],
     const uint8_t encrypted_previous_reader_id[16]) {
-    if(!current_reader_id) return false;
-    uint8_t header[1 + DFC_TRANSACTION_READER_ID_LENGTH] = {DFC_CMD_COMMIT_READER_ID};
-    memcpy(header + 1, current_reader_id, DFC_TRANSACTION_READER_ID_LENGTH);
-    return append_entry(
-        input,
-        input_capacity,
-        input_length,
-        header,
-        sizeof(header),
-        encrypted_previous_reader_id,
-        encrypted_previous_reader_id ? DFC_TRANSACTION_READER_ID_LENGTH : 0);
+    TransactionMacEntry entry;
+    return entry_reader_id(&entry, current_reader_id, encrypted_previous_reader_id) &&
+           append_entry(input, input_capacity, input_length, &entry);
 }
 
 DfcTransactionMacStatus dfc_transaction_mac_add_reader_id(

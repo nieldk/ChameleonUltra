@@ -429,7 +429,8 @@ static MunitResult test_rejections(const MunitParameter params[], void* data) {
 
     uint8_t bad_comm[DFC_DER_MAX_SIZE];
     memcpy(bad_comm, good, good_len);
-    bad_comm[file_offset + 8] = 0x02;
+    // 0x04 sets a reserved bit; a genuine EV3 refuses it (and accepts 0x02, so that is not a bad byte).
+    bad_comm[file_offset + 8] = 0x04;
     memset(&dst, 0xA5, sizeof(dst));
     munit_assert_int(dfc_der_decode(&dst, bad_comm, good_len), ==, DfcDerMalformed);
     munit_assert_memory_equal(sizeof(dst), &dst, &empty_credential);

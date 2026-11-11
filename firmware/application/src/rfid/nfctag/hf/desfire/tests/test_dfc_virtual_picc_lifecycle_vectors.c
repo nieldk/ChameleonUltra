@@ -120,8 +120,15 @@ static MunitResult test_pcsc_application_and_file_lifecycle_vectors(
         DfcVirtualPiccStatusOk);
     munit_assert_memory_equal(2, response, ((uint8_t[]){0x91, DFC_STATUS_PARAMETER_ERROR}));
 
+    // ReadData data = file_no(1) + offset(3) + length(3) = 7 bytes, matching
+    // Lc=0x07 -- the stale fixture carried an extra trailing 0x00 (Lc/data
+    // mismatch -> PARAMETER_ERROR) and used file 0x7F, which exceeds
+    // DFC_EV1_MAX_FILE_NUMBER (0x1F) and is now rejected as malformed before
+    // reaching the lookup this case means to test. File 0x1F is in range and
+    // still absent from the standard credential (which only creates file
+    // 0x0F), so it reaches the lookup and correctly reports FILE_NOT_FOUND.
     const uint8_t read_missing_file[] = {
-        0x90, 0xBD, 0x00, 0x00, 0x07, 0x7F, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00};
+        0x90, 0xBD, 0x00, 0x00, 0x07, 0x1F, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00};
     munit_assert_int(
         dfc_virtual_picc_iso_dep_exchange(
             session,

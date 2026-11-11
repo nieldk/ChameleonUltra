@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "dfc_virtual_picc_test_helpers.h"
+#include <stdlib.h>
 #include "dfc_port_host.h"
 #include "dfc_emulator_i.h"
 
@@ -24,6 +25,34 @@ static void observe_virtual_picc_free(const void* pointer, void* context) {
 static void assert_zeroed_bytes(const uint8_t* bytes, size_t length) {
     for(size_t i = 0; i < length; i++)
         munit_assert_uint8(bytes[i], ==, 0);
+}
+
+static DfcVirtualPiccStatus exchange_wrapped_data_read(
+    DfcVirtualPiccSession* session,
+    uint8_t instruction,
+    uint8_t file_number,
+    uint32_t offset,
+    uint32_t length,
+    uint8_t* response,
+    size_t response_capacity,
+    size_t* response_len) {
+    const uint8_t command[] = {
+        DFC_ISO7816_CLA_WRAPPER,
+        instruction,
+        0,
+        0,
+        7,
+        file_number,
+        (uint8_t)offset,
+        (uint8_t)(offset >> 8),
+        (uint8_t)(offset >> 16),
+        (uint8_t)length,
+        (uint8_t)(length >> 8),
+        (uint8_t)(length >> 16),
+        0,
+    };
+    return dfc_virtual_picc_iso_dep_exchange(
+        session, command, sizeof(command), response, response_capacity, response_len);
 }
 
 static void activate_iso_dep(
@@ -69,8 +98,9 @@ static void assert_iso_abort_and_no_native_continuation(DfcVirtualPiccSession* s
     munit_assert_memory_equal(
         2,
         response,
-        ((uint8_t[]){DFC_ISO7816_SW_CONDITIONS_NOT_SATISFIED_HI,
-                     DFC_ISO7816_SW_CONDITIONS_NOT_SATISFIED_LO}));
+        ((uint8_t[]){
+            DFC_ISO7816_SW_CONDITIONS_NOT_SATISFIED_HI,
+            DFC_ISO7816_SW_CONDITIONS_NOT_SATISFIED_LO}));
     munit_assert_int(
         dfc_virtual_picc_iso_dep_exchange(
             session,
@@ -132,9 +162,8 @@ static MunitResult
     DfcVirtualPiccActivation activation;
     munit_assert_int(
         dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
-    session->iso_file_selected = true;
-    session->iso_file_index = 0;
 
+    // The chain is started at card level, where GetApplicationIDs is allowed.
     uint8_t response[128];
     size_t response_len = 0;
     start_application_id_response_chain(session, response, sizeof(response), &response_len);
@@ -161,6 +190,12 @@ static MunitResult
     munit_assert_true(session->emulator->sdm_read_cache_valid == sdm_cache_valid);
     munit_assert_memory_equal(sizeof(sdm_cache), session->emulator->sdm_read_cache, sdm_cache);
 
+    // With the chain gone, read the SDM file. The current file is only honoured
+    // inside the application that holds it, so select that application first.
+    session->emulator->selected_application = DfcEmulatorSelectedApplicationApp;
+    session->emulator->selected_app_index = file->app_index;
+    session->iso_file_selected = true;
+    session->iso_file_index = 0;
     munit_assert_int(
         dfc_virtual_picc_iso_dep_exchange(
             session, read_binary, sizeof(read_binary), response, sizeof(response), &response_len),
@@ -169,6 +204,288 @@ static MunitResult
     munit_assert_size(response_len, ==, 5);
     munit_assert_memory_equal(2, response + 3, ((uint8_t[]){0x90, 0x00}));
     munit_assert_uint32(file->state.data.sdm_read_counter, ==, sdm_counter + 1);
+    dfc_virtual_picc_session_free(session);
+    return MUNIT_OK;
+}
+
+static MunitResult
+    test_sdm_read_family_and_boundary_lifecycle(const MunitParameter params[], void* user_data) {
+    (void)params;
+    (void)user_data;
+    DfcCredential credential;
+    load_standard_credential(&credential);
+    credential.card.generation = DfcGenerationEv3;
+    DfcFile* file = &credential.files[0];
+    file->access_rights = 0xEEEE;
+    munit_assert_true(dfc_file_resize(&credential, file, 100));
+    uint8_t* file_data = dfc_file_data(&credential, file);
+    for(size_t index = 0; index < file->data_len; index++)
+        file_data[index] = (uint8_t)index;
+    dfc_file_sdm_flag_set(file, DfcSdmFlagEnabled, true);
+    DfcFile* non_sdm_file = dfc_credential_create_file(&credential, file->app_index, 1);
+    munit_assert_not_null(non_sdm_file);
+    non_sdm_file->type = DFC_FILE_TYPE_STANDARD_DATA;
+    non_sdm_file->comm_settings = DFC_COMM_PLAIN;
+    non_sdm_file->access_rights = 0xEEEE;
+    munit_assert_true(dfc_file_resize(&credential, non_sdm_file, 4));
+    memset(dfc_file_data(&credential, non_sdm_file), 0xA5, non_sdm_file->data_len);
+    DfcFile* record_file = dfc_credential_create_file(&credential, file->app_index, 2);
+    munit_assert_not_null(record_file);
+    record_file->type = DFC_FILE_TYPE_LINEAR_RECORD;
+    record_file->comm_settings = DFC_COMM_PLAIN;
+    record_file->access_rights = 0xEEEE;
+    record_file->state.record.size = 2;
+    record_file->state.record.max_records = 2;
+    record_file->state.record.count = 1;
+    munit_assert_true(dfc_file_resize(&credential, record_file, 4));
+    memset(dfc_file_data(&credential, record_file), 0x5A, record_file->data_len);
+
+    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
+    munit_assert_not_null(session);
+    DfcVirtualPiccActivation activation;
+    munit_assert_int(
+        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
+    session->emulator->selected_application = DfcEmulatorSelectedApplicationApp;
+    session->emulator->selected_app_index = file->app_index;
+    session->iso_file_selected = true;
+    session->iso_file_index = 0;
+    uint8_t response[DFC_EMULATOR_CHAIN_BUFFER_SIZE];
+    size_t response_len = 0;
+
+    file->state.data.sdm_read_counter = 10;
+    dfc_emulator_retire_sdm_read_cache(session->emulator);
+    munit_assert_int(
+        exchange_wrapped_data_read(
+            session,
+            DFC_CMD_READ_DATA,
+            file->number,
+            0,
+            1,
+            response,
+            sizeof(response),
+            &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 11);
+    munit_assert_int(
+        exchange_wrapped_data_read(
+            session,
+            DFC_CMD_READ_DATA,
+            file->number,
+            1,
+            1,
+            response,
+            sizeof(response),
+            &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 11);
+
+    munit_assert_int(
+        exchange_wrapped_data_read(
+            session,
+            DFC_CMD_READ_DATA_ISO,
+            file->number,
+            2,
+            1,
+            response,
+            sizeof(response),
+            &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 12);
+    munit_assert_int(
+        exchange_wrapped_data_read(
+            session,
+            DFC_CMD_READ_DATA,
+            file->number,
+            3,
+            1,
+            response,
+            sizeof(response),
+            &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 13);
+
+    const uint8_t get_file_ids[] = {DFC_ISO7816_CLA_WRAPPER, DFC_CMD_GET_FILE_IDS, 0, 0, 0};
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, get_file_ids, sizeof(get_file_ids), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_false(session->emulator->sdm_read_cache_valid);
+    munit_assert_int(
+        exchange_wrapped_data_read(
+            session,
+            DFC_CMD_READ_DATA,
+            file->number,
+            4,
+            1,
+            response,
+            sizeof(response),
+            &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 14);
+
+    const uint8_t iso_read_0[] = {0, DFC_ISO7816_INS_READ_BINARY, 0, 0, 1};
+    const uint8_t iso_read_1[] = {0, DFC_ISO7816_INS_READ_BINARY, 0, 1, 1};
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, iso_read_0, sizeof(iso_read_0), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 15);
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, iso_read_1, sizeof(iso_read_1), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 15);
+    munit_assert_int(
+        exchange_wrapped_data_read(
+            session,
+            DFC_CMD_READ_DATA,
+            file->number,
+            5,
+            1,
+            response,
+            sizeof(response),
+            &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 16);
+
+    dfc_emulator_retire_sdm_read_cache(session->emulator);
+    file->state.data.sdm_read_counter = 20;
+    munit_assert_int(
+        exchange_wrapped_data_read(
+            session,
+            DFC_CMD_READ_DATA,
+            file->number,
+            0,
+            0,
+            response,
+            sizeof(response),
+            &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_uint8(response[response_len - 1], ==, DFC_CMD_ADDITIONAL_FRAME);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 21);
+    const uint8_t additional_frame[] = {
+        DFC_ISO7816_CLA_WRAPPER, DFC_CMD_ADDITIONAL_FRAME, 0, 0, 0};
+    while(response[response_len - 1] == DFC_CMD_ADDITIONAL_FRAME) {
+        munit_assert_int(
+            dfc_virtual_picc_iso_dep_exchange(
+                session,
+                additional_frame,
+                sizeof(additional_frame),
+                response,
+                sizeof(response),
+                &response_len),
+            ==,
+            DfcVirtualPiccStatusOk);
+        munit_assert_uint32(file->state.data.sdm_read_counter, ==, 21);
+    }
+
+    dfc_emulator_retire_sdm_read_cache(session->emulator);
+    file->state.data.sdm_read_counter = 30;
+    response_len = SIZE_MAX;
+    munit_assert_int(
+        exchange_wrapped_data_read(
+            session, DFC_CMD_READ_DATA_ISO, file->number, 0, 0, response, 1, &response_len),
+        ==,
+        DfcVirtualPiccStatusBufferTooSmall);
+    munit_assert_size(response_len, ==, 0);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 31);
+    munit_assert_int(
+        exchange_wrapped_data_read(
+            session,
+            DFC_CMD_READ_DATA_ISO,
+            file->number,
+            0,
+            0,
+            response,
+            sizeof(response),
+            &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 31);
+
+    /* A different, non-SDM ISO data file is a logical-command boundary. */
+    dfc_emulator_retire_sdm_read_cache(session->emulator);
+    file->state.data.sdm_read_counter = 40;
+    munit_assert_int(
+        exchange_wrapped_data_read(
+            session,
+            DFC_CMD_READ_DATA,
+            file->number,
+            0,
+            1,
+            response,
+            sizeof(response),
+            &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 41);
+    session->iso_file_index = (size_t)(non_sdm_file - credential.files);
+    response_len = SIZE_MAX;
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, iso_read_0, sizeof(iso_read_0), response, 2, &response_len),
+        ==,
+        DfcVirtualPiccStatusBufferTooSmall);
+    munit_assert_size(response_len, ==, 0);
+    munit_assert_true(session->emulator->sdm_read_cache_valid);
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, iso_read_0, sizeof(iso_read_0), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_false(session->emulator->sdm_read_cache_valid);
+    munit_assert_int(
+        exchange_wrapped_data_read(
+            session,
+            DFC_CMD_READ_DATA,
+            file->number,
+            0,
+            1,
+            response,
+            sizeof(response),
+            &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 42);
+
+    /* READ RECORD also retires an unrelated SDM data-file continuation. */
+    session->iso_file_index = (size_t)(record_file - credential.files);
+    const uint8_t iso_read_record[] = {0, DFC_ISO7816_INS_READ_RECORD, 1, 0x04, 2};
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session,
+            iso_read_record,
+            sizeof(iso_read_record),
+            response,
+            sizeof(response),
+            &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_false(session->emulator->sdm_read_cache_valid);
+    munit_assert_int(
+        exchange_wrapped_data_read(
+            session,
+            DFC_CMD_READ_DATA,
+            file->number,
+            0,
+            1,
+            response,
+            sizeof(response),
+            &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_uint32(file->state.data.sdm_read_counter, ==, 43);
+
     dfc_virtual_picc_session_free(session);
     return MUNIT_OK;
 }
@@ -624,72 +941,6 @@ static MunitResult test_virtual_card_select_does_not_abort_native_response_chain
 }
 #endif
 
-static MunitResult
-    test_scan_and_iso_wrapped_exchange(const MunitParameter params[], void* user_data) {
-    (void)params;
-    (void)user_data;
-
-    DfcCredential credential;
-    load_standard_credential(&credential);
-    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
-
-    DfcVirtualPiccActivation activation;
-    munit_assert_int(
-        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
-    munit_assert_size(activation.uid_len, ==, 7);
-    munit_assert_uint8(activation.uid[0], ==, 0x04);
-    munit_assert_uint8(activation.sak, ==, 0x20);
-
-    uint8_t response[128];
-    size_t response_len = 0;
-    const uint8_t select_picc_df[] = {
-        0x00, 0xA4, 0x04, 0x00, 0x07, 0xD2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_exchange(
-            session,
-            select_picc_df,
-            sizeof(select_picc_df),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_size(response_len, ==, 2);
-    munit_assert_uint8(response[0], ==, 0x90);
-    munit_assert_uint8(response[1], ==, 0x00);
-
-    const uint8_t select_app[] = {0x90, 0x5A, 0x00, 0x00, 0x03, 0x4F, 0x49, 0xD3, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_exchange(
-            session, select_app, sizeof(select_app), response, sizeof(response), &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_size(response_len, ==, 2);
-    munit_assert_uint8(response[0], ==, 0x91);
-    munit_assert_uint8(response[1], ==, 0x00);
-
-    const uint8_t get_file_settings[] = {0x90, 0xF5, 0x00, 0x00, 0x01, 0x0F, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_exchange(
-            session,
-            get_file_settings,
-            sizeof(get_file_settings),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_size(response_len, ==, 9);
-    // The fixture holds logical rights 0x1230, which go on the wire low octet first.
-    munit_assert_memory_equal(
-        7, response, ((uint8_t[]){0x00, 0x01, 0x30, 0x12, 0x03, 0x00, 0x00}));
-    munit_assert_uint8(response[7], ==, 0x91);
-    munit_assert_uint8(response[8], ==, 0x00);
-
-    dfc_virtual_picc_session_free(session);
-    return MUNIT_OK;
-}
-
 static MunitResult test_framed_unknown_iso_select_preserves_prefix_and_returns_not_found(
     const MunitParameter params[],
     void* user_data) {
@@ -733,20 +984,76 @@ static MunitResult test_framed_unknown_iso_select_preserves_prefix_and_returns_n
     return MUNIT_OK;
 }
 
-static MunitResult
-    test_iso_dep_frame_exchange_wraps_apdu(const MunitParameter params[], void* user_data) {
+// A chain-capable command longer than the scratch area borrows the emulator's
+// command-chain buffer to hold itself while it runs. If a native continuation
+// (GetVersion's "more frames") is still pending, the command is aborted, and the
+// abort used to free that very buffer under its own handler: a heap
+// use-after-free the reader controlled. Run under AddressSan, this test fails
+// loudly if the buffer is ever freed while it is lent again.
+static MunitResult test_long_command_after_pending_continuation_is_safe(
+    const MunitParameter params[],
+    void* user_data) {
     (void)params;
     (void)user_data;
+    static const uint8_t long_commands[] = {0x8D, 0x8B};
+    for(size_t i = 0; i < sizeof(long_commands); i++) {
+        DfcCredential credential;
+        load_standard_credential(&credential);
+        DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
+        DfcVirtualPiccActivation activation;
+        munit_assert_int(
+            dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
+        uint8_t response[64];
+        size_t response_len = 0;
+        const uint8_t get_version[] = {DFC_CMD_GET_VERSION};
+        munit_assert_int(
+            dfc_virtual_picc_iso_dep_exchange(
+                session,
+                get_version,
+                sizeof(get_version),
+                response,
+                sizeof(response),
+                &response_len),
+            ==,
+            DfcVirtualPiccStatusOk);
+        munit_assert_uint8(response[0], ==, DFC_CMD_ADDITIONAL_FRAME);
 
+        uint8_t long_command[200];
+        memset(long_command, 0x41, sizeof(long_command));
+        long_command[0] = long_commands[i];
+        munit_assert_int(
+            dfc_virtual_picc_iso_dep_exchange(
+                session,
+                long_command,
+                sizeof(long_command),
+                response,
+                sizeof(response),
+                &response_len),
+            ==,
+            DfcVirtualPiccStatusOk);
+        // The pending continuation is dropped and the new command is refused.
+        munit_assert_size(response_len, >=, 1);
+        munit_assert_uint8(response[0], ==, DFC_STATUS_COMMAND_ABORTED);
+        dfc_virtual_picc_session_free(session);
+    }
+    return MUNIT_OK;
+}
+
+// Frame reassembly and the direct API share one staging area. A direct call that
+// has to stage a retry (its answer did not fit) must not leave bytes of an
+// earlier, longer request behind past the new length: everything beyond the
+// staged length stays zero.
+static MunitResult
+    test_mixed_apis_leave_no_stale_request_bytes(const MunitParameter params[], void* user_data) {
+    (void)params;
+    (void)user_data;
     DfcCredential credential;
     load_standard_credential(&credential);
     DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
-
     DfcVirtualPiccActivation activation;
     munit_assert_int(
         dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
-
-    uint8_t response[128];
+    uint8_t response[64];
     size_t response_len = 0;
     const uint8_t rats[] = {0xE0, 0x80};
     munit_assert_int(
@@ -754,80 +1061,371 @@ static MunitResult
             session, rats, sizeof(rats), response, sizeof(response), &response_len),
         ==,
         DfcVirtualPiccStatusOk);
-    munit_assert_size(response_len, ==, 5);
-    munit_assert_memory_equal(5, response, ((uint8_t[]){0x05, 0x65, 0x81, 0x02, 0x80}));
 
-    const uint8_t select_picc_df[] = {
-        0x02, 0x00, 0xA4, 0x04, 0x00, 0x07, 0xD2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x00};
-    uint8_t wrong_sequence[sizeof(select_picc_df)];
-    memcpy(wrong_sequence, select_picc_df, sizeof(wrong_sequence));
-    wrong_sequence[0] ^= 1;
+    // One chained fragment of a request: 50 bytes of 0xAA staged.
+    uint8_t fragment[51];
+    fragment[0] = 0x12;
+    memset(fragment + 1, 0xAA, 50);
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_frame_exchange(
+            session, fragment, sizeof(fragment), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_size(session->pending_command_len, ==, 50);
+
+    // A direct call whose answer does not fit stages a 1-byte retry in the same area.
+    const uint8_t get_version[] = {DFC_CMD_GET_VERSION};
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, get_version, sizeof(get_version), response, 1, &response_len),
+        ==,
+        DfcVirtualPiccStatusBufferTooSmall);
+    munit_assert_size(session->pending_command_len, >, 0);
+    assert_zeroed_bytes(
+        session->pending_command + session->pending_command_len,
+        sizeof(session->pending_command) - session->pending_command_len);
+    dfc_virtual_picc_session_free(session);
+    return MUNIT_OK;
+}
+
+// A direct call is an alternative to ISO-DEP framing, so it must abandon a request
+// the framing layer was still reassembling. If it did not, the next frame
+// fragment would be glued onto the stale bytes and run as one command. Here a
+// chained fragment is staged, a direct call completes normally, and nothing of
+// the old request may remain staged afterwards.
+static MunitResult test_a_direct_call_abandons_a_request_being_reassembled(
+    const MunitParameter params[],
+    void* user_data) {
+    (void)params;
+    (void)user_data;
+    DfcCredential credential;
+    load_standard_credential(&credential);
+    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
+    DfcVirtualPiccActivation activation;
+    munit_assert_int(
+        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
+    uint8_t response[64];
+    size_t response_len = 0;
+    const uint8_t rats[] = {0xE0, 0x80};
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_frame_exchange(
+            session, rats, sizeof(rats), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+
+    uint8_t fragment[11];
+    fragment[0] = 0x12;
+    memset(fragment + 1, 0xAA, 10);
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_frame_exchange(
+            session, fragment, sizeof(fragment), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_size(session->pending_command_len, ==, 10);
+
+    const uint8_t free_memory[] = {DFC_CMD_FREE_MEM};
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, free_memory, sizeof(free_memory), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_size(session->pending_command_len, ==, 0);
+    assert_zeroed_bytes(session->pending_command, sizeof(session->pending_command));
+    dfc_virtual_picc_session_free(session);
+    return MUNIT_OK;
+}
+
+// The other half of the same rule: a response chain the framing layer is still
+// delivering is abandoned by a direct call too, so its remaining bytes (answer
+// data, possibly secret) are wiped rather than left staged.
+static MunitResult test_a_direct_call_abandons_a_response_chain_in_flight(
+    const MunitParameter params[],
+    void* user_data) {
+    (void)params;
+    (void)user_data;
+    DfcCredential credential;
+    load_standard_credential(&credential);
+    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
+    DfcVirtualPiccActivation activation;
+    munit_assert_int(
+        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
+    // Seed the transport after sending the first 50 bytes of a 60-byte response.
+    session->iso_dep_selected = true;
+    session->expected_pcd_sequence = 1;
+    session->picc_sequence = 1;
+    session->pending_response_len = 60;
+    session->pending_response_offset = 50;
+    session->last_picc_block_len = 51;
+    memset(session->last_picc_block, 0xAA, 51);
+    for(unsigned i = 0; i < 60; i++)
+        session->emulator->tx_buffer->data[i] = (uint8_t)i;
+    session->emulator->tx_buffer->size_bytes = 60;
+    uint8_t response[64];
+    size_t response_len = 0;
+
+    const uint8_t free_memory[] = {DFC_CMD_FREE_MEM};
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, free_memory, sizeof(free_memory), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_size(session->pending_response_len, ==, 0);
+    // The last block sent (a copy of answer bytes) is wiped, not left behind.
+    munit_assert_size(session->last_picc_block_len, ==, 0);
+    assert_zeroed_bytes(session->last_picc_block, sizeof(session->last_picc_block));
+    dfc_virtual_picc_session_free(session);
+    return MUNIT_OK;
+}
+
+// A direct-API retry that is waiting to be replayed is not a response chain, so
+// an R(ACK) from the frame side must not be answered with an empty I-block or
+// move the card's block number; the exact direct retry must still work.
+static MunitResult test_r_block_does_not_touch_a_pending_direct_response(
+    const MunitParameter params[],
+    void* user_data) {
+    (void)params;
+    (void)user_data;
+    DfcCredential credential;
+    load_standard_credential(&credential);
+    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
+    DfcVirtualPiccActivation activation;
+    munit_assert_int(
+        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
+    uint8_t response[64];
+    size_t response_len = 0;
+    const uint8_t rats[] = {0xE0, 0x80};
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_frame_exchange(
+            session, rats, sizeof(rats), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+
+    const uint8_t get_version[] = {DFC_CMD_GET_VERSION};
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, get_version, sizeof(get_version), response, 1, &response_len),
+        ==,
+        DfcVirtualPiccStatusBufferTooSmall);
+    const uint8_t sequence_before = session->picc_sequence;
+    for(uint8_t pcb = 0xA2; pcb <= 0xA3; pcb++) {
+        munit_assert_int(
+            dfc_virtual_picc_iso_dep_frame_exchange(
+                session, &pcb, 1, response, sizeof(response), &response_len),
+            ==,
+            DfcVirtualPiccStatusProtocolError);
+        munit_assert_uint8(session->picc_sequence, ==, sequence_before);
+    }
+    // The exact direct retry still succeeds.
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, get_version, sizeof(get_version), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    dfc_virtual_picc_session_free(session);
+    return MUNIT_OK;
+}
+
+// A long command with an alternate opcode (here 0x8B, WriteRecord) is handed to
+// its handler inside the command-chain buffer. A bad MAC makes the handler end
+// the session, which frees that buffer, and the caller used to read the command
+// code from it afterwards (a read of freed memory). The command goes in an
+// exact-size heap buffer and the whole suite runs under AddressSanitizer, so any
+// later read of freed bytes fails; the answer must be the integrity error.
+static MunitResult test_a_bad_mac_on_a_long_alternate_opcode_write_frees_nothing_in_use(
+    const MunitParameter params[],
+    void* user_data) {
+    (void)params;
+    (void)user_data;
+    static DfcCredential credential;
+    load_standard_credential(&credential);
+    credential.card.generation = DfcGenerationEv3;
+    DfcFile* file = dfc_credential_create_file(&credential, 0, 5);
+    munit_assert_not_null(file);
+    file->type = DFC_FILE_TYPE_LINEAR_RECORD;
+    file->comm_settings = DFC_COMM_MAC;
+    file->access_rights = 0x1111;
+    file->state.record.size = 200;
+    file->state.record.max_records = 3;
+    file->state.record.count = 0;
+    munit_assert_true(dfc_file_resize(&credential, file, 600));
+    static const uint8_t key1[16] = {
+        0xC6,
+        0xEF,
+        0x84,
+        0x7C,
+        0xAE,
+        0x0A,
+        0x2A,
+        0x56,
+        0xC0,
+        0x19,
+        0x2A,
+        0xA1,
+        0xC4,
+        0xE8,
+        0xD9,
+        0xFB};
+    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
+    DfcVirtualPiccActivation activation;
+    munit_assert_int(
+        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
+    uint8_t response[300];
+    size_t response_len = 0;
+    size_t session_key_len = 0;
+    uint8_t session_key[32];
+    uint8_t iv[16];
+    const uint8_t select_app[] = {0x5A, 0x4F, 0x49, 0xD3};
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, select_app, sizeof(select_app), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    authenticate_iso_key(
+        session,
+        1,
+        key1,
+        16,
+        response,
+        sizeof(response),
+        &response_len,
+        session_key,
+        &session_key_len,
+        iv,
+        0x00);
+
+    // WriteRecord of 150 bytes followed by a MAC that cannot be right.
+    const size_t body_len = 7 + 150 + 8;
+    const size_t command_len = 5 + body_len + 1;
+    uint8_t* command = malloc(command_len);
+    munit_assert_not_null(command);
+    memset(command, 0x41, command_len);
+    command[0] = 0x90;
+    command[1] = 0x8B;
+    command[2] = command[3] = 0;
+    command[4] = (uint8_t)body_len;
+    command[5] = 5;
+    command[6] = command[7] = command[8] = 0;
+    command[9] = 150;
+    command[10] = command[11] = 0;
+    command[command_len - 1] = 0;
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, command, command_len, response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    free(command);
+    munit_assert_size(response_len, ==, 2);
+    munit_assert_uint8(response[0], ==, 0x91);
+    munit_assert_uint8(response[1], ==, DFC_STATUS_INTEGRITY_ERROR);
+    dfc_virtual_picc_session_free(session);
+    return MUNIT_OK;
+}
+
+// An empty I-block that carries a card identifier is answered with an empty
+// I-block that echoes the identifier and carries the CARD's own next block
+// number. The reader numbers its frames differently from the card here on
+// purpose (first 1, then 0), so a card that took its number from the reader, or
+// echoed the wrong identifier, answers differently.
+static MunitResult test_empty_i_block_with_cid_uses_the_cards_own_number_and_echoes_the_cid(
+    const MunitParameter params[],
+    void* user_data) {
+    (void)params;
+    (void)user_data;
+    DfcCredential credential;
+    load_standard_credential(&credential);
+    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
+    DfcVirtualPiccActivation activation;
+    munit_assert_int(
+        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
+    uint8_t response[16];
+    size_t response_len = 0;
+    const uint8_t rats[] = {0xE0, 0x82}; // frame size code 8, card identifier 2
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_frame_exchange(
+            session, rats, sizeof(rats), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    const uint8_t first[] = {0x0B, 0x02}; // I-block, CID, reader number 1
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_frame_exchange(
+            session, first, sizeof(first), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_size(response_len, ==, 2);
+    munit_assert_memory_equal(2, response, ((uint8_t[]){0x0A, 0x02})); // card number 0
+    const uint8_t second[] = {0x0A, 0x02}; // reader number 0
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_frame_exchange(
+            session, second, sizeof(second), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    munit_assert_size(response_len, ==, 2);
+    munit_assert_memory_equal(2, response, ((uint8_t[]){0x0B, 0x02})); // card number 1
+    dfc_virtual_picc_session_free(session);
+    return MUNIT_OK;
+}
+
+// While a direct-API retry waits to be replayed, a frame I-block must be refused
+// too (the staging area belongs to the direct retry), and the retry still works.
+static MunitResult test_i_block_does_not_touch_a_pending_direct_response(
+    const MunitParameter params[],
+    void* user_data) {
+    (void)params;
+    (void)user_data;
+    DfcCredential credential;
+    load_standard_credential(&credential);
+    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
+    DfcVirtualPiccActivation activation;
+    munit_assert_int(
+        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
+    uint8_t response[64];
+    size_t response_len = 0;
+    const uint8_t rats[] = {0xE0, 0x80};
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_frame_exchange(
+            session, rats, sizeof(rats), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusOk);
+    const uint8_t get_version[] = {DFC_CMD_GET_VERSION};
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, get_version, sizeof(get_version), response, 1, &response_len),
+        ==,
+        DfcVirtualPiccStatusBufferTooSmall);
+    const uint8_t sequence_before = session->picc_sequence;
+    const uint8_t empty_i_block[] = {0x02};
     munit_assert_int(
         dfc_virtual_picc_iso_dep_frame_exchange(
             session,
-            wrong_sequence,
-            sizeof(wrong_sequence),
+            empty_i_block,
+            sizeof(empty_i_block),
             response,
             sizeof(response),
             &response_len),
         ==,
         DfcVirtualPiccStatusProtocolError);
-    munit_assert_size(response_len, ==, 0);
-    munit_assert_uint8(session->expected_pcd_sequence, ==, 0);
-    munit_assert_uint8(session->picc_sequence, ==, 0);
-
+    munit_assert_uint8(session->picc_sequence, ==, sequence_before);
+    // A frame carrying a command is refused as well, and must not be appended to
+    // the bytes the direct retry staged.
+    const size_t staged_before = session->pending_command_len;
+    const uint8_t command_i_block[] = {0x02, 0x90, DFC_CMD_GET_VERSION, 0x00, 0x00, 0x00};
     munit_assert_int(
         dfc_virtual_picc_iso_dep_frame_exchange(
             session,
-            select_picc_df,
-            sizeof(select_picc_df),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_size(response_len, ==, 3);
-    munit_assert_memory_equal(3, response, ((uint8_t[]){0x02, 0x90, 0x00}));
-
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session,
-            select_picc_df,
-            sizeof(select_picc_df),
+            command_i_block,
+            sizeof(command_i_block),
             response,
             sizeof(response),
             &response_len),
         ==,
         DfcVirtualPiccStatusProtocolError);
-    munit_assert_size(response_len, ==, 0);
-    munit_assert_uint8(session->expected_pcd_sequence, ==, 1);
-    munit_assert_uint8(session->picc_sequence, ==, 1);
-
-    const uint8_t r_nak[] = {0xB2};
-    memset(response, 0, sizeof(response));
+    munit_assert_size(session->pending_command_len, ==, staged_before);
+    munit_assert_uint8(session->picc_sequence, ==, sequence_before);
     munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session, r_nak, sizeof(r_nak), response, sizeof(response), &response_len),
+        dfc_virtual_picc_iso_dep_exchange(
+            session, get_version, sizeof(get_version), response, sizeof(response), &response_len),
         ==,
         DfcVirtualPiccStatusOk);
-    munit_assert_size(response_len, ==, 3);
-    munit_assert_memory_equal(3, response, ((uint8_t[]){0x02, 0x90, 0x00}));
-
-    const uint8_t wrong_number_r_nak[] = {0xB3};
-    memset(response, 0, sizeof(response));
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session,
-            wrong_number_r_nak,
-            sizeof(wrong_number_r_nak),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_size(response_len, ==, 1);
-    munit_assert_uint8(response[0], ==, 0xA2);
-
     dfc_virtual_picc_session_free(session);
     return MUNIT_OK;
 }
@@ -867,12 +1465,6 @@ static MunitResult test_iso_dep_reader_chaining(const MunitParameter params[], v
         DfcVirtualPiccStatusOk);
     munit_assert_size(response_len, ==, 1);
     munit_assert_uint8(response[0], ==, 0xA2);
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session, first, sizeof(first), response, sizeof(response), &response_len),
-        ==,
-        DfcVirtualPiccStatusProtocolError);
-    munit_assert_size(response_len, ==, 0);
     munit_assert_size(session->pending_command_len, ==, 2);
     uint8_t oversized[sizeof(session->pending_command)] = {0x13};
     munit_assert_int(
@@ -890,9 +1482,11 @@ static MunitResult test_iso_dep_reader_chaining(const MunitParameter params[], v
             ==,
             DfcVirtualPiccStatusOk);
         munit_assert_size(response_len, ==, 1);
+        // The card last sent A2. B2 repeats that number, so the card
+        // retransmits A2; B3 carries the other number, so it answers with an
+        // R(ACK) holding its current number. Both give A2.
         munit_assert_uint8(response[0], ==, 0xA2);
         munit_assert_size(session->pending_command_len, ==, 2);
-        munit_assert_uint8(session->expected_pcd_sequence, ==, 1);
     }
     munit_assert_int(
         dfc_virtual_picc_iso_dep_frame_exchange(
@@ -912,6 +1506,11 @@ static MunitResult test_iso_dep_reader_chaining(const MunitParameter params[], v
     assert_zeroed_bytes(
         session->pending_command, (sizeof(first) - 1) + (sizeof(middle) - 1) + (sizeof(last) - 1));
     for(unsigned i = 0; i < 2; i++) {
+        // A repeated RATS in an active session is ignored (measured), so each
+        // new activation starts from a fresh selection.
+        munit_assert_int(dfc_virtual_picc_field_off(session), ==, DfcVirtualPiccStatusOk);
+        munit_assert_int(
+            dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
         munit_assert_int(
             dfc_virtual_picc_iso_dep_frame_exchange(
                 session, rats, sizeof(rats), response, sizeof(response), &response_len),
@@ -963,6 +1562,9 @@ static void prepare_iso_file_session(
     *session = dfc_virtual_picc_session_alloc(credential);
     munit_assert_not_null(*session);
     activate_iso_dep(*session, cid, response, 64, response_len);
+    // The current file is only honoured inside the application that holds it.
+    (*session)->emulator->selected_application = DfcEmulatorSelectedApplicationApp;
+    (*session)->emulator->selected_app_index = (*session)->credential->files[0].app_index;
     (*session)->iso_file_selected = true;
     (*session)->iso_file_index = 0;
 }
@@ -1427,6 +2029,71 @@ static MunitResult
     return MUNIT_OK;
 }
 
+static MunitResult
+    test_iso_dep_retry_command_storage_boundaries(const MunitParameter params[], void* user_data) {
+    (void)params;
+    (void)user_data;
+    const size_t frame_lengths[] = {
+        sizeof(((DfcVirtualPiccSession*)0)->pending_command),
+        sizeof(((DfcVirtualPiccSession*)0)->pending_command) + 1,
+        255,
+        600,
+    };
+
+    for(size_t case_index = 0; case_index < sizeof(frame_lengths) / sizeof(frame_lengths[0]);
+        case_index++) {
+        const size_t frame_len = frame_lengths[case_index];
+        munit_logf(MUNIT_LOG_INFO, "retry command boundary: %zu bytes", frame_len);
+        DfcCredential credential;
+        load_standard_credential(&credential);
+        DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
+        munit_assert_not_null(session);
+        uint8_t response[8];
+        size_t response_len = 0;
+        activate_iso_dep(session, 0, response, sizeof(response), &response_len);
+
+        uint8_t frame[600] = {0};
+        frame[0] = 0x02;
+        frame[1] = DFC_ISO7816_CLA_STANDARD;
+        frame[2] = DFC_ISO7816_INS_UPDATE_BINARY;
+        for(size_t i = 3; i < frame_len; i++)
+            frame[i] = (uint8_t)i;
+
+        munit_assert_int(
+            dfc_virtual_picc_iso_dep_frame_exchange(
+                session, frame, frame_len, response, 1, &response_len),
+            ==,
+            DfcVirtualPiccStatusBufferTooSmall);
+        munit_assert_size(response_len, ==, 0);
+        munit_assert_size(session->pending_command_len, ==, frame_len);
+        const uint8_t* staged = frame_len <= sizeof(session->pending_command) ?
+                                    session->pending_command :
+                                    session->emulator->command_chain;
+        munit_assert_not_null(staged);
+        munit_assert_memory_equal(frame_len, staged, frame);
+
+        frame[frame_len - 1] ^= 0x80;
+        munit_assert_int(
+            dfc_virtual_picc_iso_dep_frame_exchange(
+                session, frame, frame_len, response, sizeof(response), &response_len),
+            ==,
+            DfcVirtualPiccStatusProtocolError);
+        frame[frame_len - 1] ^= 0x80;
+
+        munit_assert_int(
+            dfc_virtual_picc_iso_dep_frame_exchange(
+                session, frame, frame_len, response, sizeof(response), &response_len),
+            ==,
+            DfcVirtualPiccStatusOk);
+        munit_assert_size(response_len, ==, 3);
+        munit_assert_uint8(response[0], ==, 0x02);
+        munit_assert_size(session->pending_command_len, ==, 0);
+        munit_assert_null(session->emulator->command_chain);
+        dfc_virtual_picc_session_free(session);
+    }
+    return MUNIT_OK;
+}
+
 static MunitResult test_iso_file_capacity_and_request_classification(
     const MunitParameter params[],
     void* user_data) {
@@ -1438,6 +2105,9 @@ static MunitResult test_iso_file_capacity_and_request_classification(
     file->type = DFC_FILE_TYPE_LINEAR_RECORD;
     file->state.record.size = 3;
     file->state.record.count = 1;
+    // A record file's header must agree with its stored bytes (three here).
+    file->state.record.max_records = 1;
+    munit_assert_size(file->data_len, >=, 3);
     file->comm_settings = DFC_COMM_PLAIN;
     file->access_rights = 0xEEEE;
     DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
@@ -1445,18 +2115,21 @@ static MunitResult test_iso_file_capacity_and_request_classification(
     DfcVirtualPiccActivation activation;
     munit_assert_int(
         dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
+    // The current file is only honoured inside the application that holds it.
+    session->emulator->selected_application = DfcEmulatorSelectedApplicationApp;
+    session->emulator->selected_app_index = session->credential->files[0].app_index;
     session->iso_file_selected = true;
     session->iso_file_index = 0;
     uint8_t response[8];
     size_t response_len = 0;
-    const uint8_t read_record[] = {0, DFC_ISO7816_INS_READ_RECORD, 1, 0, 3};
+    const uint8_t read_record[] = {0, DFC_ISO7816_INS_READ_RECORD, 1, 0x04, 3};
     munit_assert_int(
         dfc_virtual_picc_iso_dep_exchange(
             session, read_record, sizeof(read_record), response, 4, &response_len),
         ==,
         DfcVirtualPiccStatusBufferTooSmall);
     munit_assert_size(response_len, ==, 0);
-    const uint8_t invalid_record[] = {0, DFC_ISO7816_INS_READ_RECORD, 2, 0, 3};
+    const uint8_t invalid_record[] = {0, DFC_ISO7816_INS_READ_RECORD, 2, 0x04, 3};
     munit_assert_int(
         dfc_virtual_picc_iso_dep_exchange(
             session,
@@ -1467,7 +2140,8 @@ static MunitResult test_iso_file_capacity_and_request_classification(
             &response_len),
         ==,
         DfcVirtualPiccStatusOk);
-    munit_assert_memory_equal(2, response, ((uint8_t[]){0x6A, 0x86}));
+    // Measured: a record the file does not hold is 6985.
+    munit_assert_memory_equal(2, response, ((uint8_t[]){0x69, 0x85}));
 
     file->type = DFC_FILE_TYPE_STANDARD_DATA;
     const uint8_t read_binary[] = {0, DFC_ISO7816_INS_READ_BINARY, 0, 0, 3};
@@ -1607,8 +2281,14 @@ static MunitResult
         DfcVirtualPiccStatusOk);
     munit_assert_size(response_len, ==, 11);
     munit_assert_uint8(response[0], ==, 0x03);
-    munit_assert_memory_equal(10, response + 1, session->emulator->tx_buffer->data + 50);
-    const uint8_t select[] = {0x02, 0x00, 0xA4, 0x04, 0x00, 0x07, 0xD2, 0x76, 0, 0, 0x85, 1, 0};
+    // The final block carries bytes 50..59 of the response. The transmit buffer
+    // that held them is wiped once the chain ends, so compare to the known values.
+    uint8_t expected_tail[10];
+    for(unsigned i = 0; i < sizeof(expected_tail); i++)
+        expected_tail[i] = (uint8_t)(50 + i);
+    munit_assert_memory_equal(10, response + 1, expected_tail);
+    assert_zeroed_bytes(session->emulator->tx_buffer->data, 60);
+    const uint8_t select[] = {0x03, 0x00, 0xA4, 0x04, 0x00, 0x07, 0xD2, 0x76, 0, 0, 0x85, 1, 0};
     munit_assert_int(
         dfc_virtual_picc_iso_dep_frame_exchange(
             session, select, sizeof(select), response, sizeof(response), &response_len),
@@ -1665,201 +2345,12 @@ static MunitResult
     munit_assert_size(response_len, ==, 12);
     munit_assert_uint8(response[0], ==, 0x0B);
     munit_assert_uint8(response[1], ==, 0x00);
-    munit_assert_memory_equal(10, response + 2, session->emulator->tx_buffer->data + 48);
-
-    dfc_virtual_picc_session_free(session);
-    return MUNIT_OK;
-}
-
-static MunitResult
-    test_iso_dep_rejects_unadvertised_nad(const MunitParameter params[], void* user_data) {
-    (void)params;
-    (void)user_data;
-    DfcCredential credential;
-    load_standard_credential(&credential);
-    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
-    DfcVirtualPiccActivation activation;
-    munit_assert_int(
-        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
-
-    uint8_t response[16];
-    size_t response_len = 0;
-    const uint8_t rats[] = {0xE0, 0x80};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session, rats, sizeof(rats), response, sizeof(response), &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    const uint8_t nad_frame[] = {0x06, 0x01, 0x90, 0x45, 0x00, 0x00, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session, nad_frame, sizeof(nad_frame), response, sizeof(response), &response_len),
-        ==,
-        DfcVirtualPiccStatusProtocolError);
-    munit_assert_size(response_len, ==, 0);
-    munit_assert_uint8(session->expected_pcd_sequence, ==, 0);
-
-    dfc_virtual_picc_session_free(session);
-    return MUNIT_OK;
-}
-
-static MunitResult
-    test_iso_dep_enforces_and_echoes_cid(const MunitParameter params[], void* user_data) {
-    (void)params;
-    (void)user_data;
-    DfcCredential credential;
-    load_standard_credential(&credential);
-    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
-    DfcVirtualPiccActivation activation;
-    munit_assert_int(
-        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
-
-    uint8_t response[16];
-    size_t response_len = 0;
-    const uint8_t rats[] = {0xE0, 0x83};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session, rats, sizeof(rats), response, sizeof(response), &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_uint8(session->iso_dep_cid, ==, 3);
-
-    const uint8_t missing_cid[] = {0x02, 0x90};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session, missing_cid, sizeof(missing_cid), response, sizeof(response), &response_len),
-        ==,
-        DfcVirtualPiccStatusProtocolError);
-    const uint8_t wrong_cid[] = {0x0A, 0x02, 0x90};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session, wrong_cid, sizeof(wrong_cid), response, sizeof(response), &response_len),
-        ==,
-        DfcVirtualPiccStatusProtocolError);
-    munit_assert_uint8(session->expected_pcd_sequence, ==, 0);
-
-    const uint8_t chained[] = {0x1A, 0x03, 0x90};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session, chained, sizeof(chained), response, sizeof(response), &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_size(response_len, ==, 2);
-    munit_assert_memory_equal(2, response, ((uint8_t[]){0xAA, 0x03}));
-
-    dfc_virtual_picc_session_free(session);
-    return MUNIT_OK;
-}
-
-static void assert_repeated_reader_frame_cycle(DfcVirtualPiccSession* session) {
-    // This fixture exercises ISO-DEP framing, not access-control policy.
-    session->credential->files[0].access_rights = 0xEEEE;
-
-    DfcVirtualPiccActivation activation;
-    munit_assert_int(
-        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
-
-    uint8_t response[128];
-    size_t response_len = 0;
-    const uint8_t rats[] = {0xE0, 0x80};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session, rats, sizeof(rats), response, sizeof(response), &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-
-    const uint8_t select_picc_df[] = {
-        0x02, 0x00, 0xA4, 0x04, 0x00, 0x07, 0xD2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session,
-            select_picc_df,
-            sizeof(select_picc_df),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_memory_equal(3, response, ((uint8_t[]){0x02, 0x90, 0x00}));
-
-    const uint8_t select_app[] = {0x03, 0x90, 0x5A, 0x00, 0x00, 0x03, 0x4F, 0x49, 0xD3, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session, select_app, sizeof(select_app), response, sizeof(response), &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_memory_equal(3, response, ((uint8_t[]){0x03, 0x91, 0x00}));
-
-    const uint8_t get_file_settings[] = {0x02, 0x90, 0xF5, 0x00, 0x00, 0x01, 0x0F, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session,
-            get_file_settings,
-            sizeof(get_file_settings),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_size(response_len, ==, 10);
-    munit_assert_memory_equal(2, response, ((uint8_t[]){0x02, 0x00}));
-
-    // Length 0 = entire file (3 bytes on the standard fixture).
-    const uint8_t read_file[] = {
-        0x03, 0x90, 0xBD, 0x00, 0x00, 0x07, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session, read_file, sizeof(read_file), response, sizeof(response), &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_size(response_len, >, 2);
-    munit_assert_uint8(response[0], ==, 0x03);
-    munit_assert_uint8(response[response_len - 2], ==, 0x91);
-    munit_assert_uint8(response[response_len - 1], ==, 0x00);
-
-    const uint8_t select_picc_native[] = {
-        0x02, 0x90, 0x5A, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session,
-            select_picc_native,
-            sizeof(select_picc_native),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-
-    const uint8_t deselect_with_cid[] = {0xCA, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_frame_exchange(
-            session,
-            deselect_with_cid,
-            sizeof(deselect_with_cid),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_size(response_len, ==, 2);
-    munit_assert_memory_equal(2, response, deselect_with_cid);
-
-    munit_assert_int(dfc_virtual_picc_field_off(session), ==, DfcVirtualPiccStatusOk);
-}
-
-static MunitResult test_reader_frame_cycle_repeats_after_field_off(
-    const MunitParameter params[],
-    void* user_data) {
-    (void)params;
-    (void)user_data;
-
-    DfcCredential credential;
-    load_standard_credential(&credential);
-    credential.files[0].access_rights = 0xEEEE;
-    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
-
-    assert_repeated_reader_frame_cycle(session);
-    assert_repeated_reader_frame_cycle(session);
+    // The final block carries bytes 48..57; the buffer is wiped once the chain ends.
+    uint8_t expected_tail[10];
+    for(unsigned i = 0; i < sizeof(expected_tail); i++)
+        expected_tail[i] = (uint8_t)(48 + i);
+    munit_assert_memory_equal(10, response + 2, expected_tail);
+    assert_zeroed_bytes(session->emulator->tx_buffer->data, 58);
 
     dfc_virtual_picc_session_free(session);
     return MUNIT_OK;
@@ -1926,37 +2417,11 @@ static MunitResult test_scan_reports_on_device_desfire_activation_vector(
     munit_assert_memory_equal(2, activation.protocol, ((uint8_t[]){0x02, 0x02}));
     munit_assert_size(activation.uid_len, ==, 7);
     munit_assert_uint8(activation.uid[0], ==, 0x04);
-    munit_assert_size(activation.ats_len, ==, 5);
-    munit_assert_memory_equal(5, activation.ats, ((uint8_t[]){0x05, 0x65, 0x81, 0x02, 0x80}));
-    munit_assert_uint8(activation.sak, ==, 0x20);
-    munit_assert_size(activation.atqa_len, ==, 2);
-    munit_assert_memory_equal(2, activation.atqa, ((uint8_t[]){0x44, 0x03}));
+    // The default ATS, SAK and ATQA are asserted by the picc-config-default-ats vector.
     munit_assert_size(activation.rf_detail_len, ==, 3);
     munit_assert_memory_equal(3, activation.rf_detail, ((uint8_t[]){0x01, 0x51, 0x57}));
 
     dfc_virtual_picc_session_free(session);
-    return MUNIT_OK;
-}
-
-static MunitResult
-    test_random_id_uses_single_size_atqa(const MunitParameter params[], void* user_data) {
-    (void)params;
-    (void)user_data;
-
-    DfcCredential credential;
-    load_standard_credential(&credential);
-    credential.picc_random_id = true;
-
-    DfcVirtualPiccActivation activation;
-    dfc_virtual_picc_anticollision(&credential, &activation);
-    munit_assert_size(activation.uid_len, ==, 4);
-    munit_assert_memory_equal(2, activation.atqa, ((uint8_t[]){0x04, 0x03}));
-
-    credential.picc_has_atqa = true;
-    credential.picc_atqa[0] = 0x00;
-    credential.picc_atqa[1] = 0x04;
-    dfc_virtual_picc_anticollision(&credential, &activation);
-    munit_assert_memory_equal(2, activation.atqa, credential.picc_atqa);
     return MUNIT_OK;
 }
 
@@ -1988,72 +2453,6 @@ static MunitResult test_wrapped_get_version_returns_detection_frame(
     uint8_t expected[] = {0x04, 0x01, 0x01, 0x01, 0x00, 0x16, 0x05, 0x91, 0xAF};
     munit_assert_size(response_len, ==, sizeof(expected));
     munit_assert_memory_equal(sizeof(expected), response, expected);
-
-    dfc_virtual_picc_session_free(session);
-    return MUNIT_OK;
-}
-
-static MunitResult
-    test_unknown_native_aid_returns_to_picc_level(const MunitParameter params[], void* user_data) {
-    (void)params;
-    (void)user_data;
-
-    DfcCredential credential;
-    load_standard_credential(&credential);
-    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
-
-    DfcVirtualPiccActivation activation;
-    munit_assert_int(
-        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
-
-    uint8_t response[128];
-    size_t response_len = 0;
-    const uint8_t select_app[] = {0x90, 0x5A, 0x00, 0x00, 0x03, 0x4F, 0x49, 0xD3, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_exchange(
-            session, select_app, sizeof(select_app), response, sizeof(response), &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_uint8(
-        session->emulator->selected_application, ==, DfcEmulatorSelectedApplicationApp);
-
-    const uint8_t select_missing_app[] = {0x90, 0x5A, 0x00, 0x00, 0x03, 0xEF, 0xBE, 0xAD, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_exchange(
-            session,
-            select_missing_app,
-            sizeof(select_missing_app),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_memory_equal(2, response, ((uint8_t[]){0x91, DFC_STATUS_APPLICATION_NOT_FOUND}));
-    munit_assert_uint8(
-        session->emulator->selected_application, ==, DfcEmulatorSelectedApplicationPicc);
-
-    // No application is selected, so this is refused before any file access
-    // rights are consulted and stays 0x9D.
-    const uint8_t get_file_ids[] = {0x90, 0x6F, 0x00, 0x00, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_exchange(
-            session, get_file_ids, sizeof(get_file_ids), response, sizeof(response), &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_memory_equal(2, response, ((uint8_t[]){0x91, DFC_STATUS_PERMISSION_DENIED}));
-
-    const uint8_t get_key_settings[] = {0x90, 0x45, 0x00, 0x00, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_exchange(
-            session,
-            get_key_settings,
-            sizeof(get_key_settings),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_memory_equal(4, response, ((uint8_t[]){0x0F, 0x01, 0x91, 0x00}));
 
     dfc_virtual_picc_session_free(session);
     return MUNIT_OK;
@@ -2265,38 +2664,40 @@ static MunitResult
 
     assert_trace_exchange(
         session,
-        ((uint8_t[]){0x90,
-                     DFC_CMD_READ_DATA,
-                     0x00,
-                     0x00,
-                     0x07,
-                     0x0F,
-                     0x00,
-                     0x00,
-                     0x00,
-                     0x05,
-                     0x00,
-                     0x00,
-                     0x00}),
+        ((uint8_t[]){
+            0x90,
+            DFC_CMD_READ_DATA,
+            0x00,
+            0x00,
+            0x07,
+            0x0F,
+            0x00,
+            0x00,
+            0x00,
+            0x05,
+            0x00,
+            0x00,
+            0x00}),
         13,
         ((uint8_t[]){0x30, 0x2F, 0x81, 0x02, 0x0C, 0x1E, 0xA1, 0x78, 0x17, 0x91, DFC_STATUS_OK}),
         11);
 
     assert_trace_exchange(
         session,
-        ((uint8_t[]){0x90,
-                     DFC_CMD_READ_DATA,
-                     0x00,
-                     0x00,
-                     0x07,
-                     0x0F,
-                     0x00,
-                     0x00,
-                     0x00,
-                     0x31,
-                     0x00,
-                     0x00,
-                     0x00}),
+        ((uint8_t[]){
+            0x90,
+            DFC_CMD_READ_DATA,
+            0x00,
+            0x00,
+            0x07,
+            0x0F,
+            0x00,
+            0x00,
+            0x00,
+            0x31,
+            0x00,
+            0x00,
+            0x00}),
         13,
         ((uint8_t[]){0x30, 0x2F, 0x81, 0x02, 0x0C, 0x03, 0xA5, 0x02, 0x05, 0x00, 0xA6,
                      0x08, 0x81, 0x01, 0x01, 0x04, 0x03, 0x03, 0x00, 0x09, 0xA7, 0x17,
@@ -2316,7 +2717,122 @@ static MunitResult
     return MUNIT_OK;
 }
 
+static MunitResult
+    test_direct_exchange_null_outputs(const MunitParameter params[], void* user_data) {
+    (void)params;
+    (void)user_data;
+    DfcCredential credential;
+    load_standard_credential(&credential);
+    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
+    munit_assert_not_null(session);
+    DfcVirtualPiccActivation activation;
+    munit_assert_int(
+        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
+    const uint8_t command[] = {0x00, 0xB0, 0x00, 0x00, 0x01};
+    uint8_t response[64];
+    size_t response_len = 0;
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, command, sizeof(command), response, sizeof(response), NULL),
+        ==,
+        DfcVirtualPiccStatusProtocolError);
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, command, sizeof(command), NULL, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusProtocolError);
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            NULL, command, sizeof(command), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusProtocolError);
+    munit_assert_int(
+        dfc_virtual_picc_iso_dep_exchange(
+            session, NULL, sizeof(command), response, sizeof(response), &response_len),
+        ==,
+        DfcVirtualPiccStatusProtocolError);
+    dfc_virtual_picc_session_free(session);
+    return MUNIT_OK;
+}
+
+static MunitResult
+    test_cid_frames_respect_reader_size(const MunitParameter params[], void* user_data) {
+    (void)params;
+    (void)user_data;
+    const size_t frame_sizes[] = {16, 24, 32, 40, 48, 64, 96, 128, 256};
+    for(unsigned fsdi = 0; fsdi < 9; fsdi++) {
+        // CID zero may also be explicitly present in a block header.
+        for(unsigned mode = 0; mode < 3; mode++) {
+            bool use_cid = mode != 0;
+            uint8_t cid = mode == 2 ? 1 : 0;
+            DfcCredential credential;
+            load_standard_credential(&credential);
+            DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
+            munit_assert_not_null(session);
+            DfcVirtualPiccActivation activation;
+            munit_assert_int(
+                dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
+            uint8_t response[128];
+            size_t response_len = 0;
+            const uint8_t rats[] = {0xE0, (uint8_t)((fsdi << 4) | cid)};
+            munit_assert_int(
+                dfc_virtual_picc_iso_dep_frame_exchange(
+                    session, rats, sizeof(rats), response, sizeof(response), &response_len),
+                ==,
+                DfcVirtualPiccStatusOk);
+            session->pending_response_len = 58;
+            session->pending_response_prefix[0] = use_cid ? 0x0A : 0x02;
+            session->pending_response_prefix[1] = cid;
+            session->pending_response_prefix_len = use_cid ? 2 : 1;
+            session->last_picc_block[0] = 0x03;
+            session->last_picc_block_len = 1;
+            for(size_t i = 0; i < 58; i++)
+                session->emulator->tx_buffer->data[i] = (uint8_t)i;
+            session->emulator->tx_buffer->size_bytes = 58;
+            size_t received = 0;
+            while(received < 58) {
+                const uint8_t ack[] = {
+                    (uint8_t)(0xA0 | session->picc_sequence | (use_cid ? 8 : 0)), cid};
+                munit_assert_int(
+                    dfc_virtual_picc_iso_dep_frame_exchange(
+                        session, ack, use_cid ? 2 : 1, response, sizeof(response), &response_len),
+                    ==,
+                    DfcVirtualPiccStatusOk);
+                // The public API omits the two on-air CRC bytes.
+                munit_assert_size(response_len + 2, <=, frame_sizes[fsdi]);
+                size_t header = use_cid ? 2 : 1;
+                munit_assert_size(response_len, >, header);
+                munit_assert_size(response_len - header, <=, 48);
+                if(use_cid) munit_assert_uint8(response[1], ==, cid);
+                for(size_t i = header; i < response_len; i++)
+                    munit_assert_uint8(response[i], ==, received++);
+                munit_assert_true(((response[0] & 0x10) != 0) == (received < 58));
+            }
+            dfc_virtual_picc_session_free(session);
+        }
+    }
+    return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/cid-frames-respect-reader-size",
+     test_cid_frames_respect_reader_size,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/direct-exchange-null-outputs",
+     test_direct_exchange_null_outputs,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/sdm-read-family-and-boundary-lifecycle",
+     test_sdm_read_family_and_boundary_lifecycle,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
     {"/iso-command-aborts-native-response-chain",
      test_iso_command_aborts_native_response_chain,
      NULL,
@@ -2387,6 +2903,12 @@ static MunitTest tests[] = {
      NULL,
      MUNIT_TEST_OPTION_NONE,
      NULL},
+    {"/iso-dep-retry-command-storage-boundaries",
+     test_iso_dep_retry_command_storage_boundaries,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
     {"/iso-file-capacity-and-request-classification",
      test_iso_file_capacity_and_request_classification,
      NULL,
@@ -2405,18 +2927,6 @@ static MunitTest tests[] = {
      NULL,
      MUNIT_TEST_OPTION_NONE,
      NULL},
-    {"/iso-dep-enforces-and-echoes-cid",
-     test_iso_dep_enforces_and_echoes_cid,
-     NULL,
-     NULL,
-     MUNIT_TEST_OPTION_NONE,
-     NULL},
-    {"/iso-dep-rejects-unadvertised-nad",
-     test_iso_dep_rejects_unadvertised_nad,
-     NULL,
-     NULL,
-     MUNIT_TEST_OPTION_NONE,
-     NULL},
     {"/iso-dep-cid-response-sets-chaining-bit",
      test_iso_dep_cid_response_sets_chaining_bit,
      NULL,
@@ -2429,32 +2939,62 @@ static MunitTest tests[] = {
      NULL,
      MUNIT_TEST_OPTION_NONE,
      NULL},
+    {"/long-command-after-pending-continuation-is-safe",
+     test_long_command_after_pending_continuation_is_safe,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/a-bad-mac-on-a-long-alternate-opcode-write-frees-nothing-in-use",
+     test_a_bad_mac_on_a_long_alternate_opcode_write_frees_nothing_in_use,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/empty-i-block-with-cid-uses-the-cards-own-number-and-echoes-the-cid",
+     test_empty_i_block_with_cid_uses_the_cards_own_number_and_echoes_the_cid,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/i-block-does-not-touch-a-pending-direct-response",
+     test_i_block_does_not_touch_a_pending_direct_response,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/r-block-does-not-touch-a-pending-direct-response",
+     test_r_block_does_not_touch_a_pending_direct_response,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/a-direct-call-abandons-a-response-chain-in-flight",
+     test_a_direct_call_abandons_a_response_chain_in_flight,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/a-direct-call-abandons-a-request-being-reassembled",
+     test_a_direct_call_abandons_a_request_being_reassembled,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/mixed-apis-leave-no-stale-request-bytes",
+     test_mixed_apis_leave_no_stale_request_bytes,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
     {"/iso-dep-reader-chaining",
      test_iso_dep_reader_chaining,
      NULL,
      NULL,
      MUNIT_TEST_OPTION_NONE,
      NULL},
-    {"/scan-and-iso-wrapped-exchange",
-     test_scan_and_iso_wrapped_exchange,
-     NULL,
-     NULL,
-     MUNIT_TEST_OPTION_NONE,
-     NULL},
     {"/framed-unknown-iso-select-preserves-prefix-and-returns-not-found",
      test_framed_unknown_iso_select_preserves_prefix_and_returns_not_found,
-     NULL,
-     NULL,
-     MUNIT_TEST_OPTION_NONE,
-     NULL},
-    {"/iso-dep-frame-exchange-wraps-apdu",
-     test_iso_dep_frame_exchange_wraps_apdu,
-     NULL,
-     NULL,
-     MUNIT_TEST_OPTION_NONE,
-     NULL},
-    {"/reader-frame-cycle-repeats-after-field-off",
-     test_reader_frame_cycle_repeats_after_field_off,
      NULL,
      NULL,
      MUNIT_TEST_OPTION_NONE,
@@ -2471,20 +3011,8 @@ static MunitTest tests[] = {
      NULL,
      MUNIT_TEST_OPTION_NONE,
      NULL},
-    {"/random-id-uses-single-size-atqa",
-     test_random_id_uses_single_size_atqa,
-     NULL,
-     NULL,
-     MUNIT_TEST_OPTION_NONE,
-     NULL},
     {"/wrapped-get-version-detection-frame",
      test_wrapped_get_version_returns_detection_frame,
-     NULL,
-     NULL,
-     MUNIT_TEST_OPTION_NONE,
-     NULL},
-    {"/unknown-native-aid-returns-to-picc-level",
-     test_unknown_native_aid_returns_to_picc_level,
      NULL,
      NULL,
      MUNIT_TEST_OPTION_NONE,

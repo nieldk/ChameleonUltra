@@ -328,11 +328,13 @@ void dfc_emulator_command_format_picc(
         return;
     }
 
-    if(!require_picc_authentication(emulator, tx_buffer)) return;
+    // Measured: with format disabled the card answers illegal command to every
+    // caller, authenticated or not, before it looks at authentication.
     if(emulator->credential->picc_format_disabled) {
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_ILLEGAL_COMMAND_CODE);
         return;
     }
+    if(!require_picc_authentication(emulator, tx_buffer)) return;
 
     (void)dfc_emulator_abort_transaction(emulator);
     dfc_credential_format_picc(emulator->credential);
@@ -384,7 +386,8 @@ void dfc_emulator_command_get_file_settings(
     DfcFile* file = dfc_credential_find_file_in_app(
         emulator->credential, emulator->selected_app_index, file_no);
     if(!file) {
-        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PARAMETER_ERROR);
+        dfc_bytebuf_append_byte(
+            tx_buffer, dfc_emulator_file_lookup_failure_status(file_no, false));
         return;
     }
 
@@ -401,12 +404,43 @@ void dfc_emulator_command_get_file_settings(
         // and not a debit that is still pending in the current transaction.
         dfc_emulator_command_append_int32_le(tx_buffer, file->state.value.limited_credit_value);
         dfc_bytebuf_append_byte(tx_buffer, file->state.value.limited_credit);
+    } else if(file->type == DFC_FILE_TYPE_LINEAR_RECORD || file->type == DFC_FILE_TYPE_CYCLIC_RECORD) {
+        // Record files report their record size, how many records they can hold,
+        // and how many are written now, each as three little-endian bytes
+        // (measured on a genuine EV3: 03 00 F0F0 040000 040000 010000).
+        dfc_bytebuf_append_byte(tx_buffer, file->type);
+        dfc_bytebuf_append_byte(tx_buffer, file->comm_settings);
+        uint8_t rights_wire[2];
+        dfc_emulator_command_access_rights_to_wire(file->access_rights, rights_wire);
+        dfc_bytebuf_append_bytes(tx_buffer, rights_wire, sizeof(rights_wire));
+        // The count is the COMMITTED one: a record staged in the open transaction is
+        // not counted until CommitTransaction (measured on a genuine EV3: a staged
+        // WriteRecord leaves GetFileSettings reporting zero records).
+        uint32_t record_count = file->state.record.count;
+#if DFC_ENABLE_TRANSACTIONAL_DATA_FILES
+        if(emulator->transaction_snapshot_active &&
+           emulator->transaction_snapshot_app_index == emulator->selected_app_index) {
+            record_count = dfc_emulator_transaction_snapshot_committed_record_count(
+                emulator, dfc_emulator_command_transaction_file_index(emulator, file));
+        }
+#endif
+        const uint32_t fields[3] = {
+            file->state.record.size, file->state.record.max_records, record_count};
+        for(size_t i = 0; i < 3; i++) {
+            dfc_bytebuf_append_byte(tx_buffer, (uint8_t)(fields[i] & 0xFF));
+            dfc_bytebuf_append_byte(tx_buffer, (uint8_t)((fields[i] >> 8) & 0xFF));
+            dfc_bytebuf_append_byte(tx_buffer, (uint8_t)((fields[i] >> 16) & 0xFF));
+        }
     } else {
         uint8_t settings[7];
         dfc_encode_standard_data_file_settings(
             file->type, file->comm_settings, file->access_rights, file->data_len, settings);
         dfc_bytebuf_append_bytes(tx_buffer, settings, sizeof(settings));
     }
+    // A file created with the additional-access-rights flag reports a count of them (zero)
+    // after its settings (measured on a genuine EV3, hardware_physical_ev3_2k_create_comm_bytes.vec).
+    if((file->comm_settings & DFC_FILE_OPTION_ADDITIONAL_RIGHTS) != 0)
+        dfc_bytebuf_append_byte(tx_buffer, 0x00);
 }
 
 static void apply_change_file_settings(
@@ -417,9 +451,15 @@ static void apply_change_file_settings(
     DfcByteBuf* tx_buffer) {
     size_t key_count = emulator_num_keys(emulator);
 
+    // The comm byte and the two rights bytes are always read below, so fewer than
+    // three bytes is a length error whatever else the body says.
+    if(body_len < 3) {
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
+        return;
+    }
     if(body_len != 3) {
 #if DFC_ENABLE_SDM
-        if(body_len == 0 || (body[0] & DFC_SDM_ENABLED_MASK) == 0) {
+        if((body[0] & DFC_SDM_ENABLED_MASK) == 0) {
 #endif
             dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
             return;
@@ -429,6 +469,18 @@ static void apply_change_file_settings(
     }
     uint8_t comm_settings = body[0];
     uint16_t access_rights = dfc_emulator_command_access_rights_from_wire(body[1], body[2]);
+    if(!dfc_communication_settings_is_valid(comm_settings)) {
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PARAMETER_ERROR);
+        return;
+    }
+    // A Transaction MAC file keeps the rights rule its creation enforced; changing
+    // them must not produce a state that creation (and the credential codec)
+    // would refuse.
+    if(file->type == DFC_FILE_TYPE_TRANSACTION_MAC &&
+       !dfc_transaction_mac_access_rights_are_valid(access_rights, key_count)) {
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PARAMETER_ERROR);
+        return;
+    }
 #if DFC_ENABLE_SDM
     const uint8_t* settings = NULL;
     uint8_t sdm_options = 0;
@@ -498,6 +550,15 @@ static void apply_change_file_settings(
         }
     }
 #endif
+#if DFC_ENABLE_SDM
+    // SDM exists only on standard data files; on any other kind (backup data included) the flag
+    // and the settings body are refused rather than stored.
+    const bool data_file = file->type == DFC_FILE_TYPE_STANDARD_DATA;
+    if(settings && !data_file) {
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PARAMETER_ERROR);
+        return;
+    }
+#endif
     uint32_t key_references = access_rights;
 #if DFC_ENABLE_SDM
     if(settings) {
@@ -515,7 +576,11 @@ static void apply_change_file_settings(
     file->comm_settings = comm_settings;
     file->access_rights = access_rights;
 #if DFC_ENABLE_SDM
-    memset(&file->state.data.sdm, 0, sizeof(file->state.data.sdm));
+    // Secure dynamic messaging belongs to data files only. A file's `state` is a
+    // union, so the SDM part overlaps the record count and limits of a record
+    // file and the limits and balance of a value file: clearing it for those
+    // kinds would silently destroy their contents.
+    if(data_file) memset(&file->state.data.sdm, 0, sizeof(file->state.data.sdm));
     if(settings) {
         file->state.data.sdm.options = sdm_options;
         file->state.data.sdm.access_rights = sdm_access_rights;
@@ -543,7 +608,8 @@ void dfc_emulator_command_change_file_settings(
     DfcFile* file = dfc_credential_find_file_in_app(
         emulator->credential, emulator->selected_app_index, apdu[1]);
     if(!file) {
-        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_FILE_NOT_FOUND);
+        dfc_bytebuf_append_byte(
+            tx_buffer, dfc_emulator_file_lookup_failure_status(apdu[1], false));
         return;
     }
 
@@ -813,6 +879,13 @@ void dfc_emulator_command_delete_application(
     const uint8_t* apdu,
     DfcByteBuf* tx_buffer) {
     DfcCredential* credential = emulator->credential;
+    // Measured: at PICC level an unauthenticated delete answers an
+    // authentication error whether or not the application exists.
+    if(emulator->selected_application == DfcEmulatorSelectedApplicationPicc &&
+       !dfc_emulator_command_is_authenticated_as_master(emulator)) {
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_AUTHENTICATION_ERR);
+        return;
+    }
     DfcApplication* app = dfc_credential_find_application_desfire_order(credential, apdu + 1);
     if(!app) {
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_APPLICATION_NOT_FOUND);
@@ -888,6 +961,23 @@ static void publish_created_file(DfcEmulator* emulator, DfcFile* file, DfcByteBu
     dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OK);
 }
 
+// A new file's communication mode and access rights may be stored only if the mode is one the
+// card knows and every right is free, denied or names a key the application has. Not measured
+// on a genuine card for creation; ChangeFileSettings already refuses the same thing, and a
+// credential carrying such a file is refused when it is loaded.
+static bool new_file_settings_are_valid(
+    DfcEmulator* emulator,
+    uint8_t comm_settings,
+    uint16_t access_rights,
+    bool sdm_flag_allowed) {
+    // The SDM flag may be set at creation only on a standard data file that has an ISO file
+    // id; on every other file type the card refuses it (9E). See
+    // hardware_physical_ev3_2k_create_comm_bytes.vec and the SDM captures.
+    return (sdm_flag_allowed || (comm_settings & DFC_SDM_ENABLED_MASK) == 0) &&
+           dfc_communication_settings_is_valid(comm_settings) &&
+           dfc_access_rights_are_valid(access_rights, emulator_num_keys(emulator));
+}
+
 void dfc_emulator_command_create_std_data_file(
     DfcEmulator* emulator,
     const uint8_t* apdu,
@@ -931,6 +1021,12 @@ void dfc_emulator_command_create_std_data_file(
     uint16_t access_rights = dfc_emulator_command_access_rights_from_wire(
         apdu[settings_offset + 1], apdu[settings_offset + 2]);
     uint32_t file_size = read_uint24_le(apdu + settings_offset + 3);
+    if(file_size == 0) {
+        // Measured: a data file of size zero is a parameter error, checked
+        // before the card's free memory.
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PARAMETER_ERROR);
+        return;
+    }
     if(file_size > DFC_MAX_FILE_DATA || file_size > DFC_FILE_POOL_SIZE) {
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OUT_OF_EEPROM);
         return;
@@ -941,6 +1037,25 @@ void dfc_emulator_command_create_std_data_file(
         return;
     }
 
+    // The communication mode must be one the card defines (plain, MACed or
+    // enciphered); anything else is refused rather than stored. Checked after the
+    // free-memory checks, which the card answers first.
+    // A standard data file created with the SDM flag but no ISO file id is refused with 9D
+    // (a genuine EV3, hardware_physical_ev3_2k_create_comm_bytes.vec); with an ISO file id it
+    // is accepted (the SDM captures).
+    if(file_type == DFC_FILE_TYPE_STANDARD_DATA && (comm_settings & DFC_SDM_ENABLED_MASK) != 0 &&
+       !has_iso_file_id) {
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PERMISSION_DENIED);
+        return;
+    }
+    if(!new_file_settings_are_valid(
+           emulator,
+           comm_settings,
+           access_rights,
+           file_type == DFC_FILE_TYPE_STANDARD_DATA && has_iso_file_id)) {
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PARAMETER_ERROR);
+        return;
+    }
     DfcFile* file = dfc_credential_create_file(credential, emulator->selected_app_index, file_no);
     if(!file) {
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PARAMETER_ERROR);
@@ -1011,6 +1126,18 @@ void dfc_emulator_command_create_record_file(
     }
     if(!new_file_count_is_available(emulator, tx_buffer)) return;
 
+    // The communication mode must be one the card defines (plain, MACed or
+    // enciphered); anything else is refused rather than stored. Checked after the
+    // free-memory checks, which the card answers first.
+    if(!new_file_settings_are_valid(
+           emulator,
+           apdu[settings_offset],
+           dfc_emulator_command_access_rights_from_wire(
+               apdu[settings_offset + 1], apdu[settings_offset + 2]),
+           false)) {
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PARAMETER_ERROR);
+        return;
+    }
     DfcFile* file = dfc_credential_create_file(credential, emulator->selected_app_index, file_no);
     if(!file) {
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_COUNT_ERROR);
@@ -1056,6 +1183,17 @@ void dfc_emulator_command_create_value_file(
         return;
     }
 
+    // The communication mode must be one the card defines (plain, MACed or
+    // enciphered); anything else is refused rather than stored. Checked after the
+    // free-memory checks, which the card answers first.
+    if(!new_file_settings_are_valid(
+           emulator,
+           apdu[2],
+           dfc_emulator_command_access_rights_from_wire(apdu[3], apdu[4]),
+           false)) {
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PARAMETER_ERROR);
+        return;
+    }
     DfcFile* file = dfc_credential_create_file(credential, emulator->selected_app_index, file_no);
     if(!file) {
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PARAMETER_ERROR);
@@ -1100,7 +1238,7 @@ void dfc_emulator_command_delete_file(
         return;
     }
 
-    dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_FILE_NOT_FOUND);
+    dfc_bytebuf_append_byte(tx_buffer, dfc_emulator_file_lookup_failure_status(file_no, false));
 }
 
 #if DFC_ENABLE_TRANSACTION_MAC

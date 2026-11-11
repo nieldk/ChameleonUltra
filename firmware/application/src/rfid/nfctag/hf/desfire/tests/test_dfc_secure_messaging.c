@@ -1207,8 +1207,8 @@ static MunitResult test_output_capacity_fails_before_writes_or_state_changes(
 
     for(size_t mode_index = 0; mode_index < sizeof(modes); mode_index++) {
         size_t required = dfc_secure_messaging_command_payload_length(
-            &(DfcSecureMessaging){.cipher = DFC_CMD_AUTHENTICATE_AES,
-                                  .session_key_len = DFC_AES_KEY_LENGTH},
+            &(DfcSecureMessaging){
+                .cipher = DFC_CMD_AUTHENTICATE_AES, .session_key_len = DFC_AES_KEY_LENGTH},
             false,
             modes[mode_index],
             sizeof(plain));

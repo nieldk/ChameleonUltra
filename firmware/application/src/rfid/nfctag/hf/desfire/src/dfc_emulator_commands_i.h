@@ -13,6 +13,24 @@ enum {
 };
 #endif
 
+/* Status for a file lookup that failed. Measured on a genuine EV3: a file
+ * number above 0x1F is a parameter error, an unused number is "file not found",
+ * and a file of the wrong kind for the command is permission denied. */
+static inline uint8_t dfc_emulator_file_lookup_failure_status(uint8_t file_number, bool exists) {
+    if(file_number > 0x1F) return DFC_STATUS_PARAMETER_ERROR;
+    return exists ? DFC_STATUS_PERMISSION_DENIED : DFC_STATUS_FILE_NOT_FOUND;
+}
+
+/* Whether an EV1 or EV2 secure session is open. Its commands carry a MAC or
+ * cryptogram after the parameters, so their raw length is not the plain one. */
+static inline bool dfc_emulator_command_secure_session_open(const DfcEmulator* emulator) {
+    bool open = dfc_emulator_native_authentication_active(emulator);
+#if DFC_ENABLE_EV2_SECURE_MESSAGING
+    open = open || emulator->ev2_session_active;
+#endif
+    return open;
+}
+
 /* Private seams shared by the native command-family translation units. */
 int32_t dfc_emulator_command_read_int32_le(const uint8_t* data);
 void dfc_emulator_command_append_int32_le(DfcByteBuf* tx_buffer, int32_t value);
@@ -56,10 +74,27 @@ bool dfc_emulator_command_emit_zero_payload_with_chaining_comm(
     uint8_t comm);
 bool dfc_emulator_command_file_allows_read(const DfcFile* file, const DfcEmulator* emulator);
 bool dfc_emulator_command_file_allows_write(const DfcFile* file, const DfcEmulator* emulator);
-#if DFC_ENABLE_RECORD_FILES
 bool dfc_emulator_command_file_allows_read_write(const DfcFile* file, const DfcEmulator* emulator);
-#endif
+static inline size_t dfc_emulator_record_usable_capacity(const DfcFile* file) {
+    if(!file) return 0;
+    if(file->type == DFC_FILE_TYPE_CYCLIC_RECORD)
+        return file->state.record.max_records > 1 ? (size_t)file->state.record.max_records - 1 : 0;
+    return file->state.record.max_records;
+}
+// Whether the bytes actually stored for a record file cover every record its own
+// header says it can hold. A credential that was read back only partly can
+// declare more records than it stores, and every record command indexes the
+// file's bytes by record number times record size. Without this check an
+// unauthenticated reader could read, or overwrite, whatever follows the file in
+// the credential's file pool: other files, and the keys behind them. Every
+// record read, write, update and clear refuses such a file.
+static inline bool dfc_emulator_record_storage_is_consistent(const DfcFile* file) {
+    return file && file->state.record.size > 0 &&
+           file->state.record.count <= file->state.record.max_records &&
+           (uint64_t)file->state.record.max_records * file->state.record.size <= file->data_len;
+}
 uint8_t dfc_emulator_command_file_access_refusal_status(const DfcFile* file, bool write);
+uint8_t dfc_emulator_command_file_read_write_refusal_status(const DfcFile* file);
 #if DFC_ENABLE_DELEGATED_APPLICATIONS
 uint16_t
     dfc_emulator_command_delegated_application_overhead_blocks(uint8_t num_keys, size_t key_length);

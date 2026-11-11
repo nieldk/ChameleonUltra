@@ -50,6 +50,9 @@ typedef struct {
     bool random_uid_valid;
     bool iso_dep_selected;
     uint8_t iso_dep_cid;
+    // Reader frame budget after PCB and CRC, before CID and the card's INF cap.
+    // Set by RATS; zero means the default (DFC_ISO_DEP_MAX_INF).
+    uint8_t iso_dep_max_inf;
     uint8_t expected_pcd_sequence;
     uint8_t picc_sequence;
     // Native command capacity plus wrapped APDU header and Le.

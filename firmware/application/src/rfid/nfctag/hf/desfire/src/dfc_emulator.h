@@ -105,6 +105,7 @@ typedef struct {
 #endif
 #if DFC_ENABLE_SDM
     size_t sdm_read_cache_len;
+    uint8_t sdm_read_cache_family;
 #endif
 #if DFC_ENABLE_TRANSACTION_MAC
     bool transaction_reader_id_pending;

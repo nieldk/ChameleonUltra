@@ -348,7 +348,11 @@ bool dfc_emulator_abort_pending_native_work(DfcEmulator* emulator) {
                                         || emulator->ev2_authentication_pending
 #endif
         ;
-    dfc_emulator_discard_command_chain(emulator);
+    // Free the chain buffer only when it holds a native write chain. Otherwise
+    // the ISO-DEP layer may have lent it to the very command being dispatched
+    // (or staged retry bytes in it), and freeing it here would pull the command
+    // out from under its own handler. The lender retires what it lends.
+    if(emulator->command_chain_active) dfc_emulator_discard_command_chain(emulator);
     clear_pending_authentication_state(emulator);
     if(authentication_pending) dfc_emulator_clear_active_authentication(emulator);
 #if DFC_ENABLE_DELEGATED_APPLICATIONS

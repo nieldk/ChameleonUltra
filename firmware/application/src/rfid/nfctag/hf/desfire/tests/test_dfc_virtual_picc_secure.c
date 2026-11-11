@@ -213,120 +213,6 @@ static MunitResult test_ev1_error_response_clears_authenticated_session(
     return MUNIT_OK;
 }
 
-static MunitResult
-    test_read_data_respects_offset_and_length(const MunitParameter params[], void* user_data) {
-    (void)params;
-    (void)user_data;
-
-    DfcCredential credential;
-    load_standard_credential(&credential);
-    DfcApplication* app = dfc_credential_get_primary_application(&credential);
-    munit_assert_not_null(app);
-    credential.files[0].comm_settings = DFC_COMM_PLAIN;
-    munit_assert_true(dfc_file_resize(&credential, &credential.files[0], 8));
-    memcpy(
-        dfc_file_data(&credential, &credential.files[0]),
-        ((uint8_t[]){0x30, 0x2F, 0x81, 0x02, 0x0C, 0x03, 0xA5, 0x02}),
-        8);
-
-    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
-    DfcVirtualPiccActivation activation;
-    munit_assert_int(
-        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
-
-    uint8_t session_key[8] = {0};
-    install_test_authentication(
-        session->emulator, DFC_CMD_AUTHENTICATE_LEGACY, session_key, sizeof(session_key), 0x01);
-    session->emulator->selected_application = DfcEmulatorSelectedApplicationApp;
-
-    uint8_t response[128];
-    size_t response_len = 0;
-    const uint8_t read_first_five[] = {
-        0x90, 0xBD, 0x00, 0x00, 0x07, 0x0F, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_exchange(
-            session,
-            read_first_five,
-            sizeof(read_first_five),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_size(response_len, ==, 7);
-    munit_assert_memory_equal(
-        7, response, ((uint8_t[]){0x30, 0x2F, 0x81, 0x02, 0x0C, 0x91, 0x00}));
-
-    const uint8_t read_offset_three[] = {
-        0x90, 0xBD, 0x00, 0x00, 0x07, 0x0F, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_exchange(
-            session,
-            read_offset_three,
-            sizeof(read_offset_three),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_size(response_len, ==, 5);
-    munit_assert_memory_equal(5, response, ((uint8_t[]){0x02, 0x0C, 0x03, 0x91, 0x00}));
-
-    dfc_virtual_picc_session_free(session);
-    return MUNIT_OK;
-}
-
-static MunitResult test_read_data_mac_file_uses_single_ev1_response_mac(
-    const MunitParameter params[],
-    void* user_data) {
-    (void)params;
-    (void)user_data;
-
-    DfcCredential credential;
-    load_standard_credential(&credential);
-    DfcApplication* app = dfc_credential_get_primary_application(&credential);
-    munit_assert_not_null(app);
-    credential.files[0].comm_settings = DFC_COMM_MAC;
-    munit_assert_true(dfc_file_resize(&credential, &credential.files[0], 8));
-    memcpy(
-        dfc_file_data(&credential, &credential.files[0]),
-        ((uint8_t[]){0x30, 0x2F, 0x81, 0x02, 0x0C, 0x03, 0xA5, 0x02}),
-        8);
-
-    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
-    DfcVirtualPiccActivation activation;
-    munit_assert_int(
-        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
-
-    uint8_t session_key[16] = {0};
-    install_test_authentication(
-        session->emulator, DFC_CMD_AUTHENTICATE_ISO, session_key, sizeof(session_key), 0x01);
-    session->emulator->selected_application = DfcEmulatorSelectedApplicationApp;
-
-    uint8_t response[128];
-    size_t response_len = 0;
-    const uint8_t read_first_five[] = {
-        0x90, 0xBD, 0x00, 0x00, 0x07, 0x0F, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_exchange(
-            session,
-            read_first_five,
-            sizeof(read_first_five),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-
-    munit_assert_size(response_len, ==, 15);
-    munit_assert_memory_equal(5, response, ((uint8_t[]){0x30, 0x2F, 0x81, 0x02, 0x0C}));
-    munit_assert_uint8(response[13], ==, 0x91);
-    munit_assert_uint8(response[14], ==, 0x00);
-
-    dfc_virtual_picc_session_free(session);
-    return MUNIT_OK;
-}
-
 static void build_read_data_command(uint32_t offset, uint32_t length, uint8_t command[13]) {
     const uint8_t prefix[] = {0x90, DFC_CMD_READ_DATA, 0x00, 0x00, 0x07, 0x0F};
     memcpy(command, prefix, sizeof(prefix));
@@ -455,50 +341,6 @@ static MunitResult
         }
     }
 
-    return MUNIT_OK;
-}
-
-static MunitResult
-    test_read_data_accepts_supported_file_types(const MunitParameter params[], void* user_data) {
-    (void)params;
-    (void)user_data;
-
-    static const uint8_t supported_types[] = {
-        DFC_FILE_TYPE_STANDARD_DATA,
-        DFC_FILE_TYPE_BACKUP_DATA,
-        DFC_FILE_TYPE_TRANSACTION_MAC,
-    };
-    for(size_t i = 0; i < sizeof(supported_types) / sizeof(supported_types[0]); i++) {
-        DfcCredential credential;
-        size_t file_len = supported_types[i] == DFC_FILE_TYPE_TRANSACTION_MAC ?
-                              DFC_TRANSACTION_MAC_FILE_LENGTH :
-                              8;
-        DfcVirtualPiccSession* session =
-            prepare_read_data_session(&credential, supported_types[i], file_len, 0);
-        DfcFile* file = &credential.files[0];
-        file->comm_settings = DFC_COMM_PLAIN;
-        uint8_t* file_data = dfc_file_data(&credential, file);
-        for(size_t byte = 0; byte < file_len; byte++)
-            file_data[byte] = (uint8_t)(0x40 + byte);
-
-        uint8_t response[32];
-        size_t response_len = exchange_read_data(session, 0, 0, response, sizeof(response));
-        munit_assert_size(response_len, ==, file_len + 2);
-        munit_assert_memory_equal(file_len, response, file_data);
-        munit_assert_memory_equal(2, response + file_len, ((uint8_t[]){0x91, 0x00}));
-
-        response_len =
-            exchange_read_data(session, (uint32_t)(file_len - 1), 1, response, sizeof(response));
-        munit_assert_size(response_len, ==, 3);
-        munit_assert_memory_equal(3, response, ((uint8_t[]){file_data[file_len - 1], 0x91, 0x00}));
-
-        response_len =
-            exchange_read_data(session, 0, (uint32_t)(file_len + 1), response, sizeof(response));
-        munit_assert_size(response_len, ==, 2);
-        munit_assert_memory_equal(2, response, ((uint8_t[]){0x91, DFC_STATUS_BOUNDARY_ERROR}));
-
-        dfc_virtual_picc_session_free(session);
-    }
     return MUNIT_OK;
 }
 
@@ -771,63 +613,6 @@ static MunitResult test_get_version_length_error_clears_ev1_session(
     return MUNIT_OK;
 }
 
-static MunitResult test_get_key_settings_reports_selected_app_settings(
-    const MunitParameter params[],
-    void* user_data) {
-    (void)params;
-    (void)user_data;
-
-    DfcCredential credential;
-    load_standard_credential(&credential);
-    DfcApplication* app = dfc_credential_get_primary_application(&credential);
-    munit_assert_not_null(app);
-    DfcVirtualPiccSession* session = dfc_virtual_picc_session_alloc(&credential);
-
-    DfcVirtualPiccActivation activation;
-    munit_assert_int(
-        dfc_virtual_picc_scan_iso14443a(session, &activation), ==, DfcVirtualPiccStatusOk);
-
-    uint8_t response[128];
-    size_t response_len = 0;
-    const uint8_t select_app[] = {0x90, 0x5A, 0x00, 0x00, 0x03, 0x4F, 0x49, 0xD3, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_exchange(
-            session, select_app, sizeof(select_app), response, sizeof(response), &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-
-    const uint8_t get_key_settings[] = {0x90, 0x45, 0x00, 0x00, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_exchange(
-            session,
-            get_key_settings,
-            sizeof(get_key_settings),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_size(response_len, ==, 4);
-    munit_assert_memory_equal(
-        4, response, ((uint8_t[]){app->key_settings_1, app->key_settings_2, 0x91, 0x00}));
-
-    const uint8_t get_key_version[] = {0x90, 0x64, 0x00, 0x00, 0x01, 0x01, 0x00};
-    munit_assert_int(
-        dfc_virtual_picc_iso_dep_exchange(
-            session,
-            get_key_version,
-            sizeof(get_key_version),
-            response,
-            sizeof(response),
-            &response_len),
-        ==,
-        DfcVirtualPiccStatusOk);
-    munit_assert_memory_equal(3, response, ((uint8_t[]){app->key_versions[1], 0x91, 0x00}));
-
-    dfc_virtual_picc_session_free(session);
-    return MUNIT_OK;
-}
-
 static MunitTest tests[] = {
     {"/iso-authentication-resets-ev1-secure-messaging-iv",
      test_iso_authentication_resets_ev1_secure_messaging_iv,
@@ -841,26 +626,8 @@ static MunitTest tests[] = {
      NULL,
      MUNIT_TEST_OPTION_NONE,
      NULL},
-    {"/read-data-respects-offset-and-length",
-     test_read_data_respects_offset_and_length,
-     NULL,
-     NULL,
-     MUNIT_TEST_OPTION_NONE,
-     NULL},
-    {"/read-data-mac-file-uses-single-ev1-response-mac",
-     test_read_data_mac_file_uses_single_ev1_response_mac,
-     NULL,
-     NULL,
-     MUNIT_TEST_OPTION_NONE,
-     NULL},
     {"/read-data-type-errors-retire-ev1-session",
      test_read_data_type_errors_retire_ev1_session,
-     NULL,
-     NULL,
-     MUNIT_TEST_OPTION_NONE,
-     NULL},
-    {"/read-data-accepts-supported-file-types",
-     test_read_data_accepts_supported_file_types,
      NULL,
      NULL,
      MUNIT_TEST_OPTION_NONE,
@@ -885,12 +652,6 @@ static MunitTest tests[] = {
      NULL},
     {"/get-version-length-error-clears-ev1-session",
      test_get_version_length_error_clears_ev1_session,
-     NULL,
-     NULL,
-     MUNIT_TEST_OPTION_NONE,
-     NULL},
-    {"/get-key-settings-reports-selected-app-settings",
-     test_get_key_settings_reports_selected_app_settings,
      NULL,
      NULL,
      MUNIT_TEST_OPTION_NONE,

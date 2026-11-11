@@ -28,6 +28,18 @@ uint8_t dfc_emulator_file_effective_comm_settings(
     const DfcFile* file,
     DfcFileAccess access,
     uint8_t configured_comm);
+// For a command that any one of several rights can authorise (the value commands), the
+// protection that applies. Measured on a genuine EV3
+// (hardware_physical_ev3_2k_value_comm_modes.vec): when the session key matches one of those
+// rights the file's configured mode applies; otherwise, if one of them is free, the command is
+// plain. `read`, `write` and `rw` say which of the three rights can authorise this command.
+uint8_t dfc_emulator_file_effective_comm_settings_for_rights(
+    const DfcEmulator* emulator,
+    const DfcFile* file,
+    bool read,
+    bool write,
+    bool rw,
+    uint8_t configured_comm);
 bool dfc_emulator_file_access_allowed(
     const DfcEmulator* emulator,
     const DfcFile* file,
@@ -53,7 +65,16 @@ typedef enum {
     DfcSdmRenderRandomExhausted,
     DfcSdmRenderOk,
 } DfcSdmRenderStatus;
-DfcSdmRenderStatus dfc_emulator_render_sdm_read_status(DfcEmulator* emulator, DfcFile* file);
+typedef enum {
+    DfcSdmReadFamilyNative = 1,
+    DfcSdmReadFamilyNativeIsoDep,
+    DfcSdmReadFamilyIso7816,
+} DfcSdmReadFamily;
+DfcSdmRenderStatus dfc_emulator_render_sdm_read_status(
+    DfcEmulator* emulator,
+    DfcFile* file,
+    DfcSdmReadFamily family);
+void dfc_emulator_retire_sdm_read_cache(DfcEmulator* emulator);
 #endif
 
 typedef enum {

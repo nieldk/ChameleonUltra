@@ -437,6 +437,14 @@ DfcCommandStatus
     return file_range(command, DFC_CMD_READ_DATA, file_no, offset, length, NULL, 0);
 }
 
+DfcCommandStatus dfc_command_read_data_iso_chaining(
+    DfcCommand* command,
+    uint8_t file_no,
+    uint32_t offset,
+    uint32_t length) {
+    return file_range(command, DFC_CMD_READ_DATA_ISO, file_no, offset, length, NULL, 0);
+}
+
 DfcCommandStatus dfc_command_write_data(
     DfcCommand* command,
     uint8_t file_no,
@@ -446,6 +454,17 @@ DfcCommandStatus dfc_command_write_data(
     if(data_len > DFC_COMMAND_MAX_DATA - FILE_HEADER_LENGTH) return DfcCommandTooLong;
     return file_range(
         command, DFC_CMD_WRITE_DATA, file_no, offset, (uint32_t)data_len, data, data_len);
+}
+
+DfcCommandStatus dfc_command_write_data_iso_chaining(
+    DfcCommand* command,
+    uint8_t file_no,
+    uint32_t offset,
+    const uint8_t* data,
+    size_t data_len) {
+    if(data_len > DFC_COMMAND_MAX_DATA - FILE_HEADER_LENGTH) return DfcCommandTooLong;
+    return file_range(
+        command, DFC_CMD_WRITE_DATA_ISO, file_no, offset, (uint32_t)data_len, data, data_len);
 }
 
 DfcCommandStatus dfc_command_read_records(

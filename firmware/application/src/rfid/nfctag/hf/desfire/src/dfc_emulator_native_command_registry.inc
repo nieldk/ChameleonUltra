@@ -72,14 +72,28 @@ DFC_NATIVE_COMMAND(DFC_CMD_GET_CARD_UID)
         handle_get_card_uid(emulator, tx_buffer);
         return true;
 DFC_NATIVE_COMMAND(DFC_CMD_SELECT_APPLICATION)
-        if(buffer_len < 4) return false;
+        if(buffer_len != 4) {
+            dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
+            return true;
+        }
+
         dfc_emulator_command_select_application(emulator, buffer, tx_buffer, dfc);
         return true;
 DFC_NATIVE_COMMAND(DFC_CMD_GET_KEY_SETTINGS)
+        if(buffer_len < 1 ||
+           (buffer_len != 1 && !dfc_emulator_command_secure_session_open(emulator))) {
+            dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
+            return true;
+        }
         dfc_emulator_command_get_key_settings(emulator, tx_buffer);
         return true;
 DFC_NATIVE_COMMAND(DFC_CMD_GET_KEY_VERSION)
-        if(buffer_len < 2) return false;
+        if(buffer_len < 2 ||
+           (buffer_len != 2 && !dfc_emulator_command_secure_session_open(emulator))) {
+            dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
+            return true;
+        }
+
         dfc_emulator_command_get_key_version(emulator, buffer, buffer_len, tx_buffer);
         return true;
 #if DFC_ENABLE_KEY_SETS
@@ -97,7 +111,9 @@ DFC_NATIVE_COMMAND(DFC_CMD_CHANGE_KEY_EV2)
         return true;
 #endif
 
-/* Application and file lifecycle. */
+/* Application and file lifecycle. Commands without parameters answer a length
+ * error for any extra byte before any other check (measured on GetApplicationIDs;
+ * an inconsistent length is 0x917E for native commands generally). */
 #if DFC_ENABLE_DELEGATED_APPLICATIONS
 DFC_NATIVE_COMMAND(DFC_CMD_CREATE_DELEGATED_APPLICATION)
         handle_create_delegated_application(emulator, buffer, buffer_len, tx_buffer);
@@ -107,12 +123,27 @@ DFC_NATIVE_COMMAND(DFC_CMD_GET_DELEGATED_INFO)
         return true;
 #endif
 DFC_NATIVE_COMMAND(DFC_CMD_GET_APPLICATION_IDS)
+        if(buffer_len < 1 ||
+           (buffer_len != 1 && !dfc_emulator_command_secure_session_open(emulator))) {
+            dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
+            return true;
+        }
         dfc_emulator_command_get_application_ids(emulator, tx_buffer);
         return true;
 DFC_NATIVE_COMMAND(DFC_CMD_GET_DF_NAMES)
+        if(buffer_len < 1 ||
+           (buffer_len != 1 && !dfc_emulator_command_secure_session_open(emulator))) {
+            dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
+            return true;
+        }
         dfc_emulator_command_get_df_names(emulator, tx_buffer);
         return true;
 DFC_NATIVE_COMMAND(DFC_CMD_FREE_MEM)
+        if(buffer_len < 1 ||
+           (buffer_len != 1 && !dfc_emulator_command_secure_session_open(emulator))) {
+            dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
+            return true;
+        }
         dfc_emulator_command_free_mem(emulator, tx_buffer);
         return true;
 DFC_NATIVE_COMMAND(DFC_CMD_CREATE_APPLICATION)
@@ -130,15 +161,30 @@ DFC_NATIVE_COMMAND(DFC_CMD_FORMAT_PICC)
         dfc_emulator_command_format_picc(emulator, buffer_len, tx_buffer);
         return true;
 DFC_NATIVE_COMMAND(DFC_CMD_GET_ISO_FILE_IDS)
+        if(buffer_len < 1 ||
+           (buffer_len != 1 && !dfc_emulator_command_secure_session_open(emulator))) {
+            dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
+            return true;
+        }
         if(!require_selected_application(emulator, tx_buffer)) return true;
         dfc_emulator_command_get_iso_file_ids(emulator, tx_buffer);
         return true;
 DFC_NATIVE_COMMAND(DFC_CMD_GET_FILE_IDS)
+        if(buffer_len < 1 ||
+           (buffer_len != 1 && !dfc_emulator_command_secure_session_open(emulator))) {
+            dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
+            return true;
+        }
         if(!require_selected_application(emulator, tx_buffer)) return true;
         dfc_emulator_command_get_file_ids(emulator, tx_buffer);
         return true;
 DFC_NATIVE_COMMAND(DFC_CMD_GET_FILE_SETTINGS)
-        if(buffer_len < 2) return false;
+        if(buffer_len < 2 ||
+           (buffer_len != 2 && !dfc_emulator_command_secure_session_open(emulator))) {
+            dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
+            return true;
+        }
+
         if(!require_selected_application(emulator, tx_buffer)) return true;
         dfc_emulator_command_get_file_settings(emulator, buffer, tx_buffer);
         return true;
@@ -225,8 +271,10 @@ DFC_NATIVE_COMMAND(DFC_CMD_DEBIT)
         return true;
 DFC_NATIVE_COMMAND(DFC_CMD_COMMIT_TRANSACTION)
         if(!require_selected_application(emulator, tx_buffer)) return true;
-        if(buffer_len > 2 ||
-           (buffer_len == 2 && buffer[1] != DFC_TRANSACTION_COMMIT_RETURN_MAC_OPTION)) {
+        // The option byte is optional; 00 (no transaction MAC returned) is as
+        // valid as 01 (measured: CommitTransaction with option 00 answers 0C).
+        if(buffer_len > 2 || (buffer_len == 2 && buffer[1] != 0 &&
+                              buffer[1] != DFC_TRANSACTION_COMMIT_RETURN_MAC_OPTION)) {
             dfc_emulator_command_clear_selected_app_pending_values(emulator);
             dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_LENGTH_ERROR);
             return true;
@@ -346,7 +394,12 @@ DFC_NATIVE_COMMAND(DFC_CMD_READ_DATA)
             memcpy(read_original_iv, emulator->secure_messaging->iv, sizeof(read_original_iv));
         }
         if(!prepare_ev1_command_update(
-               emulator, cmd, buffer + 1, buffer_len - 1, read_candidate_iv, &read_has_candidate)) {
+               emulator,
+               buffer[0],
+               buffer + 1,
+               buffer_len - 1,
+               read_candidate_iv,
+               &read_has_candidate)) {
             dfc_emulator_reset_session(emulator);
             dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_INTEGRITY_ERROR);
             return true;
@@ -413,7 +466,6 @@ DFC_NATIVE_COMMAND(DFC_CMD_READ_RECORDS)
         handle_read_records(emulator, buffer, tx_buffer);
         return true;
 DFC_NATIVE_COMMAND(DFC_CMD_UPDATE_RECORD)
-DFC_NATIVE_COMMAND(DFC_CMD_UPDATE_RECORD_ISO)
         if(emulator->credential->card.generation == DfcGenerationEv1) {
             dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_ILLEGAL_COMMAND_CODE);
             return true;

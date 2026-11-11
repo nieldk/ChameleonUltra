@@ -201,11 +201,9 @@ bool dfc_emulator_command_file_allows_write(const DfcFile* file, const DfcEmulat
     return dfc_emulator_file_access_allowed(emulator, file, DfcFileAccessWrite);
 }
 
-#if DFC_ENABLE_RECORD_FILES
 bool dfc_emulator_command_file_allows_read_write(const DfcFile* file, const DfcEmulator* emulator) {
     return dfc_emulator_file_access_allowed(emulator, file, DfcFileAccessReadWrite);
 }
-#endif
 
 // Status for an operation the file's access rights refuse. Genuine silicon
 // separates two reasons, so this must too, and it consults exactly the nibbles
@@ -233,6 +231,18 @@ uint8_t dfc_emulator_command_file_access_refusal_status(const DfcFile* file, boo
         return DFC_STATUS_AUTHENTICATION_ERR;
     }
     return DFC_STATUS_PERMISSION_DENIED;
+}
+
+// Refusal status for an operation that depends on the read-and-write right
+// alone (ClearRecordFile, UpdateRecord). If that right is denied to everyone the
+// answer is permission denied, whatever the separate read or write rights say;
+// if some key could satisfy it, the reader is told to authenticate. Measured on a
+// genuine EV3: key 0 authenticated, read-and-write denied, write right key 0:
+// ClearRecordFile answers permission denied.
+uint8_t dfc_emulator_command_file_read_write_refusal_status(const DfcFile* file) {
+    return access_read_write_nibble(file->access_rights) < DFC_ACCESS_FREE ?
+               DFC_STATUS_AUTHENTICATION_ERR :
+               DFC_STATUS_PERMISSION_DENIED;
 }
 
 // True when every nibble that can authorize `write` is free (0xE) — no key-gated path.
@@ -384,9 +394,9 @@ void dfc_emulator_command_emit_payload_with_chaining_comm(
     }
     if(is_secured) emulator->response_secured = true;
 
-    // The alternate ReadRecords instruction delegates continuation to ISO-DEP.
+    // Alternate read instructions delegate continuation to ISO-DEP.
     // Return its complete logical response so the transport can split I-blocks.
-    if(cmd == DFC_CMD_READ_RECORDS_ISO) {
+    if(cmd == DFC_CMD_READ_DATA_ISO || cmd == DFC_CMD_READ_RECORDS_ISO) {
         if(!iso_transport) {
             size_t used = dfc_bytebuf_get_size_bytes(tx_buffer);
             if(used < DFC_BYTEBUF_MAX && payload_len < DFC_BYTEBUF_MAX - used)
@@ -494,7 +504,7 @@ bool dfc_emulator_command_emit_zero_payload_with_chaining_comm(
         return true;
     }
     if(dfc_emulator_native_authentication_active(emulator) || comm != DFC_COMM_PLAIN ||
-       cmd == DFC_CMD_READ_RECORDS_ISO)
+       (cmd == DFC_CMD_READ_DATA_ISO || cmd == DFC_CMD_READ_RECORDS_ISO))
         return false;
 
     static const uint8_t zero_frame[DFC_EV3_MAX_RESPONSE_PAYLOAD] = {0};
@@ -963,12 +973,19 @@ static void
         emulator->credential, emulator->selected_app_index, apdu[1]);
     if(!file ||
        (file->type != DFC_FILE_TYPE_LINEAR_RECORD && file->type != DFC_FILE_TYPE_CYCLIC_RECORD)) {
-        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_FILE_NOT_FOUND);
+        dfc_bytebuf_append_byte(
+            tx_buffer, dfc_emulator_file_lookup_failure_status(apdu[1], file != NULL));
         return;
     }
     if(!dfc_emulator_command_file_allows_read(file, emulator)) {
         dfc_bytebuf_append_byte(
             tx_buffer, dfc_emulator_command_file_access_refusal_status(file, false));
+        return;
+    }
+    // Only a reader the file's rights admit learns anything about how it is stored.
+    if(!dfc_emulator_record_storage_is_consistent(file)) {
+        // The stored bytes do not cover the declared records: refuse, never index.
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OUT_OF_EEPROM);
         return;
     }
 
@@ -1162,6 +1179,9 @@ static bool begin_or_reject_command_chain(
         return true;
     }
     if(buffer_len == expected) return false;
+    // The chain buffer may still hold borrowed ISO-DEP retry bytes. Retire them
+    // (wiped and freed) rather than overwrite the pointer and leak them.
+    if(emulator->command_chain) dfc_emulator_discard_command_chain(emulator);
     emulator->command_chain = dfc_platform_alloc(expected, DfcAllocCommandChain);
     if(!emulator->command_chain) {
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OUT_OF_EEPROM);
@@ -1280,6 +1300,10 @@ static bool dispatch_native_command(
             return true;
         }
         size_t logical_len = emulator->command_chain_len;
+        // The handler can end the session on a failed integrity check, which frees
+        // the chain buffer under us. Take the command code first and re-check the
+        // pointer afterwards instead of reading the buffer again.
+        const uint8_t completed_cmd = emulator->command_chain[0];
         emulator->command_chain_active = false;
         emulator->command_chain_expected = SIZE_MAX;
         bool handled = dispatch_native_command(
@@ -1290,7 +1314,7 @@ static bool dispatch_native_command(
 #endif
         )
             dfc_emulator_command_apply_ev1_response_secure_messaging(
-                emulator, emulator->command_chain[0], tx_buffer);
+                emulator, completed_cmd, tx_buffer);
         dfc_emulator_discard_command_chain(emulator);
         return handled;
     }
@@ -1322,7 +1346,7 @@ static bool dispatch_native_command(
 #if DFC_ENABLE_SDM
     // SDM ReadData may need randomness. Keep the EV1 IV tentative until the
     // complete response exists, so an exhausted source is retryable.
-    defer_ev1_cmd_cmac = defer_ev1_cmd_cmac || cmd == DFC_CMD_READ_DATA;
+    defer_ev1_cmd_cmac = defer_ev1_cmd_cmac || dfc_file_command_base(cmd) == DFC_CMD_READ_DATA;
 #endif
     if(!defer_ev1_cmd_cmac) {
         if(!update_ev1_command_if_active(emulator, cmd, buffer + 1, buffer_len - 1)) {
@@ -1332,9 +1356,7 @@ static bool dispatch_native_command(
         }
     }
 
-#if DFC_ENABLE_RECORD_FILES
-    cmd = dfc_record_command_base(cmd);
-#endif
+    cmd = dfc_file_command_base(cmd);
     switch(cmd) {
 #define DFC_NATIVE_COMMAND(command) case command:
 #include "dfc_emulator_native_command_registry.inc"
@@ -1354,6 +1376,9 @@ bool dfc_emulator_handle_command(
     void* context) {
     bool authentication_exchange = false;
     bool preserve_auth_transaction = false;
+#if DFC_ENABLE_SDM
+    bool sdm_af_response_continuation = false;
+#endif
     if(buffer_len > 0) {
         uint8_t command = buffer[0];
         authentication_exchange = command == DFC_CMD_AUTHENTICATE_LEGACY ||
@@ -1366,6 +1391,18 @@ bool dfc_emulator_handle_command(
                                   command == DFC_CMD_AUTHENTICATE_EV2_NON_FIRST;
 #endif
         if(command == DFC_CMD_ADDITIONAL_FRAME) {
+#if DFC_ENABLE_SDM
+            sdm_af_response_continuation =
+                !emulator->command_chain_active && !emulator->awaiting_step2 &&
+#if DFC_ENABLE_EV2_SECURE_MESSAGING
+                !emulator->ev2_authentication_pending &&
+#endif
+#if DFC_ENABLE_DELEGATED_APPLICATIONS
+                !emulator->delegated_creation_pending &&
+#endif
+                (emulator->get_version_frame != 0 || emulator->df_names_pending ||
+                 emulator->pending_chain_len > emulator->pending_chain_offset);
+#endif
             authentication_exchange = emulator->awaiting_step2;
             preserve_auth_transaction = emulator->awaiting_step2 &&
                                         emulator->pending_auth_cipher ==
@@ -1401,6 +1438,11 @@ bool dfc_emulator_handle_command(
     uint16_t transaction_mac_prior_command_counter = emulator->ev2_command_counter;
 #endif
 #endif
+    // A handler can end the session on a failed integrity check, and that frees
+    // the command-chain buffer `buffer` may point into (a long command with an
+    // alternate opcode is handed over in it). Take the command code first and
+    // never read `buffer` again after the dispatch.
+    const uint8_t command_byte = buffer_len > 0 ? buffer[0] : 0;
     if(!dispatch_native_command(emulator, buffer, buffer_len, tx_buffer, context)) {
 #if DFC_ENABLE_TRANSACTION_MAC
         dfc_secure_wipe(transaction_mac_prior_iv, sizeof(transaction_mac_prior_iv));
@@ -1426,7 +1468,30 @@ bool dfc_emulator_handle_command(
     // A caller-controlled source can be replenished and retried. Its adapter
     // replaces the provisional status, so do not publish failure side effects.
     if(dfc_random_failure_is_retryable()) return true;
-    dfc_emulator_command_apply_ev1_response_secure_messaging(emulator, buffer[0], tx_buffer);
+#if DFC_ENABLE_SDM
+    if(buffer_len > 0 && dfc_bytebuf_get_size_bytes(tx_buffer) > 0) {
+        uint8_t command = command_byte;
+        uint8_t status = dfc_bytebuf_get_data(tx_buffer)[0];
+        bool accepted = status == DFC_STATUS_OK || status == DFC_CMD_ADDITIONAL_FRAME ||
+                        status == DFC_STATUS_SPECIAL_SUCCESS;
+        bool input_continuation_pending = emulator->command_chain_active ||
+                                          emulator->awaiting_step2;
+#if DFC_ENABLE_EV2_SECURE_MESSAGING
+        input_continuation_pending = input_continuation_pending ||
+                                     emulator->ev2_authentication_pending;
+#endif
+#if DFC_ENABLE_DELEGATED_APPLICATIONS
+        input_continuation_pending = input_continuation_pending ||
+                                     emulator->delegated_creation_pending;
+#endif
+        bool sdm_read = command == DFC_CMD_READ_DATA || command == DFC_CMD_READ_DATA_ISO;
+        bool response_continuation = command == DFC_CMD_ADDITIONAL_FRAME &&
+                                     sdm_af_response_continuation;
+        if(accepted && !input_continuation_pending && !sdm_read && !response_continuation)
+            dfc_emulator_retire_sdm_read_cache(emulator);
+    }
+#endif
+    dfc_emulator_command_apply_ev1_response_secure_messaging(emulator, command_byte, tx_buffer);
     finalize_native_command(
         emulator, preserve_transaction_on_failure, authentication_exchange, tx_buffer);
     return true;
@@ -1438,7 +1503,8 @@ bool dfc_emulator_handle_transport_command(
     size_t buffer_len,
     DfcByteBuf* tx_buffer) {
     // Only this transport consumer accepts a lent ISO response in pending_chain.
-    bool iso_read = buffer_len && buffer[0] == DFC_CMD_READ_RECORDS_ISO;
+    bool iso_read = buffer_len &&
+                    (buffer[0] == DFC_CMD_READ_DATA_ISO || buffer[0] == DFC_CMD_READ_RECORDS_ISO);
     if(iso_read) emulator->pending_chain_last = DFC_ISO_DEP_RESPONSE_PENDING;
     bool handled = dfc_emulator_handle_command(emulator, buffer, buffer_len, tx_buffer, NULL);
     if(iso_read && emulator->pending_chain_last == DFC_ISO_DEP_RESPONSE_PENDING)

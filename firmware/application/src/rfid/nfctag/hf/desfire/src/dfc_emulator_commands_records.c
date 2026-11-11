@@ -17,12 +17,19 @@ void dfc_emulator_command_write_record(
         emulator->credential, emulator->selected_app_index, apdu[1]);
     if(!file ||
        (file->type != DFC_FILE_TYPE_LINEAR_RECORD && file->type != DFC_FILE_TYPE_CYCLIC_RECORD)) {
-        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_FILE_NOT_FOUND);
+        dfc_bytebuf_append_byte(
+            tx_buffer, dfc_emulator_file_lookup_failure_status(apdu[1], file != NULL));
         return;
     }
     if(!dfc_emulator_command_file_allows_write(file, emulator)) {
         dfc_bytebuf_append_byte(
             tx_buffer, dfc_emulator_command_file_access_refusal_status(file, true));
+        return;
+    }
+    // Only a reader the file's rights admit learns anything about how it is stored.
+    if(!dfc_emulator_record_storage_is_consistent(file)) {
+        // The stored bytes do not cover the declared records: refuse, never index.
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OUT_OF_EEPROM);
         return;
     }
 
@@ -65,8 +72,12 @@ void dfc_emulator_command_write_record(
 #endif
     // A cyclic file keeps one record in reserve, so it holds one fewer than its
     // declared size, measured against a genuine EV1.
-    size_t cyclic_capacity =
-        file->state.record.max_records > 0 ? (size_t)file->state.record.max_records - 1 : 0;
+    size_t usable_capacity = dfc_emulator_record_usable_capacity(file);
+    if(usable_capacity == 0) {
+        dfc_secure_wipe(emulator->pending_chain, scratch_len);
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_BOUNDARY_ERROR);
+        return;
+    }
 
     uint8_t* data = dfc_file_data(emulator->credential, file);
     if(!data) {
@@ -111,27 +122,6 @@ void dfc_emulator_command_write_record(
             dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_BOUNDARY_ERROR);
             return;
         }
-        if(file->type == DFC_FILE_TYPE_CYCLIC_RECORD && cyclic_capacity == 0) {
-#if DFC_ENABLE_TRANSACTION_MAC
-            if(!dfc_emulator_command_transaction_mac_add_data(
-                   emulator, apdu[0], apdu[1], offset, write_len, record_data, clear_len)) {
-#if DFC_ENABLE_TRANSACTIONAL_DATA_FILES
-                if(!transaction_snapshot_was_active)
-                    dfc_emulator_abort_transaction_snapshot(emulator);
-#endif
-                dfc_secure_wipe(emulator->pending_chain, scratch_len);
-                dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_BOUNDARY_ERROR);
-                return;
-            }
-#endif
-            dfc_secure_wipe(emulator->pending_chain, scratch_len);
-            dfc_emulator_command_transaction_set_record_operation(
-                emulator, file, RecordTransactionWrite, 0);
-            file->transaction_pending = true;
-            dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OK);
-            return;
-        }
-
 #if DFC_ENABLE_TRANSACTION_MAC
         if(!dfc_emulator_command_transaction_mac_add_data(
                emulator, apdu[0], apdu[1], offset, write_len, record_data, clear_len)) {
@@ -146,13 +136,13 @@ void dfc_emulator_command_write_record(
 
         record_index = file->state.record.count;
         if(file->type == DFC_FILE_TYPE_CYCLIC_RECORD &&
-           file->state.record.count >= cyclic_capacity) {
-            size_t retained_len = (cyclic_capacity - 1) * (size_t)file->state.record.size;
+           file->state.record.count >= usable_capacity) {
+            size_t retained_len = (usable_capacity - 1) * (size_t)file->state.record.size;
             if(retained_len > 0) {
                 memmove(data, data + file->state.record.size, retained_len);
             }
-            record_index = cyclic_capacity - 1;
-            file->state.record.count = (uint32_t)cyclic_capacity;
+            record_index = usable_capacity - 1;
+            file->state.record.count = (uint32_t)usable_capacity;
         } else {
             file->state.record.count++;
         }
@@ -181,12 +171,19 @@ void dfc_emulator_command_update_record(
         emulator->credential, emulator->selected_app_index, apdu[1]);
     if(!file ||
        (file->type != DFC_FILE_TYPE_LINEAR_RECORD && file->type != DFC_FILE_TYPE_CYCLIC_RECORD)) {
-        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_FILE_NOT_FOUND);
+        dfc_bytebuf_append_byte(
+            tx_buffer, dfc_emulator_file_lookup_failure_status(apdu[1], file != NULL));
         return;
     }
     if(!dfc_emulator_command_file_allows_read_write(file, emulator)) {
         dfc_bytebuf_append_byte(
-            tx_buffer, dfc_emulator_command_file_access_refusal_status(file, true));
+            tx_buffer, dfc_emulator_command_file_read_write_refusal_status(file));
+        return;
+    }
+    // Only a reader the file's rights admit learns anything about how it is stored.
+    if(!dfc_emulator_record_storage_is_consistent(file)) {
+        // The stored bytes do not cover the declared records: refuse, never index.
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OUT_OF_EEPROM);
         return;
     }
     uint32_t record_number = read_uint24_le(apdu + 2);
@@ -287,12 +284,19 @@ void dfc_emulator_command_clear_record_file(
         emulator->credential, emulator->selected_app_index, apdu[1]);
     if(!file ||
        (file->type != DFC_FILE_TYPE_LINEAR_RECORD && file->type != DFC_FILE_TYPE_CYCLIC_RECORD)) {
-        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_FILE_NOT_FOUND);
+        dfc_bytebuf_append_byte(
+            tx_buffer, dfc_emulator_file_lookup_failure_status(apdu[1], file != NULL));
         return;
     }
     if(!dfc_emulator_command_file_allows_read_write(file, emulator)) {
         dfc_bytebuf_append_byte(
-            tx_buffer, dfc_emulator_command_file_access_refusal_status(file, true));
+            tx_buffer, dfc_emulator_command_file_read_write_refusal_status(file));
+        return;
+    }
+    // Only a reader the file's rights admit learns anything about how it is stored.
+    if(!dfc_emulator_record_storage_is_consistent(file)) {
+        // The stored bytes do not cover the declared records: refuse, never index.
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_OUT_OF_EEPROM);
         return;
     }
 #if DFC_ENABLE_TRANSACTION_MAC

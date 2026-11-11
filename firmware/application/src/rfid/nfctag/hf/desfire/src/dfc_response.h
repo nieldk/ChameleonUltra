@@ -91,6 +91,7 @@ typedef struct {
             int32_t lower_limit;
             int32_t upper_limit;
             int32_t limited_credit_value;
+            uint8_t limited_credit_options;
             bool limited_credit_enabled;
         } value;
         struct {

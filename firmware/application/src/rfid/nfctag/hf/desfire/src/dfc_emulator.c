@@ -291,6 +291,7 @@ bool dfc_emulator_transaction_snapshot_mirror_write(
 
 bool dfc_emulator_abort_transaction_snapshot(DfcEmulator* emulator) {
     if(!emulator->transaction_snapshot_active) return false;
+
     size_t app_index = emulator->transaction_snapshot_app_index;
     bool valid = emulator->transaction_snapshot_pool_length <=
                  emulator->transaction_snapshot_pool_capacity;
@@ -629,10 +630,7 @@ void dfc_emulator_retire_authentication(DfcEmulator* emulator) {
     dfc_secure_wipe(emulator->ev2_session_mac_key, sizeof(emulator->ev2_session_mac_key));
 #endif
 #if DFC_ENABLE_SDM
-    emulator->sdm_read_cache_valid = false;
-    emulator->sdm_read_cache_file_number = 0;
-    emulator->sdm_read_cache_len = 0;
-    dfc_secure_wipe(emulator->sdm_read_cache, sizeof(emulator->sdm_read_cache));
+    dfc_emulator_retire_sdm_read_cache(emulator);
 #endif
 }
 

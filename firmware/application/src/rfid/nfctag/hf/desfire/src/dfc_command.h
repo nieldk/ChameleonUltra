@@ -201,7 +201,18 @@ DfcCommandStatus dfc_command_change_file_settings(
 
 DfcCommandStatus
     dfc_command_read_data(DfcCommand* command, uint8_t file_no, uint32_t offset, uint32_t length);
+DfcCommandStatus dfc_command_read_data_iso_chaining(
+    DfcCommand* command,
+    uint8_t file_no,
+    uint32_t offset,
+    uint32_t length);
 DfcCommandStatus dfc_command_write_data(
+    DfcCommand* command,
+    uint8_t file_no,
+    uint32_t offset,
+    const uint8_t* data,
+    size_t data_len);
+DfcCommandStatus dfc_command_write_data_iso_chaining(
     DfcCommand* command,
     uint8_t file_no,
     uint32_t offset,

@@ -70,7 +70,7 @@ DfcDerStatus dfc_profile_check(
             reason_cap,
             "user ATS length octet %02X for %zu octets",
             credential->picc_ats[0],
-            credential->picc_ats_len);
+            (size_t)credential->picc_ats_len);
         return DfcDerUnsupported;
     }
 
@@ -91,18 +91,26 @@ DfcDerStatus dfc_profile_check(
     }
 
     if(credential->num_apps > max_apps) {
-        say(reason, reason_cap, "applications %zu over limit %zu", credential->num_apps, max_apps);
+        say(reason,
+            reason_cap,
+            "applications %zu over limit %zu",
+            (size_t)credential->num_apps,
+            max_apps);
         return DfcDerCapacity;
     }
     if(credential->num_files > max_files) {
-        say(reason, reason_cap, "files %zu over limit %zu", credential->num_files, max_files);
+        say(reason,
+            reason_cap,
+            "files %zu over limit %zu",
+            (size_t)credential->num_files,
+            max_files);
         return DfcDerCapacity;
     }
     if(credential->picc_num_keys > max_keys) {
         say(reason,
             reason_cap,
             "PICC keys %zu over limit %zu",
-            credential->picc_num_keys,
+            (size_t)credential->picc_num_keys,
             max_keys);
         return DfcDerCapacity;
     }
@@ -112,7 +120,7 @@ DfcDerStatus dfc_profile_check(
                 reason_cap,
                 "application %zu keys %zu over limit %zu",
                 i,
-                credential->apps[i].num_keys,
+                (size_t)credential->apps[i].num_keys,
                 max_keys);
             return DfcDerCapacity;
         }

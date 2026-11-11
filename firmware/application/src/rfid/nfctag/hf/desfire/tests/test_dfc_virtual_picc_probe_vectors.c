@@ -108,7 +108,10 @@ static MunitResult test_trace_reader_sequence_handles_get_key_settings_and_mfp_p
             &response_len),
         ==,
         DfcVirtualPiccStatusOk);
-    munit_assert_memory_equal(4, response, ((uint8_t[]){0x0A, 0x00, 0x6A, 0x82}));
+    // Lc (0x10) declares 16 data bytes but only 14 follow: wrong-length (6A87),
+    // not not-found (6A82) -- the hardened virtual PICC now checks Lc/data
+    // consistency before attempting the DF lookup.
+    munit_assert_memory_equal(4, response, ((uint8_t[]){0x0A, 0x00, 0x6A, 0x87}));
 
     const uint8_t select_second_unknown_df[] = {
         0x0B,

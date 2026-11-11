@@ -144,9 +144,35 @@ static MunitResult test_file_settings_variants(const MunitParameter params[], vo
     munit_assert_int32(settings.settings.value.lower_limit, ==, -100);
     munit_assert_int32(settings.settings.value.upper_limit, ==, 100);
     munit_assert_int32(settings.settings.value.limited_credit_value, ==, 11);
+    munit_assert_uint8(settings.settings.value.limited_credit_options, ==, 1);
     munit_assert_true(settings.settings.value.limited_credit_enabled);
     assert_access(&settings.access.read, DfcResponseAccessFree, 0);
     assert_access(&settings.access.change, DfcResponseAccessFree, 0);
+
+    uint8_t limited_credit_options[sizeof(value)];
+    memcpy(limited_credit_options, value, sizeof(value));
+    limited_credit_options[16] = 0x02;
+    munit_assert_int(
+        dfc_response_decode_file_settings(
+            limited_credit_options, sizeof(limited_credit_options), &settings),
+        ==,
+        DfcResponseDecodeOk);
+    munit_assert_uint8(settings.settings.value.limited_credit_options, ==, 0x02);
+    munit_assert_false(settings.settings.value.limited_credit_enabled);
+    limited_credit_options[16] = 0x03;
+    munit_assert_int(
+        dfc_response_decode_file_settings(
+            limited_credit_options, sizeof(limited_credit_options), &settings),
+        ==,
+        DfcResponseDecodeOk);
+    munit_assert_uint8(settings.settings.value.limited_credit_options, ==, 0x03);
+    munit_assert_true(settings.settings.value.limited_credit_enabled);
+    limited_credit_options[16] = 0x04;
+    munit_assert_int(
+        dfc_response_decode_file_settings(
+            limited_credit_options, sizeof(limited_credit_options), &settings),
+        ==,
+        DfcResponseDecodeUnsupported);
 
     const uint8_t records[] = {
         0x03,

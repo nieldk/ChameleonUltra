@@ -65,20 +65,34 @@
 #define DFC_CMD_COMMIT_TRANSACTION           0xC7
 #define DFC_CMD_ABORT_TRANSACTION            0xA7
 #define DFC_CMD_READ_DATA                    0xBD
+#define DFC_CMD_READ_DATA_ISO                0xAD
 #define DFC_CMD_WRITE_DATA                   0x3D
+#define DFC_CMD_WRITE_DATA_ISO               0x8D
 #define DFC_CMD_WRITE_RECORD                 0x3B
 #define DFC_CMD_WRITE_RECORD_ISO             0x8B
 #define DFC_CMD_READ_RECORDS                 0xBB
 #define DFC_CMD_READ_RECORDS_ISO             0xAB
+#define DFC_CMD_UPDATE_RECORD                0xDB
+#define DFC_CMD_UPDATE_RECORD_ISO            0xBA
 
-// Classify record variants without changing bytes authenticated on the wire.
-static inline uint8_t dfc_record_command_base(uint8_t command) {
+// Classify ISO-DEP chaining variants without changing authenticated wire bytes.
+static inline uint8_t dfc_file_command_base(uint8_t command) {
+    if(command == DFC_CMD_READ_DATA_ISO) return DFC_CMD_READ_DATA;
+    if(command == DFC_CMD_WRITE_DATA_ISO) return DFC_CMD_WRITE_DATA;
     if(command == DFC_CMD_READ_RECORDS_ISO) return DFC_CMD_READ_RECORDS;
     if(command == DFC_CMD_WRITE_RECORD_ISO) return DFC_CMD_WRITE_RECORD;
+    if(command == DFC_CMD_UPDATE_RECORD_ISO) return DFC_CMD_UPDATE_RECORD;
     return command;
 }
-#define DFC_CMD_UPDATE_RECORD           0xDB
-#define DFC_CMD_UPDATE_RECORD_ISO       0xBA
+
+static inline bool dfc_command_uses_iso_dep_request_chaining(uint8_t command) {
+    return command == DFC_CMD_WRITE_DATA_ISO || command == DFC_CMD_WRITE_RECORD_ISO ||
+           command == DFC_CMD_UPDATE_RECORD_ISO;
+}
+
+static inline bool dfc_command_uses_iso_dep_response_chaining(uint8_t command) {
+    return command == DFC_CMD_READ_DATA_ISO || command == DFC_CMD_READ_RECORDS_ISO;
+}
 #define DFC_CMD_CLEAR_RECORD_FILE       0xEB
 #define DFC_CMD_PREPARE_PROXIMITY_CHECK 0xF0
 #define DFC_CMD_PROXIMITY_CHECK         0xF2
@@ -96,6 +110,7 @@ static inline uint8_t dfc_record_command_base(uint8_t command) {
 #define DFC_ISO7816_INS_READ_BINARY           0xB0
 #define DFC_ISO7816_INS_UPDATE_BINARY         0xD6
 #define DFC_ISO7816_INS_READ_RECORD           0xB2
+#define DFC_ISO7816_INS_APPEND_RECORD         0xE2
 #define DFC_ISO7816_SELECT_BY_FILE_ID         0x00
 #define DFC_ISO7816_SELECT_CHILD_DF           0x01
 #define DFC_ISO7816_SELECT_CHILD_EF           0x02
@@ -134,6 +149,8 @@ static inline uint8_t dfc_record_command_base(uint8_t command) {
 #define DFC_ISO7816_SW_WRONG_PARAMETERS_LO    0x86
 #define DFC_ISO7816_SW_INS_NOT_SUPPORTED_HI   0x6D
 #define DFC_ISO7816_SW_INS_NOT_SUPPORTED_LO   0x00
+#define DFC_ISO7816_SW_MEMORY_FAILURE_HI      0x65
+#define DFC_ISO7816_SW_MEMORY_FAILURE_LO      0x81
 // DESFire ISO7816 DF name, used to select the PICC/master file via standard
 // SELECT-by-DF-name (P1=0x04) regardless of which application AID is currently active.
 extern const uint8_t DFC_ISO_AID[7];
@@ -287,10 +304,12 @@ uint32_t dfc_crc32_extend(uint32_t crc, const uint8_t* data, size_t length);
 uint32_t dfc_crc32(const uint8_t* data, size_t length);
 
 // File communication settings
-#define DFC_COMM_PLAIN      0x00
-#define DFC_COMM_MAC        0x01
-#define DFC_COMM_ENCIPHERED 0x03
-#define DFC_COMM_MODE_MASK  0x03
+#define DFC_COMM_PLAIN                    0x00
+#define DFC_COMM_MAC                      0x01
+#define DFC_COMM_ENCIPHERED               0x03
+#define DFC_COMM_MODE_MASK                0x03
+// File option bit 7: the file settings are followed by a count of additional access rights.
+#define DFC_FILE_OPTION_ADDITIONAL_RIGHTS 0x80
 
 #define DFC_TRANSACTION_MAC_KEY_TYPE_AES 0x02
 

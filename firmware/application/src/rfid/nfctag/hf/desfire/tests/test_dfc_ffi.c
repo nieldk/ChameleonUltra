@@ -459,7 +459,7 @@ static void check_rejected_file_creation_is_atomic(void) {
     }
 
     DfcFfiFile invalid = plain_file(0, DFC_EV1_MAX_FILE_NUMBER);
-    invalid.comm_settings = 0x02;
+    invalid.comm_settings = 0x04;
     index = UINT32_C(0xA5A5A5A5);
     before = capture_credential_state(credential);
     CHECK(dfc_ffi_credential_add_file(credential, &invalid, &index) == DfcDerMalformed);
@@ -1133,6 +1133,13 @@ static void check_standalone_api_success_and_boundaries(void) {
             settings_response, sizeof(settings_response), settings, sizeof(settings)) ==
         DFC_FFI_RESPONSE_OK);
     CHECK(settings[0] == 0 && settings[1] == 3 && settings[14] == 0x80);
+    const uint8_t value_settings_response[] = {
+        2, 0, 0xEE, 0xEE, 0x9C, 0xFF, 0xFF, 0xFF, 0x64, 0, 0, 0, 0, 0, 0, 0, 3};
+    CHECK(
+        dfc_ffi_response_decode_file_settings(
+            value_settings_response, sizeof(value_settings_response), settings, sizeof(settings)) ==
+        DFC_FFI_RESPONSE_OK);
+    CHECK(settings[26] == 3);
 
     const uint8_t key[16] = {0};
     const uint8_t uid[7] = {0x04, 0x83, 0xB4, 0xF2, 0xCF, 0x18, 0x90};

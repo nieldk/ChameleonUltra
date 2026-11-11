@@ -1,5 +1,6 @@
 #include "munit/munit.h"
 
+#include "aes_cmac.h"
 #include "dfc_transaction_mac.h"
 #include "dfc_transaction_mac_i.h"
 
@@ -94,6 +95,40 @@ static MunitResult
     munit_assert_memory_equal(sizeof(current_reader), input + 65, current_reader);
     munit_assert_memory_equal(sizeof(encrypted_previous), input + 96, encrypted_previous);
     dfc_transaction_mac_verifier_clear(&verifier);
+    return MUNIT_OK;
+}
+
+static MunitResult
+    test_iso_chaining_opcodes_are_preserved(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    static const uint8_t commands[] = {
+        DFC_CMD_READ_DATA_ISO,
+        DFC_CMD_WRITE_DATA_ISO,
+        DFC_CMD_READ_RECORDS_ISO,
+        DFC_CMD_WRITE_RECORD_ISO,
+    };
+    for(size_t index = 0; index < sizeof(commands); index++) {
+        uint8_t input[32] = {0};
+        DfcTransactionMacVerifier verifier;
+        init_captured(&verifier, input, sizeof(input));
+        const uint8_t payload = 0xA5;
+        bool writes = commands[index] == DFC_CMD_WRITE_DATA_ISO ||
+                      commands[index] == DFC_CMD_WRITE_RECORD_ISO;
+        munit_assert_int(
+            dfc_transaction_mac_add_data(
+                &verifier,
+                commands[index],
+                1,
+                0,
+                writes ? 1 : 0,
+                writes ? &payload : NULL,
+                writes ? 1 : 0),
+            ==,
+            DfcTransactionMacOk);
+        munit_assert_uint8(input[0], ==, commands[index]);
+        dfc_transaction_mac_verifier_clear(&verifier);
+    }
     return MUNIT_OK;
 }
 
@@ -320,10 +355,183 @@ static MunitResult
     return MUNIT_OK;
 }
 
+static void assert_builder_parity(
+    const uint8_t session_key[DFC_AES_KEY_LENGTH],
+    const uint8_t* input,
+    size_t input_length,
+    const DfcTransactionMacAccumulator* accumulator) {
+    uint8_t buffered_mac[DFC_AES_CMAC_LENGTH] = {0};
+    uint8_t streaming_mac[DFC_AES_CMAC_LENGTH] = {0};
+    munit_assert_true(aes_cmac(
+        (uint8_t*)session_key, DFC_AES_KEY_LENGTH, (uint8_t*)input, input_length, buffered_mac));
+    munit_assert_true(dfc_transaction_mac_accumulator_finalize(accumulator, streaming_mac));
+    munit_assert_memory_equal(sizeof(buffered_mac), buffered_mac, streaming_mac);
+}
+
+static MunitResult
+    test_buffered_and_streaming_builders_match(const MunitParameter params[], void* data) {
+    (void)params;
+    (void)data;
+    const uint8_t session_key[DFC_AES_KEY_LENGTH] = {
+        0x10,
+        0x11,
+        0x12,
+        0x13,
+        0x14,
+        0x15,
+        0x16,
+        0x17,
+        0x18,
+        0x19,
+        0x1A,
+        0x1B,
+        0x1C,
+        0x1D,
+        0x1E,
+        0x1F};
+    const uint8_t payload[] = {0x21, 0x22, 0x23, 0x24, 0x25};
+    const uint8_t value[] = {0x31, 0x32, 0x33, 0x34};
+    const uint8_t reader_id[DFC_TRANSACTION_READER_ID_LENGTH] = {
+        0x40,
+        0x41,
+        0x42,
+        0x43,
+        0x44,
+        0x45,
+        0x46,
+        0x47,
+        0x48,
+        0x49,
+        0x4A,
+        0x4B,
+        0x4C,
+        0x4D,
+        0x4E,
+        0x4F};
+    const uint8_t previous_reader_id[DFC_TRANSACTION_READER_ID_LENGTH] = {
+        0x50,
+        0x51,
+        0x52,
+        0x53,
+        0x54,
+        0x55,
+        0x56,
+        0x57,
+        0x58,
+        0x59,
+        0x5A,
+        0x5B,
+        0x5C,
+        0x5D,
+        0x5E,
+        0x5F};
+    const uint8_t data_commands[] = {
+        DFC_CMD_READ_DATA,
+        DFC_CMD_READ_DATA_ISO,
+        DFC_CMD_WRITE_DATA,
+        DFC_CMD_WRITE_DATA_ISO,
+        DFC_CMD_READ_RECORDS,
+        DFC_CMD_READ_RECORDS_ISO,
+        DFC_CMD_WRITE_RECORD,
+        DFC_CMD_WRITE_RECORD_ISO};
+    const uint8_t update_commands[] = {DFC_CMD_UPDATE_RECORD, DFC_CMD_UPDATE_RECORD_ISO};
+    const uint8_t value_commands[] = {
+        DFC_CMD_GET_VALUE, DFC_CMD_CREDIT, DFC_CMD_DEBIT, DFC_CMD_LIMITED_CREDIT};
+    uint8_t input[1024] = {0};
+    size_t input_length = 0;
+    DfcTransactionMacAccumulator accumulator;
+    munit_assert_true(dfc_transaction_mac_accumulator_init(&accumulator, session_key));
+
+    for(size_t index = 0; index < sizeof(data_commands); index++) {
+        munit_assert_true(dfc_transaction_mac_input_add_data(
+            input,
+            sizeof(input),
+            &input_length,
+            data_commands[index],
+            2,
+            1,
+            sizeof(payload),
+            payload,
+            sizeof(payload)));
+        munit_assert_true(dfc_transaction_mac_accumulator_add_data(
+            &accumulator, data_commands[index], 2, 1, sizeof(payload), payload, sizeof(payload)));
+        assert_builder_parity(session_key, input, input_length, &accumulator);
+    }
+    for(size_t index = 0; index < sizeof(update_commands); index++) {
+        munit_assert_true(dfc_transaction_mac_input_add_record_update(
+            input,
+            sizeof(input),
+            &input_length,
+            update_commands[index],
+            3,
+            4,
+            1,
+            sizeof(payload),
+            payload,
+            sizeof(payload)));
+        munit_assert_true(dfc_transaction_mac_accumulator_add_record_update(
+            &accumulator,
+            update_commands[index],
+            3,
+            4,
+            1,
+            sizeof(payload),
+            payload,
+            sizeof(payload)));
+        assert_builder_parity(session_key, input, input_length, &accumulator);
+    }
+    for(size_t index = 0; index < sizeof(value_commands); index++) {
+        munit_assert_true(dfc_transaction_mac_input_add_value(
+            input, sizeof(input), &input_length, value_commands[index], 4, value));
+        munit_assert_true(dfc_transaction_mac_accumulator_add_value(
+            &accumulator, value_commands[index], 4, value));
+        assert_builder_parity(session_key, input, input_length, &accumulator);
+    }
+    munit_assert_true(
+        dfc_transaction_mac_input_add_clear_record(input, sizeof(input), &input_length, 5));
+    munit_assert_true(dfc_transaction_mac_accumulator_add_clear_record(&accumulator, 5));
+    assert_builder_parity(session_key, input, input_length, &accumulator);
+
+    munit_assert_true(dfc_transaction_mac_input_add_reader_id(
+        input, sizeof(input), &input_length, reader_id, NULL));
+    munit_assert_true(
+        dfc_transaction_mac_accumulator_add_reader_id(&accumulator, reader_id, NULL));
+    assert_builder_parity(session_key, input, input_length, &accumulator);
+    munit_assert_true(dfc_transaction_mac_input_add_reader_id(
+        input, sizeof(input), &input_length, reader_id, previous_reader_id));
+    munit_assert_true(dfc_transaction_mac_accumulator_add_reader_id(
+        &accumulator, reader_id, previous_reader_id));
+    assert_builder_parity(session_key, input, input_length, &accumulator);
+
+    const uint8_t zero_data[19] = {0};
+    munit_assert_true(dfc_transaction_mac_input_add_data(
+        input,
+        sizeof(input),
+        &input_length,
+        DFC_CMD_WRITE_DATA,
+        6,
+        0,
+        sizeof(zero_data),
+        zero_data,
+        sizeof(zero_data)));
+    munit_assert_true(dfc_transaction_mac_accumulator_add_zero_data(
+        &accumulator, DFC_CMD_WRITE_DATA, 6, 0, sizeof(zero_data), sizeof(zero_data)));
+    assert_builder_parity(session_key, input, input_length, &accumulator);
+
+    dfc_transaction_mac_accumulator_clear(&accumulator);
+    return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/captured-credit", test_captured_credit_receipt, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/structured-input",
      test_structured_inputs_are_canonical,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/iso-chaining-opcodes",
+     test_iso_chaining_opcodes_are_preserved,
      NULL,
      NULL,
      MUNIT_TEST_OPTION_NONE,
@@ -349,6 +557,12 @@ static MunitTest tests[] = {
     {"/ordering", test_omitted_and_reordered_inputs_fail, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/streaming-over-128",
      test_streaming_input_exceeds_old_limit,
+     NULL,
+     NULL,
+     MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/builder-parity",
+     test_buffered_and_streaming_builders_match,
      NULL,
      NULL,
      MUNIT_TEST_OPTION_NONE,

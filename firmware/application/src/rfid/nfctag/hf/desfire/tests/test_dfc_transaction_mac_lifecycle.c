@@ -955,8 +955,10 @@ static MunitResult test_create_prevalidation(const MunitParameter params[], void
     if(strcmp(failure, "invalid-number") == 0) apdu[5] = DFC_EV1_MAX_FILE_NUMBER + 1;
     uint8_t expected = DFC_STATUS_PARAMETER_ERROR;
     if(strcmp(failure, "malformed") == 0) {
+        // Drop one data byte but keep the trailing Le, which the card requires.
         apdu[4]--;
-        apdu_len -= 2;
+        apdu[apdu_len - 2] = apdu[apdu_len - 1];
+        apdu_len -= 1;
     }
     if(strcmp(failure, "invalid-key-option") == 0) apdu[9] = DFC_KEY_TYPE_AES;
     if(strcmp(failure, "file-count") == 0) expected = DFC_STATUS_COUNT_ERROR;

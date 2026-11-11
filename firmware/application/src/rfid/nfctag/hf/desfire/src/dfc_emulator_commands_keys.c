@@ -124,9 +124,13 @@ void dfc_emulator_command_get_key_version(
     dfc_bytebuf_append_byte(tx_buffer, *emulator_key_version(emulator, key_no));
 }
 
-static bool can_change_key(DfcEmulator* emulator, uint8_t target_key_no) {
+// Whether a session authenticated as key `auth` may change key `target_key_no`
+// of the current application under that application's key settings. Key 0 (the
+// master) changes only if the master-changeable bit is set and the caller IS key
+// 0. Any other key follows the change-key field: frozen, "each key changes
+// itself", key 0 only, or one named key.
+static bool can_change_key_as(DfcEmulator* emulator, uint8_t target_key_no, uint8_t auth) {
     uint8_t ks1 = dfc_emulator_command_current_key_settings_1(emulator);
-    uint8_t auth = emulator->auth_key_no;
     if(target_key_no == 0x00) {
         return ((ks1 & DFC_KS1_MASTER_KEY_CHANGEABLE) != 0) && auth == 0x00;
     }
@@ -135,6 +139,10 @@ static bool can_change_key(DfcEmulator* emulator, uint8_t target_key_no) {
     if(change_access == DFC_CHANGE_KEY_ACCESS_SAME) return auth == target_key_no;
     if(change_access == 0x00) return auth == 0x00;
     return auth == change_access;
+}
+
+static bool can_change_key(DfcEmulator* emulator, uint8_t target_key_no) {
+    return can_change_key_as(emulator, target_key_no, emulator->auth_key_no);
 }
 
 static bool is_aes_key_context(DfcEmulator* emulator) {
@@ -717,6 +725,13 @@ void dfc_emulator_command_change_key_ev2(
     }
     if(!key_set_change_authorized(emulator, app)) {
         dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_AUTHENTICATION_ERR);
+        return;
+    }
+    // The same per-key rule native ChangeKey applies: key 0 needs the master
+    // key and the master-changeable bit, and no key may be changed by one the
+    // change-key field does not allow.
+    if(!can_change_key_as(emulator, key_number, emulator->ev2_authenticated_key_no)) {
+        dfc_bytebuf_append_byte(tx_buffer, DFC_STATUS_PERMISSION_DENIED);
         return;
     }
     const uint8_t* stored_key_set_type =
