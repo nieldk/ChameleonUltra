@@ -461,18 +461,23 @@ class HWBootloaderVersion(DeviceRequiredUnit):
         try:
             counter = self.cmd.get_bootloader_version()
         except chameleon_com.CMDInvalidException:
-            print(" - Bootloader version not supported by current firmware, please update")
+            print(f" {CR}Bootloader version not supported by current firmware, please update{C0}")
             return
         info = self.read_bl_info()
         if info is None:
-            print(f" - Bootloader Version: {counter} (settings counter; no info block in this bootloader)")
-            return
-        feats = ", ".join(n for bit, n in self.BL_FEATURES if info["features"] & bit) or "none"
-        print(f" - Bootloader Version: {info['version']}" + (f" ({info['rev']})" if info["rev"] else ""))
-        print(f" - Built with        : GCC {info['gcc']}")
-        print(f" - Features          : {feats}")
-        print(f" - Image             : 0xF3000-0xFE000 ({0xB000:,} bytes), CRC32 0x{info['crc']:08X}")
-        print(f" - Settings counter  : {counter}")
+            lines = [f"Version        {CY}{counter}{C0} (settings counter; no info block in this bootloader)"]
+        else:
+            feats = ", ".join(n for bit, n in self.BL_FEATURES if info["features"] & bit) or "none"
+            ver = f"{info['version']}" + (f" ({info['rev']})" if info["rev"] else "")
+            lines = [
+                f"Version        {CY}{ver}{C0}",
+                f"Built with     {CY}GCC {info['gcc']}{C0}",
+                f"Features       {CY}{feats}{C0}",
+                f"Image          {CY}0xF3000-0xFE000 ({0xB000:,} bytes), CRC32 0x{info['crc']:08X}{C0}",
+                f"Settings ctr   {CY}{counter}{C0}",
+            ]
+        for line in _box("Bootloader", lines, color=CC, min_width=34):
+            print(line)
 
     def read_bl_info(self):
         """Parse the info block appended to the bl info reply; None if absent."""
@@ -1252,7 +1257,8 @@ class HWSlotList(DeviceRequiredUnit):
 
         for slot in SlotNumber:
             fwslot = SlotNumber.to_fw(slot)
-            status = f"({color_string((CG, 'active'))})" if slot == selected else ""
+            is_active = slot == selected
+            status = f"({color_string((CG, 'active'))})" if is_active else ""
             try:
                 hf_tag_type = TagSpecificType(slotinfo[fwslot]["hf"])
             except ValueError:
@@ -1267,26 +1273,25 @@ class HWSlotList(DeviceRequiredUnit):
                 lf_unknown = slotinfo[fwslot]["lf"]
             else:
                 lf_unknown = None
-            print(f' - {f"Slot {slot}:":{4+maxnamelength+1}} {status}')
+
+            lines = []
 
             # HF
             field_length = maxnamelength + slotnames[fwslot]["hf"]["metalen"] + 1
-            status = (
+            hf_status = (
                 f"({color_string((CR, 'disabled'))})"
                 if not enabled[fwslot]["hf"]
                 else ""
             )
-            print(
-                f"   HF: " f'{slotnames[fwslot]["hf"]["name"]:{field_length}}', end=""
-            )
-            print(status, end="")
+            hf_name_str = f'{slotnames[fwslot]["hf"]["name"]:{field_length}}'
             if hf_unknown is not None:
-                print(color_string((CR, f"Unknown ({hf_unknown})")))
+                hf_type_str = color_string((CR, f"Unknown ({hf_unknown})"))
             elif hf_tag_type != TagSpecificType.UNDEFINED:
                 color = CY if enabled[fwslot]["hf"] else C0
-                print(color_string((color, hf_tag_type)))
+                hf_type_str = color_string((color, hf_tag_type))
             else:
-                print("undef")
+                hf_type_str = "undef"
+            lines.append(f"HF: {hf_name_str}{hf_status}{hf_type_str}")
             if (
                 (not args.short)
                 and enabled[fwslot]["hf"]
@@ -1301,15 +1306,14 @@ class HWSlotList(DeviceRequiredUnit):
                 atqa = anti_coll_data["atqa"]
                 sak = anti_coll_data["sak"]
                 ats = anti_coll_data["ats"]
-                # print('    - ISO14443A emulator settings:')
                 atqa_hex_le = f"(0x{int.from_bytes(atqa, byteorder='little'):04x})"
-                print(f'      {"UID:":40}{color_string((CY, uid.hex().upper()))}')
-                print(
-                    f'      {"ATQA:":40}{color_string((CY, f"{atqa.hex().upper()} {atqa_hex_le}"))}'
+                lines.append(f'    {"UID:":36}{color_string((CY, uid.hex().upper()))}')
+                lines.append(
+                    f'    {"ATQA:":36}{color_string((CY, f"{atqa.hex().upper()} {atqa_hex_le}"))}'
                 )
-                print(f'      {"SAK:":40}{color_string((CY, sak.hex().upper()))}')
+                lines.append(f'    {"SAK:":36}{color_string((CY, sak.hex().upper()))}')
                 if len(ats) > 0:
-                    print(f'      {"ATS:":40}{color_string((CY, ats.hex().upper()))}')
+                    lines.append(f'    {"ATS:":36}{color_string((CY, ats.hex().upper()))}')
                 if hf_tag_type in [
                     TagSpecificType.MIFARE_Mini,
                     TagSpecificType.MIFARE_1024,
@@ -1319,39 +1323,38 @@ class HWSlotList(DeviceRequiredUnit):
                     TagSpecificType.MIFARE_PLUS_S4K,
                 ]:
                     config = self.cmd.mf1_get_emulator_config()
-                    # print('    - Mifare Classic emulator settings:')
                     enabled_str = color_string((CG, "enabled"))
                     disabled_str = color_string((CR, "disabled"))
-                    print(
-                        f'      {"Gen1A magic mode:":40}'
+                    lines.append(
+                        f'    {"Gen1A magic mode:":36}'
                         f'{enabled_str if config["gen1a_mode"] else disabled_str}'
                     )
-                    print(
-                        f'      {"Gen2 magic mode:":40}'
+                    lines.append(
+                        f'    {"Gen2 magic mode:":36}'
                         f'{enabled_str if config["gen2_mode"] else disabled_str}'
                     )
-                    print(
-                        f'      {"Use anti-collision data from block 0:":40}'
+                    lines.append(
+                        f'    {"Use anti-collision data from block 0:":36}'
                         f'{enabled_str if config["block_anti_coll_mode"] else disabled_str}'
                     )
                     try:
-                        print(
-                            f'      {"Write mode:":40}'
+                        lines.append(
+                            f'    {"Write mode:":36}'
                             f'{color_string((CY, MifareClassicWriteMode(config["write_mode"])))}'
                         )
                     except ValueError:
-                        print(
-                            f'      {"Write mode:":40}{color_string((CR, "invalid value!"))}'
+                        lines.append(
+                            f'    {"Write mode:":36}{color_string((CR, "invalid value!"))}'
                         )
-                    print(
-                        f'      {"Log (mfkey32) mode:":40}'
+                    lines.append(
+                        f'    {"Log (mfkey32) mode:":36}'
                         f'{enabled_str if config["detection"] else disabled_str}'
                     )
                     try:
                         prng_resp = self.cmd.mf1_get_prng_type()
                         prng_type = MifareClassicPrngType(prng_resp.parsed)
-                        print(
-                            f'      {"PRNG type:":40}'
+                        lines.append(
+                            f'    {"PRNG type:":36}'
                             f'{color_string((CY, str(prng_type)))}'
                         )
                     except Exception:
@@ -1359,22 +1362,20 @@ class HWSlotList(DeviceRequiredUnit):
 
             # LF
             field_length = maxnamelength + slotnames[fwslot]["lf"]["metalen"] + 1
-            status = (
+            lf_status = (
                 f"({color_string((CR, 'disabled'))})"
                 if not enabled[fwslot]["lf"]
                 else ""
             )
-            print(
-                f"   LF: " f'{slotnames[fwslot]["lf"]["name"]:{field_length}}', end=""
-            )
-            print(status, end="")
+            lf_name_str = f'{slotnames[fwslot]["lf"]["name"]:{field_length}}'
             if lf_unknown is not None:
-                print(color_string((CR, f"Unknown ({lf_unknown})")))
+                lf_type_str = color_string((CR, f"Unknown ({lf_unknown})"))
             elif lf_tag_type != TagSpecificType.UNDEFINED:
                 color = CY if enabled[fwslot]["lf"] else C0
-                print(color_string((color, lf_tag_type)))
+                lf_type_str = color_string((color, lf_tag_type))
             else:
-                print("undef")
+                lf_type_str = "undef"
+            lines.append(f"LF: {lf_name_str}{lf_status}{lf_type_str}")
             if (
                 (not args.short)
                 and enabled[fwslot]["lf"]
@@ -1386,58 +1387,63 @@ class HWSlotList(DeviceRequiredUnit):
                     current = slot
                 if lf_tag_type == TagSpecificType.EM410X:
                     id = self.cmd.em410x_get_emu_id()
-                    print(f'      {"ID:":40}{color_string((CY, id.hex().upper()))}')
+                    lines.append(f'    {"ID:":36}{color_string((CY, id.hex().upper()))}')
                 if lf_tag_type == TagSpecificType.HIDProx:
                     (format, fc, cn1, cn2, il, oem) = self.cmd.hidprox_get_emu_id()
                     cn = (cn1 << 32) + cn2
-                    print(
-                        f"      {'Format:':40}{color_string((CY, HIDFormat(format)))}"
+                    lines.append(
+                        f"    {'Format:':36}{color_string((CY, HIDFormat(format)))}"
                     )
                     if fc > 0:
-                        print(f"      {'FC:':40}{color_string((CG, fc))}")
+                        lines.append(f"    {'FC:':36}{color_string((CG, fc))}")
                     if il > 0:
-                        print(f"      {'IL:':40}{color_string((CG, il))}")
+                        lines.append(f"    {'IL:':36}{color_string((CG, il))}")
                     if oem > 0:
-                        print(f"      {'OEM:':40}{color_string((CG, oem))}")
-                    print(f"      {'CN:':40}{color_string((CG, cn))}")
+                        lines.append(f"    {'OEM:':36}{color_string((CG, oem))}")
+                    lines.append(f"    {'CN:':36}{color_string((CG, cn))}")
                 if lf_tag_type == TagSpecificType.ioProx:
                     ver, fc, cn, raw8, *futureuse = self.cmd.ioprox_get_emu_id()
-                    print(f"      {'Version:':40}{color_string((CG, ver))}")
-                    print(f"      {'Facility:':40}{color_string((CG, f'{fc} [0x{fc:02X}]'))}")
-                    print(f"      {'ID:':40}{color_string((CY, cn))}")
-                    print(f"      {'Raw:':40}{color_string((CY, raw8.hex().upper()))}")
+                    lines.append(f"    {'Version:':36}{color_string((CG, ver))}")
+                    lines.append(f"    {'Facility:':36}{color_string((CG, f'{fc} [0x{fc:02X}]'))}")
+                    lines.append(f"    {'ID:':36}{color_string((CY, cn))}")
+                    lines.append(f"    {'Raw:':36}{color_string((CY, raw8.hex().upper()))}")
                 if lf_tag_type == TagSpecificType.Viking:
                     id = self.cmd.viking_get_emu_id()
-                    print(f"      {'ID:':40}{color_string((CY, id.hex().upper()))}")
+                    lines.append(f"    {'ID:':36}{color_string((CY, id.hex().upper()))}")
                 if lf_tag_type == TagSpecificType.Jablotron:
                     id = self.cmd.jablotron_get_emu_id()
                     card_id = jablotron_card_id(id)
-                    print(f"      {'ID:':40}{color_string((CY, id.hex().upper()))}")
-                    print(f"      {'Card:':40}{color_string((CG, str(card_id)))}")
+                    lines.append(f"    {'ID:':36}{color_string((CY, id.hex().upper()))}")
+                    lines.append(f"    {'Card:':36}{color_string((CG, str(card_id)))}")
                 if lf_tag_type == TagSpecificType.FDXB:
                     frame = self.cmd.fdxb_get_emu_id()
                     v = int.from_bytes(frame[0:8], "little")
-                    print(f"      {'Country:':40}{color_string((CG, (v >> 38) & 0x3FF))}")
-                    print(f"      {'National ID:':40}{color_string((CG, v & ((1 << 38) - 1)))}")
-                    print(f"      {'Frame:':40}{color_string((CY, frame.hex().upper()))}")
+                    lines.append(f"    {'Country:':36}{color_string((CG, (v >> 38) & 0x3FF))}")
+                    lines.append(f"    {'National ID:':36}{color_string((CG, v & ((1 << 38) - 1)))}")
+                    lines.append(f"    {'Frame:':36}{color_string((CY, frame.hex().upper()))}")
                 if lf_tag_type == TagSpecificType.PAC:
                     id = self.cmd.pac_get_emu_id()
                     id_ascii = ''.join(chr(b) if 0x20 <= b < 0x7f else '.' for b in id)
                     raw = pac_encode_raw(id)
-                    print(f"      {'CN:':40}{color_string((CY, id_ascii))}")
-                    print(f"      {'Raw:':40}{color_string((CY, raw.hex().upper()))}")
+                    lines.append(f"    {'CN:':36}{color_string((CY, id_ascii))}")
+                    lines.append(f"    {'Raw:':36}{color_string((CY, raw.hex().upper()))}")
                 if lf_tag_type == TagSpecificType.IDTECK:
                     frame = self.cmd.idteck_get_emu_id()
                     info = _idteck_frame_info(frame)
                     card_id_str = f"{info['card_id']} (0x{info['card_id']:06X})"
-                    print(f"      {'Frame:':40}{color_string((CY, frame.hex().upper()))}")
-                    print(f"      {'Card ID:':40}{color_string((CG, card_id_str))}")
+                    lines.append(f"    {'Frame:':36}{color_string((CY, frame.hex().upper()))}")
+                    lines.append(f"    {'Card ID:':36}{color_string((CG, card_id_str))}")
                 if lf_tag_type == TagSpecificType.Indala:
                     frame = self.cmd.indala_get_emu_id()
                     fc, cn = indala_decode_raw(frame)
-                    print(f"      {'Frame:':40}{color_string((CY, frame.hex().upper()))}")
-                    print(f"      {'FC:':40}{color_string((CG, fc))}")
-                    print(f"      {'CN:':40}{color_string((CG, cn))}")
+                    lines.append(f"    {'Frame:':36}{color_string((CY, frame.hex().upper()))}")
+                    lines.append(f"    {'FC:':36}{color_string((CG, fc))}")
+                    lines.append(f"    {'CN:':36}{color_string((CG, cn))}")
+
+            title = f"Slot {slot}" + ("  (active)" if is_active else "")
+            box_color = CG if is_active else CC
+            for line in _box(title, lines, color=box_color, min_width=40):
+                print(line)
         if current != selected:
             self.cmd.set_active_slot(selected)
 
@@ -2851,10 +2857,11 @@ examples:
         print()
         if nt_int is not None and nr_ar_enc is not None and len(uid_bytes) >= 4:
             uid32 = int.from_bytes(uid_bytes[-4:], 'big')  # last 4 bytes for cascade≥2
-            print(f" {CC}Crypto1 analysis:{C0}")
-            print(f"   UID (low 4 bytes) : {uid_bytes[-4:].hex().upper()}")
-            print(f"   NT (plaintext)    : {nt_int:08X}")
-            print(f"   NR (fixed in fw)  : 12345678  (encrypted on wire: {nr_ar_enc[:4].hex().upper()})")
+            lines = [
+                f"UID (low 4 bytes)   {uid_bytes[-4:].hex().upper()}",
+                f"NT (plaintext)      {nt_int:08X}",
+                f"NR (fixed in fw)    12345678  (encrypted on wire: {nr_ar_enc[:4].hex().upper()})",
+            ]
             ar_expected = Crypto1.prng_next(nt_int, 64)
             at_expected = Crypto1.prng_next(nt_int, 96)
             if at_enc is not None:
@@ -2870,27 +2877,29 @@ examples:
                 ar_ok = (ar_decoded == ar_expected)
                 ar_colour = CG if ar_ok else CR
                 ar_mark = '✓' if ar_ok else '✗'
-                print(f"   AR expected       : {ar_expected:08X}  = prng_successor(NT, 64)")
-                print(f"   AR (encrypted)    : {nr_ar_enc[4:].hex().upper()}")
-                print(f"   AR decrypted      : {ar_colour}{ar_decoded:08X}{C0}  {ar_colour}{ar_mark} "
-                      f"{'MATCH' if ar_ok else 'MISMATCH — wrong key or replay'}{C0}")
+                lines.append(f"AR expected         {ar_expected:08X}  = prng_successor(NT, 64)")
+                lines.append(f"AR (encrypted)      {nr_ar_enc[4:].hex().upper()}")
+                lines.append(f"AR decrypted        {ar_colour}{ar_decoded:08X}{C0}  {ar_colour}{ar_mark} "
+                             f"{'MATCH' if ar_ok else 'MISMATCH - wrong key or replay'}{C0}")
                 at_int = int.from_bytes(at_enc, 'big')
                 at_decoded = at_int ^ ks_at
                 ok = (at_decoded == at_expected)
                 colour = CG if ok else CR
                 mark = '✓' if ok else '✗'
-                print(f"   AT expected       : {at_expected:08X}  = prng_successor(NT, 96)")
-                print(f"   AT (encrypted)    : {at_enc.hex().upper()}")
-                print(f"   AT decrypted      : {colour}{at_decoded:08X}{C0}  {colour}{mark} "
-                      f"{'MATCH — auth verified' if ok else 'MISMATCH — wrong key or replay'}{C0}")
+                lines.append(f"AT expected         {at_expected:08X}  = prng_successor(NT, 96)")
+                lines.append(f"AT (encrypted)      {at_enc.hex().upper()}")
+                lines.append(f"AT decrypted        {colour}{at_decoded:08X}{C0}  {colour}{mark} "
+                             f"{'MATCH - auth verified' if ok else 'MISMATCH - wrong key or replay'}{C0}")
                 # Cross-check against mfkey32 prediction too.
                 nr_enc_int = int.from_bytes(nr_ar_enc[:4], 'big')
                 ar_enc_int = int.from_bytes(nr_ar_enc[4:], 'big')
                 key_match = Crypto1.mfkey32_is_reader_has_key(uid32, nt_int, nr_enc_int, ar_enc_int, key_hex)
                 if key_match:
-                    print(f"   mfkey32 forward   : {CG}key {key_hex.upper()} verified against NT/NR/AR{C0}")
+                    lines.append(f"mfkey32 forward     {CG}key {key_hex.upper()} verified against NT/NR/AR{C0}")
             else:
-                print(f"   {CR}AT not received — auth was rejected by the card{C0}")
+                lines.append(f"{CR}AT not received - auth was rejected by the card{C0}")
+            for line in _box("Crypto1 Analysis", lines, color=CC, min_width=55):
+                print(line)
         elif nt_int is not None:
             print(f" {CY}Auth aborted before NR||AR — NT={nt_int:08X}, no further analysis{C0}")
 
@@ -3446,37 +3455,39 @@ def _print_14a_sniff_summary(frames):
     # would always be the active slot's UID — not useful information.
     # Only report UID when we see a completed SELECT (NVB=70).
 
-    print(f" {'─'*55}")
+    lines = []
     if uid_bytes:
         uid_str = ' '.join(f'{b:02X}' for b in uid_bytes)
         cascade = f'  ({len(uid_bytes)}-byte UID)' if uid_bytes else ''
-        print(f" {CC}UID      :{C0} {CG}{uid_str}{cascade}{C0}")
+        lines.append(f"UID            {CG}{uid_str}{cascade}{C0}")
     if rats_seen:
-        print(f" {CC}Protocol :{C0} ISO14443-4 (RATS seen)")
+        lines.append("Protocol       ISO14443-4 (RATS seen)")
     for aid in aids:
-        print(f" {CC}AID      :{C0} {CY}{aid}{C0}")
+        lines.append(f"AID            {CY}{aid}{C0}")
     if amount is not None:
         major = amount // 100
         minor = amount % 100
-        print(f" {CC}Amount   :{C0} {CG}{major}.{minor:02d}{C0}  (raw={amount})")
+        lines.append(f"Amount         {CG}{major}.{minor:02d}{C0}  (raw={amount})")
     if auth_blocks:
         for key_type, block in auth_blocks:
-            print(f" {CC}Auth     :{C0} {CR}MIFARE Classic {key_type} block={block}{C0}")
+            lines.append(f"Auth           {CR}MIFARE Classic {key_type} block={block}{C0}")
     elif auth_seen:
-        print(f" {CC}Auth     :{C0} {CR}MIFARE Classic auth detected{C0}")
+        lines.append(f"Auth           {CR}MIFARE Classic auth detected{C0}")
     if arqc_seen:
-        print(f" {CC}Auth type:{C0} {CR}ARQC — online authorisation requested{C0}")
+        lines.append(f"Auth type      {CR}ARQC - online authorisation requested{C0}")
     if tc_seen:
-        print(f" {CC}Auth type:{C0} {CG}TC — approved offline{C0}")
+        lines.append(f"Auth type      {CG}TC - approved offline{C0}")
     if atc_tag:
-        print(f" {CC}ATC      :{C0} tag {atc_tag}  (transaction counter)")
+        lines.append(f"ATC            tag {atc_tag}  (transaction counter)")
     if halted:
-        print(f" {CC}End      :{C0} HALT / DESELECT")
+        lines.append("End            HALT / DESELECT")
     if not uid_bytes and not aids and not auth_seen and not rats_seen:
-        print(f" {CC}Note     :{C0} anti-collision incomplete — no SELECT seen (reader could not complete exchange)")
+        lines.append("Note           anti-collision incomplete - no SELECT seen (reader could not complete exchange)")
 
     # ── Nonce cracking ─────────────────────────────────────────────────────
-    for line in _nonce_cracking_lines(frames):
+    lines += [l for l in _nonce_cracking_lines(frames) if l.strip()]
+
+    for line in _box("Sniff Summary", lines, color=CC, min_width=55):
         print(line)
 
 
@@ -4014,14 +4025,17 @@ class DataModulation(BaseCLIUnit):
         threshold = mean // 2
 
         rate_us = _get_capture_rate_us()
-        print(f" Samples  : {CG}{n}{C0}  ({n*rate_us}µs)")
-        print(f" Range    : 0x{mn:02x} – 0x{mx:02x}  mean: 0x{mean:02x}")
-        print()
+        lines = [
+            f"Samples        {CY}{n}{C0}  ({n*rate_us}µs)",
+            f"Range          {CY}0x{mn:02x} - 0x{mx:02x}{C0}  mean: 0x{mean:02x}",
+        ]
 
         # Check if there is any modulation at all
         dynamic_range = mx - mn
         if dynamic_range < 0x20:
-            print(f" Modulation: {CR}none — flat carrier (no signal){C0}")
+            lines.append(f"Modulation     {CR}none - flat carrier (no signal){C0}")
+            for line in _box("LF Modulation", lines, color=CC, min_width=38):
+                print(line)
             return
 
         # Binarise
@@ -4042,7 +4056,9 @@ class DataModulation(BaseCLIUnit):
         runs.append(count)
 
         if len(runs) < 4:
-            print(f" Modulation: {CR}insufficient transitions{C0}")
+            lines.append(f"Modulation     {CR}insufficient transitions{C0}")
+            for line in _box("LF Modulation", lines, color=CC, min_width=38):
+                print(line)
             return
 
         runs_sorted = sorted(runs)
@@ -4062,10 +4078,9 @@ class DataModulation(BaseCLIUnit):
         tc_us = rate_us  # 1 Tc = 1 sample period
         best_div = min(rf_dividers, key=lambda d: abs(d*tc_us - full_period_us))
 
-        print(f" Half-period : ~{most_common_run} samples = {most_common_run*rate_us}µs")
-        print(f" Full period : ~{full_period_us}µs")
-        print(f" Nearest RF  : {CG}RF/{best_div}{C0}  ({best_div*tc_us}µs/bit)")
-        print()
+        lines.append(f"Half-period    {CY}~{most_common_run} samples = {most_common_run*rate_us}µs{C0}")
+        lines.append(f"Full period    {CY}~{full_period_us}µs{C0}")
+        lines.append(f"Nearest RF     {CG}RF/{best_div}{C0}  ({best_div*tc_us}µs/bit)")
 
         # Modulation type heuristic
         # Manchester: runs cluster around 1 value (half period) and 2x that (full period)
@@ -4095,17 +4110,20 @@ class DataModulation(BaseCLIUnit):
             mod = "FSK or mixed (multiple run lengths)"
             col = CG
 
-        print(f" Modulation : {col}{mod}{C0}")
+        lines.append(f"Modulation     {col}{mod}{C0}")
 
         # Gap detection
         gap_threshold = mean // 2
         gaps = [i for i, b in enumerate(buf[200:]) if b < gap_threshold]
 
         if gaps:
-            print(f" RTF gaps   : {CG}{len(gaps)}{C0} samples below 0x{gap_threshold:02x}"
-                  f" ^`^t gap commands present")
+            lines.append(f"RTF gaps       {CG}{len(gaps)}{C0} samples below 0x{gap_threshold:02x}"
+                          f" → gap commands present")
         else:
-            print(f" RTF gaps   : {CR}none ^`^t no gap commands detected{C0}")
+            lines.append(f"RTF gaps       {CR}none{C0} → no gap commands detected")
+
+        for line in _box("LF Modulation", lines, color=CC, min_width=38):
+            print(line)
 
 
 # ============================================================================
@@ -4690,13 +4708,17 @@ class EMVLoad(DeviceRequiredUnit):
              bytes.fromhex('6985'),
              'GPO (conditions not satisfied)'),
         ]
+        lines = []
         for c, r, name in pairs:
             resp = cmd.hf14a_4_add_static_response(c, r)
             if resp.status == Status.SUCCESS:
-                print(f' {CG}Loaded: {name}{C0}')
+                lines.append(f"{CG}Loaded{C0}  {name}")
             else:
-                print(f' {CR}Failed: {name}{C0}')
-        print(f'\n {CY}Default responses loaded. Run: hw mode -e{C0}')
+                lines.append(f"{CR}Failed{C0}  {name}")
+        lines.append("")
+        lines.append(f"{CY}Default responses loaded. Run: hw mode -e{C0}")
+        for line in _box("EMV Load (defaults)", lines, color=CC, min_width=40):
+            print(line)
 
     def _tlv_encode_len(self, n: int) -> bytes:
         """Encode integer n as BER-TLV length (short or long form)."""
@@ -4734,12 +4756,16 @@ class EMVLoad(DeviceRequiredUnit):
             return
 
         uid_str = ' '.join(f'{b:02X}' for b in uid)
-        print(f' {CG}Card from JSON:{C0}')
-        print(f'   UID  : {CG}{uid_str}{C0}')
-        print(f'   ATQA : {CG}{atqa.hex().upper()}{C0}  SAK: {CG}{sak:02X}{C0}')
-        print(f'   ATS  : {CG}{ats.hex().upper()}{C0}')
+        card_lines = [
+            f"UID            {CG}{uid_str}{C0}",
+            f"ATQA           {CG}{atqa.hex().upper()}{C0}  SAK: {CG}{sak:02X}{C0}",
+            f"ATS            {CG}{ats.hex().upper()}{C0}",
+        ]
+        for line in _box("Card from JSON", card_lines, color=CC, min_width=40):
+            print(line)
 
         static_pairs = []
+        parse_errors = []
 
         def tlv_resp(tag_hex, len_hex, val_hex):
             """Reconstruct TLV response with proper BER length encoding + SW 9000."""
@@ -4757,7 +4783,7 @@ class EMVLoad(DeviceRequiredUnit):
                 tlv_resp('6F', l, v),
                 'SELECT PPSE'))
         except Exception as e:
-            print(f' {CR}PPSE: {e}{C0}')
+            parse_errors.append(f"{CR}PPSE{C0}  {e}")
 
         try:
             v = data['Application']['FCITemplate']['value'].replace(' ', '')
@@ -4768,7 +4794,7 @@ class EMVLoad(DeviceRequiredUnit):
                 tlv_resp('6F', l, v),
                 'SELECT AID'))
         except Exception as e:
-            print(f' {CR}Application FCI: {e}{C0}')
+            parse_errors.append(f"{CR}Application FCI{C0}  {e}")
 
         try:
             v = data['Application']['GPO']['value'].replace(' ', '')
@@ -4779,7 +4805,7 @@ class EMVLoad(DeviceRequiredUnit):
                 tlv_resp(tag, l, v),
                 'GPO'))
         except Exception as e:
-            print(f' {CR}GPO: {e}{C0}')
+            parse_errors.append(f"{CR}GPO{C0}  {e}")
 
         try:
             for rec in data['Application'].get('Records', []):
@@ -4794,10 +4820,9 @@ class EMVLoad(DeviceRequiredUnit):
                     tlv_resp(tag, l, v),
                     f'READ RECORD SFI={sfi_n} rec={rec_n}'))
         except Exception as e:
-            print(f' {CR}Records: {e}{C0}')
+            parse_errors.append(f"{CR}Records{C0}  {e}")
 
         # Configure slot
-        print(f'\n {CY}Configuring slot {target_slot}...{C0}')
         cmd.set_slot_tag_type(target_slot, TagSpecificType.HF14A_4)
         cmd.set_slot_data_default(target_slot, TagSpecificType.HF14A_4)
         cmd.set_slot_enable(target_slot, TagSenseType.HF, True)
@@ -4807,16 +4832,22 @@ class EMVLoad(DeviceRequiredUnit):
         cmd.hf14a_4_set_anti_coll(uid, atqa_wire, sak, ats)
 
         cmd.hf14a_4_clear_static_responses()
+        lines = list(parse_errors)
+        if parse_errors:
+            lines.append("")
         for c, r, name in static_pairs:
             try:
                 cmd.hf14a_4_add_static_response(c, r)
-                print(f' {CG}+ {name} ({len(r)}b){C0}')
+                lines.append(f"{CG}+{C0}  {name} ({len(r)}b)")
             except Exception as e:
-                print(f' {CR}  Failed {name}: {e}{C0}')
+                lines.append(f"{CR}Failed{C0}  {name}: {e}")
 
         cmd.slot_data_config_save()
-        print(f'\n {CG}Done! Slot {target_slot} ready with {len(static_pairs)} response(s).{C0}')
-        print(f' {C0}Next: hw slot change -s {target_slot} && hw mode -e{C0}')
+        lines.append("")
+        lines.append(f"{CG}Done! Slot {target_slot} ready with {len(static_pairs)} response(s).{C0}")
+        lines.append(f"Next: hw slot change -s {target_slot} && hw mode -e")
+        for line in _box(f"EMV Load (slot {target_slot})", lines, color=CC, min_width=50):
+            print(line)
 
 
 @emv.command('apdu')
@@ -5460,7 +5491,7 @@ class StandaloneStatus(DeviceRequiredUnit):
             self._print_plain(state, mode, flags, fds, extra)
 
         if mode == StandaloneMode.RELAY:
-            self._print_relay_diag(outer_state=state)
+            self._print_relay_diag(outer_state=state, plain=getattr(args, 'plain', False))
 
     def _print_plain(self, state, mode, flags, fds, extra):
         state_col = CG if state != StandaloneState.DISARMED else CY
@@ -5485,7 +5516,7 @@ class StandaloneStatus(DeviceRequiredUnit):
             for k, v in extra:
                 print(_render_status_line(k, v, w, legend_done))
 
-    def _print_relay_diag(self, outer_state):
+    def _print_relay_diag(self, outer_state, plain=False):
         try:
             d = self.cmd.relay_get_diag()
             if not d:
@@ -5511,28 +5542,39 @@ class StandaloneStatus(DeviceRequiredUnit):
             state_str = state_names.get(state, f'UNKNOWN({state})')
             role_str  = role_names.get(role, f'UNKNOWN({role})')
             sub_str   = sub_names.get(sub, f'UNKNOWN({sub})')
-            print(f"   ble: {reports} scan reports  {hits} relay hits")
-            print(f"        state={CG if state==5 else CY}{state_str}{C0}  "
-                  f"role={CC}{role_str}{C0}")
-            print(f"        sub={CG if sub in (3,6) else CY}{sub_str}{C0}")
+
+            lines = [
+                f"BLE            {CY}{reports}{C0} scan reports  {CY}{hits}{C0} relay hits",
+                f"State          {CG if state==5 else CY}{state_str}{C0}",
+                f"Role           {CC}{role_str}{C0}",
+                f"Sub-state      {CG if sub in (3,6) else CY}{sub_str}{C0}",
+            ]
             relay_armed = (outer_state != StandaloneState.DISARMED)
             if relay_armed and reports == 0:
-                print(f"        {CR}WARNING: scanning not working{C0}")
+                lines.append(f"{CR}WARNING: scanning not working{C0}")
             elif relay_armed and hits == 0:
-                print(f"        {CY}no relay HELLO seen yet{C0}")
+                lines.append(f"{CY}no relay HELLO seen yet{C0}")
             elif relay_armed and state < 5:
-                print(f"        {CY}HELLO seen but not connected — check both CUs armed{C0}")
+                lines.append(f"{CY}HELLO seen but not connected - check both CUs armed{C0}")
             else:
                 if role == 0:   # RELAY_CARD
                     if identity_rx:
-                        print(f"        {CG}card identity received  UID={uid_str}{C0}")
+                        lines.append(f"{CG}card identity received  UID={uid_str}{C0}")
                     else:
-                        print(f"        {CY}waiting for card identity from RELAY_READER{C0}")
+                        lines.append(f"{CY}waiting for card identity from RELAY_READER{C0}")
                 else:           # RELAY_READER
                     if card_found:
-                        print(f"        {CG}real card found  UID={uid_str}{C0}")
+                        lines.append(f"{CG}real card found  UID={uid_str}{C0}")
                     else:
-                        print(f"        {CY}scanning for real card — place card near CU{C0}")
+                        lines.append(f"{CY}scanning for real card - place card near CU{C0}")
+
+            if plain:
+                for l in lines:
+                    print(f"   {l}")
+            else:
+                print('')
+                for line in _box("Relay Diagnostics", lines, color=CM, min_width=40):
+                    print(line)
         except Exception:
             pass
 
@@ -6346,10 +6388,13 @@ class StandaloneConfig(DeviceRequiredUnit):
                 if resp.status != Status.SUCCESS:
                     print(color_string((CR, f"set-config failed: status={resp.status}")))
                     return
-            print(color_string((CG, "nfc-canary config:")))
-            print(f"  min-level  {CANARY_LEVELS[cfg['min_level']]}")
-            print(f"  cooldown   {cfg['cooldown_s']} s")
-            print(f"  ble        {['off', 'alert', 'end', 'both'][cfg['flags']]}")
+            lines = [
+                f"min-level  {CANARY_LEVELS[cfg['min_level']]}",
+                f"cooldown   {cfg['cooldown_s']} s",
+                f"ble        {['off', 'alert', 'end', 'both'][cfg['flags']]}",
+            ]
+            for line in _box("NFC Canary Config", lines, color=CC, min_width=36):
+                print(line)
             return
 
         if mode == StandaloneMode.RELAY:
@@ -6379,14 +6424,19 @@ class StandaloneConfig(DeviceRequiredUnit):
                 wtx_ms = raw[0] | (raw[1] << 8) | (raw[2] << 16) | (raw[3] << 24)
             else:
                 wtx_ms = 2000  # firmware default
-            print(color_string((CG, f"relay config:")))
-            print(f"  wtx  {wtx_ms} ms  (time to request from reader via WTX "
-                  f"while BLE round-trip completes)"
-                  + (color_string((CY, "  [default]")) if not raw or len(raw) < 4 else ""))
-            print(f"  link auto-pair nearest available CU in relay mode")
-            print(f"  role lower MAC = RELAY_CARD (reader side), "
-                  f"higher MAC = RELAY_READER (card side)")
-            print(color_string((CY, "Ultra only. Arm both units with `standalone trigger` or a STANDALONE_TOGGLE button.")))
+            lines = [
+                f"wtx    {wtx_ms} ms  (time to request from reader via WTX "
+                f"while BLE round-trip completes)"
+                + (color_string((CY, "  [default]")) if not raw or len(raw) < 4 else ""),
+                "link   auto-pair nearest available CU in relay mode",
+                "role   lower MAC = RELAY_CARD (reader side), "
+                "higher MAC = RELAY_READER (card side)",
+                "",
+                color_string((CY, "Ultra only. Arm both units with `standalone trigger` "
+                                   "or a STANDALONE_TOGGLE button.")),
+            ]
+            for line in _box("Relay Config", lines, color=CC, min_width=60):
+                print(line)
             return
 
         if mode == StandaloneMode.EMUL_TRACE:
@@ -6418,9 +6468,9 @@ class StandaloneConfig(DeviceRequiredUnit):
             blob = self.cmd.standalone_get_config(mode)
             if blob and len(blob) >= 4:
                 ver, _r0, timeout_ms = struct.unpack('<BBH', blob[:4])
-                print(color_string((CG, "hf14a-tap-sniff config:")))
-                print(f"  version:  {ver}")
-                print(f"  timeout:  {timeout_ms} ms")
+                lines = [f"version:  {ver}", f"timeout:  {timeout_ms} ms"]
+                for line in _box("HF14A Tap-Sniff Config", lines, color=CC, min_width=36):
+                    print(line)
             else:
                 print(color_string((CY,
                     "no persisted config — default timeout 5000 ms")))
@@ -6467,15 +6517,17 @@ class StandaloneConfig(DeviceRequiredUnit):
                 return
             blob = self.cmd.standalone_get_config(mode)
             if blob and len(blob) >= 2:
-                print(color_string((CG, "zigbee config:")))
+                lines = []
                 if blob[0] == 2 and len(blob) >= 6:
                     mask = int.from_bytes(blob[4:6], 'little')
                     chans = ','.join(str(11 + i) for i in range(16) if mask & (1 << i))
-                    print(f"  channels: {chans}")
+                    lines.append(f"channels: {chans}")
                 else:
-                    print(f"  channel:  {blob[1] or 'hop'}")
+                    lines.append(f"channel:  {blob[1] or 'hop'}")
                 if len(blob) >= 4:
-                    print(f"  dwell:    {int.from_bytes(blob[2:4], 'little')} ms")
+                    lines.append(f"dwell:    {int.from_bytes(blob[2:4], 'little')} ms")
+                for line in _box("Zigbee Config", lines, color=CC, min_width=36):
+                    print(line)
             else:
                 print(color_string((CY, "no persisted config — channel 11")))
             return
@@ -6519,9 +6571,12 @@ class StandaloneConfig(DeviceRequiredUnit):
                 start = blob[1] | (blob[2] << 8)
                 count = blob[3]
                 repeat = blob[4] if len(blob) >= 5 else 1
-                print(color_string((CG, "spectrum config:")))
-                print(f"  range:   {start}-{start + count - 1} MHz ({count} point(s))")
-                print(f"  repeat:  {repeat} ED sample(s)/point (peak-hold)")
+                lines = [
+                    f"range:   {start}-{start + count - 1} MHz ({count} point(s))",
+                    f"repeat:  {repeat} ED sample(s)/point (peak-hold)",
+                ]
+                for line in _box("Spectrum Config", lines, color=CC, min_width=36):
+                    print(line)
             else:
                 print(color_string((CY, f"no persisted config — full band {SA_MIN}-{SA_MAX} MHz (84 points), repeat=1")))
             return
@@ -6581,11 +6636,14 @@ class StandaloneConfig(DeviceRequiredUnit):
                 addr = blob[1:6]
                 ch, br = blob[6], blob[7]
                 dw = int.from_bytes(blob[8:10], 'little')
-                print(color_string((CG, "esb config:")))
-                print(f"  address:  {addr.hex() if addr != b'\\x00' * 5 else '(unset)'}")
-                print(f"  channel:  {ch if ch != 0xFF else 'hop'}")
-                print(f"  bitrate:  {'2M' if br else '1M'}")
-                print(f"  dwell:    {dw} ms")
+                lines = [
+                    f"address:  {addr.hex() if addr != b'\\x00' * 5 else '(unset)'}",
+                    f"channel:  {ch if ch != 0xFF else 'hop'}",
+                    f"bitrate:  {'2M' if br else '1M'}",
+                    f"dwell:    {dw} ms",
+                ]
+                for line in _box("ESB Config", lines, color=CC, min_width=36):
+                    print(line)
             else:
                 print(color_string((CY, "no persisted config — address unset (mode will refuse to arm)")))
             return
@@ -6622,12 +6680,16 @@ class StandaloneConfig(DeviceRequiredUnit):
                 return
             blob = self.cmd.standalone_get_config(mode)
             if blob and len(blob) >= 4 and blob[0] == 1:
-                print(color_string((CG, "esb-promisc config:")))
-                print(f"  channel:    {blob[1]}")
-                print(f"  prefix-lo:  {blob[2]}")
-                print(f"  prefix-hi:  {blob[3]}")
-                print(color_string((CY,
-                    "  experimental -- see docs; captures are candidates, not confirmed frames")))
+                lines = [
+                    f"channel:    {blob[1]}",
+                    f"prefix-lo:  {blob[2]}",
+                    f"prefix-hi:  {blob[3]}",
+                    "",
+                    color_string((CY, "experimental -- see docs; captures are "
+                                       "candidates, not confirmed frames")),
+                ]
+                for line in _box("ESB-Promisc Config", lines, color=CC, min_width=40):
+                    print(line)
             else:
                 print(color_string((CY, "no persisted config — channel 5, prefix range 0-7")))
             return
@@ -6661,12 +6723,15 @@ class StandaloneConfig(DeviceRequiredUnit):
                     print(color_string((CR, f"set-config failed: status={resp.status}")))
                 return
             if blob and len(blob) >= 4:
-                print(color_string((CG, "usb-net config:")))
-                print(f"  version:  {ver}")
-                print(f"  port:     {port or 18888}")
-                print(f"  gateway:  {'on' if flags & 1 else 'off'}")
-                print(f"  auto:     {'on' if flags & 2 else 'off'}")
-                print(f"  class:    {cls_names.get((flags >> 2) & 3, '?')}")
+                lines = [
+                    f"version:  {ver}",
+                    f"port:     {port or 18888}",
+                    f"gateway:  {'on' if flags & 1 else 'off'}",
+                    f"auto:     {'on' if flags & 2 else 'off'}",
+                    f"class:    {cls_names.get((flags >> 2) & 3, '?')}",
+                ]
+                for line in _box("USB-Net Config", lines, color=CC, min_width=36):
+                    print(line)
             else:
                 print(color_string((CY, "no persisted config — port 18888, gateway off, auto off, class = build default")))
             return
@@ -6688,12 +6753,18 @@ class StandaloneConfig(DeviceRequiredUnit):
             blob = self.cmd.standalone_get_config(mode)
             if blob and len(blob) >= 2:
                 ver, rb = struct.unpack('<BB', blob[:2])
-                print(color_string((CG, "read-replay config:")))
-                print(f"  version:      {ver}")
-                print(f"  read-blocks:  {'on' if rb else 'off'}")
+                lines = [
+                    f"version:      {ver}",
+                    f"read-blocks:  {'on' if rb else 'off'}",
+                    "",
+                    color_string((CY, "Clones scanned card into the active slot. "
+                                       "Needs --opt-in to arm.")),
+                ]
+                for line in _box("Read-Replay Config", lines, color=CC, min_width=50):
+                    print(line)
             else:
                 print(color_string((CY, "no persisted config — default read-blocks on")))
-            print(color_string((CY, "Clones scanned card into the active slot. Needs --opt-in to arm.")))
+                print(color_string((CY, "Clones scanned card into the active slot. Needs --opt-in to arm.")))
             return
 
         if mode == StandaloneMode.AUTOCLONE:
@@ -6713,12 +6784,18 @@ class StandaloneConfig(DeviceRequiredUnit):
             blob = self.cmd.standalone_get_config(mode)
             if blob and len(blob) >= 2:
                 ver, als = struct.unpack('<BB', blob[:2])
-                print(color_string((CG, "autoclone config:")))
-                print(f"  version:    {ver}")
-                print(f"  also-slot:  {'on' if als else 'off'}")
+                lines = [
+                    f"version:    {ver}",
+                    f"also-slot:  {'on' if als else 'off'}",
+                    "",
+                    color_string((CY, "Scan source (1st action press), present magic card "
+                                       "(2nd action press). Needs --opt-in to arm.")),
+                ]
+                for line in _box("Autoclone Config", lines, color=CC, min_width=50):
+                    print(line)
             else:
                 print(color_string((CY, "no persisted config — default also-slot off")))
-            print(color_string((CY, "Scan source (1st action press), present magic card (2nd action press). Needs --opt-in to arm.")))
+                print(color_string((CY, "Scan source (1st action press), present magic card (2nd action press). Needs --opt-in to arm.")))
             return
 
         if mode == StandaloneMode.DICT_CHECK:
@@ -6740,9 +6817,9 @@ class StandaloneConfig(DeviceRequiredUnit):
             blob = self.cmd.standalone_get_config(mode)
             if blob and len(blob) >= 2:
                 ver, sectors = struct.unpack('<BB', blob[:2])
-                print(color_string((CG, "dict-check config:")))
-                print(f"  version:  {ver}")
-                print(f"  sectors:  {sectors}")
+                lines = [f"version:  {ver}", f"sectors:  {sectors}"]
+                for line in _box("Dict-Check Config", lines, color=CC, min_width=36):
+                    print(line)
             else:
                 print(color_string((CY, "no persisted config — default 16 sectors")))
             return
@@ -6757,11 +6834,15 @@ class StandaloneConfig(DeviceRequiredUnit):
                     '<BBBBH', blob[:6])
                 key = blob[6:12].hex()
                 kname = {0x60: 'A', 0x61: 'B'}.get(typ, f'?(0x{typ:02x})')
-                print(f"  version:  {ver}")
-                print(f"  type:     {kname} (0x{typ:02x})")
-                print(f"  block:    {block}")
-                print(f"  timeout:  {timeout} ms")
-                print(f"  key:      {key}")
+                lines = [
+                    f"version:  {ver}",
+                    f"type:     {kname} (0x{typ:02x})",
+                    f"block:    {block}",
+                    f"timeout:  {timeout} ms",
+                    f"key:      {key}",
+                ]
+                for line in _box("AuthTrace Config", lines, color=CC, min_width=36):
+                    print(line)
             else:
                 print(f"  raw ({len(blob)} bytes): {blob.hex()}")
             return
