@@ -4410,13 +4410,16 @@ class EMVScan(DeviceRequiredUnit):
 
         # EMV tag definitions:
         # 0x5A  = PAN
+        # 0x57  = Track2 Equivalent Data (carries static CVC1 in discretionary
+        #         data; Mastercard M/Chip MSD cards return this in the GPO
+        #         response itself, not a record, so search all_search_data)
         # 0x5F24 = Expiry Date (YYMMDD)
         # 0x5F20 = Cardholder Name
         # 0x5F28 = Issuer Country Code
         # 0x8C / 0x8D = CDOL — skip
         # 0x9F12 = Application Preferred Name
         # 0x50   = Application Label
-        tags = tlv_find(all_record_data, 0x5A, 0x57, 0x5F24, 0x5F20, 0x5F28)
+        tags = tlv_find(all_search_data, 0x5A, 0x57, 0x5F24, 0x5F20, 0x5F28)
         app_tags = tlv_find(all_search_data, 0x9F12, 0x50)
         tags[0x9F12] = app_tags[0x9F12]
         tags[0x50] = app_tags[0x50]
@@ -4479,6 +4482,34 @@ class EMVScan(DeviceRequiredUnit):
                         result.setdefault('Decoded', {})['Expiry'] = exp_fmt
                         expiry_found = True
                         break
+
+        # Service code + discretionary data (Track2, after expiry).
+        # Common layout PVKI(1)+PVV(4)+CVC1(3) is widely documented
+        # (ISO/IEC 7811 vendor refs, MagTek TTL manual) but issuer-defined,
+        # not a fixed standard -- label it as such rather than asserting it.
+        for v in tags.get(0x57, []):
+            t2 = v.hex().upper()
+            sep = t2.find('D')
+            if sep <= 0 or len(t2) < sep + 8:
+                continue
+            svc = t2[sep+5:sep+8]
+            disc = t2[sep+8:].rstrip('F')
+            if svc.isdigit():
+                details.append(f"{'Service Code':<{lw}} {CY}{svc}{C0}")
+                result.setdefault('Decoded', {})['ServiceCode'] = svc
+            if disc:
+                details.append(f"{'Discretionary':<{lw}} {CY}{disc}{C0} (raw)")
+                result.setdefault('Decoded', {})['DiscretionaryData'] = disc
+                if len(disc) >= 8 and disc[:8].isdigit():
+                    pvki, pvv, cvc1 = disc[0], disc[1:5], disc[5:8]
+                    details.append(f"{'PVKI':<{lw}} {CY}{pvki}{C0} (common layout, not guaranteed)")
+                    details.append(f"{'PVV':<{lw}} {CY}{pvv}{C0} (common layout, not guaranteed)")
+                    details.append(f"{'CVC1':<{lw}} {CY}{cvc1}{C0} (common layout, not guaranteed)")
+                    dec = result.setdefault('Decoded', {})
+                    dec['PVKI_guess'] = pvki
+                    dec['PVV_guess'] = pvv
+                    dec['CVC1_guess'] = cvc1
+            break
         if not expiry_found:
             details.append(f"{'Expiry':<{lw}} {CR}not found{C0}")
 
