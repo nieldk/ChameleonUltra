@@ -1445,6 +1445,43 @@ class HWSlotList(DeviceRequiredUnit):
                                     lines.append(
                                         f'    {"CVC1:":36}{color_string((CY, cvc1))}{guess_note}'
                                     )
+                            t1_pan = decoded.get('Track1_PAN')
+                            if t1_pan:
+                                t1_pan_fmt = ' '.join(
+                                    t1_pan[i:i + 4] for i in range(0, len(t1_pan), 4)
+                                )
+                                lines.append(
+                                    f'    {"Track1 PAN:":36}{color_string((CY, t1_pan_fmt))}'
+                                )
+                                if pan_hex and t1_pan != pan_hex:
+                                    lines.append(
+                                        f'    {"":36}{color_string((CR, "differs from Track2 PAN"))}'
+                                    )
+                            t1_name = decoded.get('Track1_Name')
+                            if t1_name:
+                                lines.append(
+                                    f'    {"Track1 Name:":36}{color_string((CY, t1_name))}'
+                                )
+                            t1_exp = decoded.get('Track1_Expiry')
+                            if t1_exp:
+                                lines.append(
+                                    f'    {"Track1 Expiry:":36}{color_string((CY, t1_exp))}'
+                                )
+                                t2_exp = decoded.get('Expiry')
+                                if t2_exp and t1_exp != t2_exp:
+                                    lines.append(
+                                        f'    {"":36}{color_string((CR, f"differs from Track2 expiry ({t2_exp})"))}'
+                                    )
+                            t1_svc = decoded.get('Track1_ServiceCode')
+                            if t1_svc:
+                                lines.append(
+                                    f'    {"Track1 Service Code:":36}{color_string((CY, t1_svc))}'
+                                )
+                                t2_svc = decoded.get('ServiceCode')
+                                if t2_svc and t1_svc != t2_svc:
+                                    lines.append(
+                                        f'    {"":36}{color_string((CR, f"differs from Track2 svc code ({t2_svc})"))}'
+                                    )
                             cardholder = decoded.get('CardholderName')
                             if cardholder:
                                 lines.append(
@@ -1456,6 +1493,58 @@ class HWSlotList(DeviceRequiredUnit):
                             if country:
                                 lines.append(
                                     f'    {"Issuer Country:":36}{color_string((CY, country))}'
+                                )
+                            eff_date = decoded.get('EffectiveDate')
+                            if eff_date:
+                                lines.append(
+                                    f'    {"Effective Date:":36}{color_string((CY, eff_date))}'
+                                )
+                            psn = decoded.get('PANSequenceNumber')
+                            if psn:
+                                lines.append(
+                                    f'    {"PAN Seq No:":36}{color_string((CY, psn))}'
+                                )
+                            aip = decoded.get('AIP')
+                            if aip:
+                                lines.append(
+                                    f'    {"AIP:":36}{color_string((CY, aip))}'
+                                )
+                            afl = decoded.get('AFL')
+                            if afl:
+                                lines.append(
+                                    f'    {"AFL:":36}{color_string((CY, afl))}'
+                                )
+                            auc = decoded.get('ApplicationUsageControl')
+                            if auc:
+                                lines.append(
+                                    f'    {"App Usage Control:":36}{color_string((CY, auc))}'
+                                )
+                            app_ver = decoded.get('ApplicationVersionNumber')
+                            if app_ver:
+                                lines.append(
+                                    f'    {"App Version:":36}{color_string((CY, app_ver))}'
+                                )
+                            iad = decoded.get('IssuerApplicationData')
+                            if iad:
+                                lines.append(
+                                    f'    {"Issuer App Data:":36}{color_string((CY, iad))}'
+                                )
+                            cvm_rules = decoded.get('CVMRules')
+                            if cvm_rules:
+                                for idx, rule in enumerate(cvm_rules, 1):
+                                    lines.append(
+                                        f'    {"CVM Rule " + str(idx) + ":":36}'
+                                        f'{color_string((CY, rule))}'
+                                    )
+                            cdol1 = decoded.get('CDOL1')
+                            if cdol1:
+                                lines.append(
+                                    f'    {"CDOL1:":36}{color_string((CY, ", ".join(cdol1)))}'
+                                )
+                            cdol2 = decoded.get('CDOL2')
+                            if cdol2:
+                                lines.append(
+                                    f'    {"CDOL2:":36}{color_string((CY, ", ".join(cdol2)))}'
                                 )
                     else:
                         lines.append(
@@ -4466,6 +4555,8 @@ def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose
 
     # EMV tag definitions:
     # 0x5A  = PAN
+    # 0x56  = Track1 Equivalent Data (IATA format, ASCII; optional — many
+    #         chip applications omit it, it's a magstripe-fallback field)
     # 0x57  = Track2 Equivalent Data (carries static CVC1 in discretionary
     #         data; Mastercard M/Chip MSD cards return this in the GPO
     #         response itself, not a record, so search all_search_data)
@@ -4475,12 +4566,16 @@ def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose
     # 0x8C / 0x8D = CDOL — skip
     # 0x9F12 = Application Preferred Name
     # 0x50   = Application Label
-    tags = tlv_find(all_search_data, 0x5A, 0x57, 0x5F24, 0x5F20, 0x5F28)
+    tags = tlv_find(
+        all_search_data, 0x5A, 0x56, 0x57, 0x5F24, 0x5F20, 0x5F28,
+        0x82, 0x94, 0x5F34, 0x9F07, 0x9F08, 0x8E, 0x9F10, 0x5F25,
+        0x8C, 0x8D,
+    )
     app_tags = tlv_find(all_search_data, 0x9F12, 0x50)
     tags[0x9F12] = app_tags[0x9F12]
     tags[0x50] = app_tags[0x50]
 
-    lw = 14   # longest label: "Issuer Country"
+    lw = 16   # longest label: "Issuer App Data"
     details = []
 
     # App label — show first unique label only
@@ -4570,6 +4665,50 @@ def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose
     if not expiry_found:
         details.append(f"{'Expiry':<{lw}} {CR}not found{C0}")
 
+    # Track1 Equivalent Data (tag 56): IATA format, ASCII —
+    # "B" PAN "^" Name "^" YYMM ServiceCode Discretionary
+    # Optional field; many chip applications don't return it at all.
+    for v in tags.get(0x56, []):
+        try:
+            t1 = v.decode('ascii', errors='replace').strip().rstrip('?')
+        except Exception:
+            continue
+        if not t1.startswith('B'):
+            continue
+        parts = t1[1:].split('^')
+        if len(parts) < 3:
+            continue
+        t1_pan, t1_name, t1_rest = parts[0].strip(), parts[1].strip(), parts[2]
+        if t1_pan:
+            details.append(f"{'Track1 PAN':<{lw}} {CY}{t1_pan}{C0}")
+            result.setdefault('Decoded', {})['Track1_PAN'] = t1_pan
+            if pan_hex and t1_pan != pan_hex:
+                details.append(
+                    f"{'':<{lw}} {CR}differs from Track2 PAN{C0}"
+                )
+        if t1_name:
+            details.append(f"{'Track1 Name':<{lw}} {CY}{t1_name}{C0}")
+            result.setdefault('Decoded', {})['Track1_Name'] = t1_name
+        if len(t1_rest) >= 7 and t1_rest[:7].isdigit():
+            t1_yymm, t1_svc = t1_rest[0:4], t1_rest[4:7]
+            t1_exp_fmt = f'20{t1_yymm[0:2]}/{t1_yymm[2:4]}'
+            details.append(f"{'Track1 Expiry':<{lw}} {CY}{t1_exp_fmt}{C0}")
+            dec = result.setdefault('Decoded', {})
+            t2_exp = dec.get('Expiry')
+            if t2_exp and t1_exp_fmt != t2_exp:
+                details.append(
+                    f"{'':<{lw}} {CR}differs from Track2 expiry ({t2_exp}){C0}"
+                )
+            dec['Track1_Expiry'] = t1_exp_fmt
+            details.append(f"{'Track1 Svc':<{lw}} {CY}{t1_svc}{C0}")
+            t2_svc = dec.get('ServiceCode')
+            if t2_svc and t1_svc != t2_svc:
+                details.append(
+                    f"{'':<{lw}} {CR}differs from Track2 service code ({t2_svc}){C0}"
+                )
+            dec['Track1_ServiceCode'] = t1_svc
+        break
+
     # Cardholder Name (tag 5F20: printable ASCII only)
     for v in tags[0x5F20]:
         try:
@@ -4606,6 +4745,166 @@ def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose
                 details.append(f"{'App Name':<{lw}} {CY}{name}{C0}")
         except Exception:
             pass
+
+    # Application Effective Date (5F25): 3-byte BCD YYMMDD
+    for v in tags[0x5F25]:
+        if len(v) == 3:
+            d = v.hex().upper()
+            d_fmt = f'20{d[0:2]}/{d[2:4]}/{d[4:6]}'
+            details.append(f"{'Effective Date':<{lw}} {CY}{d_fmt}{C0}")
+            result.setdefault('Decoded', {})['EffectiveDate'] = d_fmt
+
+    # PAN Sequence Number (5F34): 1-byte BCD
+    for v in tags[0x5F34]:
+        if len(v) == 1:
+            psn = v.hex().upper()
+            details.append(f"{'PAN Seq No':<{lw}} {CY}{psn}{C0}")
+            result.setdefault('Decoded', {})['PANSequenceNumber'] = psn
+
+    # Application Interchange Profile (82): 2 bytes.
+    # Byte 1 bits are standard EMV Book 3; byte 2 bits are scheme/
+    # contactless-specific (EMV Contactless Book C-2) and shown raw only.
+    for v in tags[0x82]:
+        if len(v) == 2:
+            b1 = v[0]
+            aip_bits = []
+            if b1 & 0x40:
+                aip_bits.append('SDA supported')
+            if b1 & 0x20:
+                aip_bits.append('DDA supported')
+            if b1 & 0x10:
+                aip_bits.append('Cardholder verification supported')
+            if b1 & 0x08:
+                aip_bits.append('Terminal risk management required')
+            if b1 & 0x04:
+                aip_bits.append('Issuer authentication supported')
+            if b1 & 0x01:
+                aip_bits.append('CDA supported')
+            aip_str = ', '.join(aip_bits) if aip_bits else 'none set'
+            details.append(f"{'AIP':<{lw}} {CY}{v.hex().upper()}{C0}  {aip_str}")
+            result.setdefault('Decoded', {})['AIP'] = v.hex().upper()
+
+    # Application File Locator (94): repeating 4-byte entries
+    # (SFI, start record, end record, offline-auth record count)
+    for v in tags[0x94]:
+        entries = []
+        for i in range(0, len(v) - 3, 4):
+            sfi = v[i] >> 3
+            start, end, oda = v[i + 1], v[i + 2], v[i + 3]
+            entries.append(f'SFI{sfi} rec{start}-{end} (oda:{oda})')
+        if entries:
+            details.append(f"{'AFL':<{lw}} {CY}{', '.join(entries)}{C0}")
+            result.setdefault('Decoded', {})['AFL'] = v.hex().upper()
+
+    # Application Usage Control (9F07): 2-byte bitmask (EMV Book 3 Annex C)
+    for v in tags[0x9F07]:
+        if len(v) == 2:
+            b1, b2 = v[0], v[1]
+            auc_bits = []
+            if b1 & 0x80:
+                auc_bits.append('domestic cash')
+            if b1 & 0x40:
+                auc_bits.append('international cash')
+            if b1 & 0x20:
+                auc_bits.append('domestic goods')
+            if b1 & 0x10:
+                auc_bits.append('international goods')
+            if b1 & 0x08:
+                auc_bits.append('domestic services')
+            if b1 & 0x04:
+                auc_bits.append('international services')
+            if b1 & 0x02:
+                auc_bits.append('ATM')
+            if b1 & 0x01:
+                auc_bits.append('non-ATM terminals')
+            if b2 & 0x80:
+                auc_bits.append('domestic cashback')
+            if b2 & 0x40:
+                auc_bits.append('international cashback')
+            auc_str = ', '.join(auc_bits) if auc_bits else 'none set'
+            details.append(f"{'App Usage Ctrl':<{lw}} {CY}{v.hex().upper()}{C0}  {auc_str}")
+            result.setdefault('Decoded', {})['ApplicationUsageControl'] = v.hex().upper()
+
+    # Application Version Number (9F08): 2 bytes, scheme-defined — raw only
+    for v in tags[0x9F08]:
+        details.append(f"{'App Version':<{lw}} {CY}{v.hex().upper()}{C0}")
+        result.setdefault('Decoded', {})['ApplicationVersionNumber'] = v.hex().upper()
+
+    # Issuer Application Data (9F10): proprietary, issuer-defined — raw only
+    for v in tags[0x9F10]:
+        details.append(f"{'Issuer App Data':<{lw}} {CY}{v.hex().upper()}{C0}")
+        result.setdefault('Decoded', {})['IssuerApplicationData'] = v.hex().upper()
+
+    # CVM List (8E): X amount (4B) + Y amount (4B) + repeating 2-byte rules
+    _cvm_methods = {
+        0x00: 'Fail CVM', 0x01: 'Plaintext PIN (ICC)',
+        0x02: 'Enciphered PIN (online)', 0x03: 'Plaintext PIN (ICC) + signature',
+        0x04: 'Enciphered PIN (ICC)', 0x05: 'Enciphered PIN (ICC) + signature',
+        0x1E: 'Signature', 0x1F: 'No CVM required',
+    }
+    _cvm_conditions = {
+        0x00: 'always', 0x01: 'unattended cash',
+        0x02: 'not unattended/manual cash/cashback',
+        0x03: 'terminal supports CVM', 0x04: 'manual cash',
+        0x05: 'purchase with cashback',
+        0x06: 'app currency, under X', 0x07: 'app currency, over X',
+        0x08: 'app currency, under Y', 0x09: 'app currency, over Y',
+    }
+    for v in tags[0x8E]:
+        if len(v) < 8:
+            continue
+        x_amt = int.from_bytes(v[0:4], 'big')
+        y_amt = int.from_bytes(v[4:8], 'big')
+        details.append(f"{'CVM Amount X':<{lw}} {CY}{x_amt}{C0}")
+        details.append(f"{'CVM Amount Y':<{lw}} {CY}{y_amt}{C0}")
+        rules = []
+        for i in range(8, len(v) - 1, 2):
+            method_byte, cond = v[i], v[i + 1]
+            method = method_byte & 0x3F
+            fallback = ' (or next if fails)' if method_byte & 0x40 else ''
+            m_name = _cvm_methods.get(method, f'method 0x{method:02X}')
+            c_name = _cvm_conditions.get(cond, f'cond 0x{cond:02X}')
+            rules.append(f'{m_name}{fallback} if {c_name}')
+        for idx, rule in enumerate(rules, 1):
+            details.append(f"{'CVM Rule ' + str(idx):<{lw}} {CY}{rule}{C0}")
+        result.setdefault('Decoded', {})['CVMRules'] = rules
+
+    # CDOL1/CDOL2 (8C/8D): Data Object List — tag+length pairs only,
+    # not values (the terminal supplies these at GENERATE AC time)
+    _dol_tag_names = {
+        0x9F02: 'Amount Authorized', 0x9F03: 'Amount Other',
+        0x9F1A: 'Terminal Country Code', 0x95: 'TVR',
+        0x5F2A: 'Transaction Currency Code', 0x9A: 'Transaction Date',
+        0x9C: 'Transaction Type', 0x9F37: 'Unpredictable Number',
+        0x9F35: 'Terminal Type', 0x9F45: 'Data Authentication Code',
+        0x9F4C: 'ICC Dynamic Number', 0x9F34: 'CVM Results',
+        0x9F21: 'Transaction Time', 0x9F7C: 'Customer Exclusive Data',
+    }
+
+    def _decode_dol(data: bytes):
+        entries = []
+        i = 0
+        while i < len(data):
+            tl = 2 if (data[i] & 0x1F) == 0x1F else 1
+            if i + tl > len(data):
+                break
+            tag = int.from_bytes(data[i:i + tl], 'big')
+            i += tl
+            if i >= len(data):
+                break
+            length = data[i]
+            i += 1
+            name = _dol_tag_names.get(tag, f'0x{tag:02X}')
+            entries.append(f'{name}({length}B)')
+        return entries
+
+    for label, tagnum in (('CDOL1', 0x8C), ('CDOL2', 0x8D)):
+        for v in tags[tagnum]:
+            entries = _decode_dol(v)
+            if entries:
+                details.append(f"{label:<{lw}} {CY}{', '.join(entries)}{C0}")
+                result.setdefault('Decoded', {})[label] = entries
+
     return result, details
 
 
