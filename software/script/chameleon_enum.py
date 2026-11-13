@@ -214,6 +214,8 @@ class Command(enum.IntEnum):
     DESFIRE_GET_STATS = 6011
     DESFIRE_READER_AUTH_ISO7816 = 6012
     DESFIRE_READER_GET_VERSION = 6013
+    HF14A_4_STATIC_RESP_INFO = 6014
+    HF14A_4_STATIC_RESP_DUMP = 6015
 
     # Standalone (host-less) modes subsystem
     STANDALONE_GET_MODE         = 7000

@@ -3710,6 +3710,36 @@ static data_frame_tx_t *cmd_processor_hf14a_4_static_resp(uint16_t cmd, uint16_t
 }
 
 /**
+ * HF14A-4 static response table info (read-only).
+ * Reply: flash_count(1) flash_bytes(2 BE) ram_count(1) ram_bytes(2 BE)
+ */
+static data_frame_tx_t *cmd_processor_hf14a_4_static_resp_info(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    uint8_t flash_count = 0, ram_count = 0;
+    uint16_t flash_bytes = 0, ram_bytes = 0;
+    nfc_tag_14a_4_get_static_response_info(&flash_count, &flash_bytes, &ram_count, &ram_bytes);
+    uint8_t resp[6] = {
+        flash_count,
+        (uint8_t)(flash_bytes >> 8), (uint8_t)(flash_bytes & 0xFF),
+        ram_count,
+        (uint8_t)(ram_bytes >> 8), (uint8_t)(ram_bytes & 0xFF),
+    };
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(resp), resp);
+}
+
+/**
+ * HF14A-4 static response table dump (read-only).
+ * Reply: count(1) { cmd_len(1) cmd(n) resp_len(1) resp(m) } * count
+ * Persisted (flash-backed) table only; the RAM-only large-response
+ * overflow is not included (never persisted, so there's nothing stable
+ * to read back after a power cycle anyway).
+ */
+static data_frame_tx_t *cmd_processor_hf14a_4_static_resp_dump(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    static uint8_t buf[NFC_14A_4_STATIC_RESP_DUMP_MAX];
+    uint16_t n = nfc_tag_14a_4_dump_static_responses(buf, sizeof(buf));
+    return data_frame_make(cmd, STATUS_SUCCESS, n, buf);
+}
+
+/**
  * HF14A scan keeping field alive after completion — identical to hf14a_scan
  * but registered without after_hf_reader_run so the field stays on and the
  * card remains in T=CL state for subsequent hf14a_raw APDU calls.
@@ -5003,6 +5033,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_HF14A_4_STATIC_RESP,            NULL,                        cmd_processor_hf14a_4_static_resp,           NULL                   },
     {    DATA_CMD_HF14A_4_READER_APDU,            before_hf_reader_run,        cmd_processor_hf14a_4_reader_apdu,           NULL                   },
     {    DATA_CMD_HF14A_4_EMV_SCAN,               before_hf_reader_run,        cmd_processor_hf14a_4_emv_scan,              NULL                   },
+    {    DATA_CMD_HF14A_4_STATIC_RESP_INFO,       NULL,                        cmd_processor_hf14a_4_static_resp_info,      NULL                   },
+    {    DATA_CMD_HF14A_4_STATIC_RESP_DUMP,       NULL,                        cmd_processor_hf14a_4_static_resp_dump,      NULL                   },
     {    DATA_CMD_DESFIRE_READER_GET_VERSION,     before_hf_reader_run,        cmd_processor_desfire_get_version,           NULL                   },
 #if defined(PROJECT_DESFIRE_EMULATION)
     {    DATA_CMD_DESFIRE_SET_CREDENTIAL,         NULL,                        cmd_processor_desfire_set_credential,        NULL                   },

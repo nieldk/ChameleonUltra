@@ -1359,6 +1359,108 @@ class HWSlotList(DeviceRequiredUnit):
                         )
                     except Exception:
                         pass
+                if hf_tag_type == TagSpecificType.HF14A_4:
+                    try:
+                        info = self.cmd.hf14a_4_get_static_resp_info()
+                    except Exception:
+                        info = None
+                    flash_count = info["flash_count"] if info else 0
+                    flash_bytes = info["flash_bytes"] if info else 0
+                    ram_count = info["ram_count"] if info else 0
+                    ram_bytes = info["ram_bytes"] if info else 0
+                    if flash_count or ram_count:
+                        lines.append(
+                            f'    {"Type:":36}'
+                            f'{color_string((CG, "EMV / ISO14443-4 static responder"))}'
+                        )
+                        max_flash_bytes = (
+                            _HF14A_4_MAX_STATIC_RESPONSES
+                            * _HF14A_4_MAX_STATIC_RESP_LEN
+                        )
+                        flash_str = (
+                            f"{flash_count}/{_HF14A_4_MAX_STATIC_RESPONSES}, "
+                            f"{flash_bytes}/{max_flash_bytes}b used"
+                        )
+                        lines.append(
+                            f'    {"APDU pairs (persisted):":36}'
+                            f'{color_string((CY, flash_str))}'
+                        )
+                        if ram_count:
+                            ram_str = (
+                                f"{ram_count} entries, {ram_bytes}b, "
+                                "not persisted, reload after power cycle"
+                            )
+                            lines.append(
+                                f'    {"Large responses (RAM only):":36}'
+                                f'{color_string((CR, ram_str))}'
+                            )
+                        if flash_count:
+                            try:
+                                stored_pairs = self.cmd.hf14a_4_dump_static_responses()
+                                decoded_result, _ = _emv_decode_pairs(
+                                    stored_pairs, verbose=False
+                                )
+                                decoded = decoded_result.get('Decoded', {})
+                            except Exception:
+                                decoded = {}
+                            scheme = decoded.get('AppLabel')
+                            if scheme:
+                                lines.append(
+                                    f'    {"Scheme:":36}{color_string((CY, scheme))}'
+                                )
+                            pan_hex = decoded.get('PAN')
+                            if pan_hex:
+                                pan_fmt = ' '.join(
+                                    pan_hex[i:i + 4] for i in range(0, len(pan_hex), 4)
+                                )
+                                lines.append(
+                                    f'    {"PAN:":36}{color_string((CY, pan_fmt))}'
+                                )
+                            expiry = decoded.get('Expiry')
+                            if expiry:
+                                lines.append(
+                                    f'    {"Expiry:":36}{color_string((CY, expiry))}'
+                                )
+                            svc = decoded.get('ServiceCode')
+                            if svc:
+                                lines.append(
+                                    f'    {"Service Code:":36}{color_string((CY, svc))}'
+                                )
+                            pvki = decoded.get('PVKI_guess')
+                            pvv = decoded.get('PVV_guess')
+                            cvc1 = decoded.get('CVC1_guess')
+                            if pvki or pvv or cvc1:
+                                guess_note = color_string(
+                                    (C0, " (common layout, not guaranteed)")
+                                )
+                                if pvki:
+                                    lines.append(
+                                        f'    {"PVKI:":36}{color_string((CY, pvki))}{guess_note}'
+                                    )
+                                if pvv:
+                                    lines.append(
+                                        f'    {"PVV:":36}{color_string((CY, pvv))}{guess_note}'
+                                    )
+                                if cvc1:
+                                    lines.append(
+                                        f'    {"CVC1:":36}{color_string((CY, cvc1))}{guess_note}'
+                                    )
+                            cardholder = decoded.get('CardholderName')
+                            if cardholder:
+                                lines.append(
+                                    f'    {"Cardholder:":36}{color_string((CY, cardholder))}'
+                                )
+                            country = decoded.get('IssuerCountryName') or decoded.get(
+                                'IssuerCountry'
+                            )
+                            if country:
+                                lines.append(
+                                    f'    {"Issuer Country:":36}{color_string((CY, country))}'
+                                )
+                    else:
+                        lines.append(
+                            f'    {"Static responses:":36}{color_string((C0, "none loaded"))}'
+                        )
 
             # LF
             field_length = maxnamelength + slotnames[fwslot]["lf"]["metalen"] + 1
@@ -4147,6 +4249,366 @@ def _emv_decode_apdu(data: bytes) -> str:
     return f'CLA={cla:02x} INS={ins:02x} P1={p1:02x} P2={p2:02x}'
 
 
+# Mirrors firmware NFC_14A_4_MAX_STATIC_RESPONSES / _MAX_STATIC_RESP_LEN
+# (nfc_14a_4.h). Used only for the capacity display in HWSlotList; neither
+# value is sent to the device.
+_HF14A_4_MAX_STATIC_RESPONSES = 12
+_HF14A_4_MAX_STATIC_RESP_LEN = 253
+
+
+def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose=True):
+    """
+    Build a PM3-compatible result dict and a human-readable field summary
+    from an ordered list of (cmd, resp) APDU pairs: SELECT PPSE, SELECT AID,
+    GPO, then READ RECORDs. Shared by `emv scan` (live capture) and
+    `hw slot list` (stored static-response table) -- same decode, two
+    callers.
+
+    Returns (result, details): result is the PM3-JSON-shaped dict (also
+    carries result['Decoded'] with the extracted fields), details is a
+    list of formatted lines for a standalone "Card Details" box.
+    """
+    result = {}
+    result['File'] = {'Created': 'chameleon emv scan'}
+    result['Card'] = {'Contactless': {
+        'Communication': 'iso14443-4a',
+        'UID':  uid_str, 'ATQA': atqa_str,
+        'SAK':  f'{sak:02X}', 'ATS': ats_str,
+    }}
+
+    def tlv_to_dict(data):
+        if not data:
+            return {}
+        i = 0
+        tl = 2 if (data[i] & 0x1F) == 0x1F else 1
+        tag_hex = data[:tl].hex().upper()
+        i += tl
+        if i >= len(data):
+            return {}
+        if data[i] & 0x80:
+            nb = data[i] & 0x7F
+            i += 1
+            vlen = int.from_bytes(data[i:i+nb], 'big')
+            i += nb
+        else:
+            vlen = data[i]
+            i += 1
+        val = data[i:i+vlen]
+        return {'tag': tag_hex, 'length': f'{vlen:02X}',
+                'value': ' '.join(f'{b:02X}' for b in val)}
+
+    def find_tag(data, tag):
+        results = []
+        i = 0
+        while i < len(data) - 1:
+            tl = 2 if (data[i] & 0x1F) == 0x1F else 1
+            if i + tl > len(data):
+                break
+            cur = data[i:i+tl]
+            i += tl
+            if i >= len(data):
+                break
+            if data[i] & 0x80:
+                nb = data[i] & 0x7F
+                i += 1
+                vlen = int.from_bytes(data[i:i+nb], 'big')
+                i += nb
+            else:
+                vlen = data[i]
+                i += 1
+            val = data[i:i+vlen]
+            i += vlen
+            if int.from_bytes(cur, 'big') == tag:
+                results.append(val)
+            elif cur[0] & 0x20:
+                results.extend(find_tag(val, tag))
+        return results
+
+    # PPSE
+    if pairs:
+        ppse_cmd, ppse_resp = pairs[0]
+        ppse_body = ppse_resp[:-2] if len(ppse_resp) >= 2 else ppse_resp
+        if verbose:
+            print(f'\n {CG}PPSE OK ({len(ppse_resp)}b){C0}')
+        result['PPSE'] = {
+            'AID': '32 50 41 59 2E 53 59 53 2E 44 44 46 30 31',
+            'FCITemplate': tlv_to_dict(ppse_body),
+        }
+
+    if len(pairs) >= 2:
+        sel_cmd, sel_resp = pairs[1]
+        sel_body = sel_resp[:-2] if len(sel_resp) >= 2 else sel_resp
+        aid_bytes = sel_cmd[5:-1] if len(sel_cmd) > 6 else b''
+        aid_str = ' '.join(f'{b:02X}' for b in aid_bytes)
+        if verbose:
+            print(f' {CG}SELECT AID OK ({len(sel_resp)}b){C0}')
+        result['Application'] = {'AID': aid_str,
+                                 'FCITemplate': tlv_to_dict(sel_body)}
+
+    if len(pairs) >= 3:
+        gpo_cmd, gpo_resp = pairs[2]
+        gpo_body = gpo_resp[:-2] if len(gpo_resp) >= 2 else gpo_resp
+        if verbose:
+            print(f' {CG}GPO OK ({len(gpo_resp)}b){C0}')
+        result['Application']['GPO'] = tlv_to_dict(gpo_body)
+        records = []
+        for cb, rb in pairs[3:]:
+            sfi_n = (cb[3] >> 3) & 0x1F if len(cb) >= 4 else 0
+            rec_n = cb[2] if len(cb) >= 3 else 0
+            r_body = rb[:-2] if len(rb) >= 2 else rb
+            if verbose:
+                print(f' {CG}READ RECORD SFI={sfi_n} rec={rec_n} OK ({len(rb)}b){C0}')
+            records.append({'SFI': f'{sfi_n:02X}', 'RecordNum': f'{rec_n:02X}',
+                            'Offline': '01', 'Data': tlv_to_dict(r_body)})
+        result['Application']['Records'] = records
+
+    # ---- Decode and display key card fields from EMV records --------
+    def _pan_luhn(pan: str) -> bool:
+        digits = [int(c) for c in pan if c.isdigit()]
+        digits.reverse()
+        total = sum(d if i % 2 == 0 else (d * 2 - 9 if d * 2 > 9 else d * 2)
+                    for i, d in enumerate(digits))
+        return total % 10 == 0
+
+    def _find_tag_all(data: bytes, *tags: int):
+        """Recursively find all values for any of the given tags."""
+        results = {}
+        for t in tags:
+            results[t] = []
+        i = 0
+        while i < len(data) - 1:
+            tl = 2 if (data[i] & 0x1F) == 0x1F else 1
+            if i + tl > len(data):
+                break
+            cur_tag = int.from_bytes(data[i:i+tl], 'big')
+            i += tl
+            if i >= len(data):
+                break
+            if data[i] & 0x80:
+                nb = data[i] & 0x7F
+                i += 1
+                vlen = int.from_bytes(data[i:i+nb], 'big')
+                i += nb
+            else:
+                vlen = data[i]
+                i += 1
+            val = data[i:i+vlen]
+            i += vlen
+            if cur_tag in results:
+                results[cur_tag].append(val)
+            # recurse into constructed TLV
+            if data[i - vlen - (1 if vlen < 128 else 2)] & 0x20 if False else (data[i - vlen - 1] & 0x20 if vlen < 128 else False):
+                sub = _find_tag_all(val, *tags)
+                for t in tags:
+                    results[t].extend(sub[t])
+        return results
+
+    # Simpler recursive TLV walker
+    def tlv_find(data: bytes, *want_tags: int) -> dict:
+        found = {t: [] for t in want_tags}
+        i = 0
+        while i < len(data):
+            if i + 1 >= len(data):
+                break
+            b0 = data[i]
+            tl = 2 if (b0 & 0x1F) == 0x1F else 1
+            if i + tl > len(data):
+                break
+            tag = int.from_bytes(data[i:i+tl], 'big')
+            i += tl
+            if i >= len(data):
+                break
+            constructed = bool(b0 & 0x20)
+            if data[i] & 0x80:
+                nb = data[i] & 0x7F
+                i += 1
+                if i + nb > len(data):
+                    break
+                vlen = int.from_bytes(data[i:i+nb], 'big')
+                i += nb
+            else:
+                vlen = data[i]
+                i += 1
+            # For truncated TLV: read whatever bytes are available and
+            # continue parsing — don't break, so we can find tags inside
+            # truncated constructed TLV (e.g. 6F/A5 larger than received data)
+            truncated = (i + vlen > len(data))
+            val = data[i:i+vlen] if not truncated else data[i:]
+            i = (i + vlen) if not truncated else len(data)
+            if tag in found and not truncated:
+                found[tag].append(val)
+            if constructed:
+                sub = tlv_find(val, *want_tags)
+                for t in want_tags:
+                    found[t].extend(sub[t])
+        return found
+
+    # Collect all response bodies for tag search.
+    # tlv_to_dict stores the VALUE (content) of the outermost tag —
+    # so rec['Data']['value'] is already the unwrapped inner bytes.
+    all_record_data = b''
+    for rec in result.get('Application', {}).get('Records', []):
+        raw_hex = rec.get('Data', {}).get('value', '')
+        try:
+            all_record_data += bytes.fromhex(raw_hex.replace(' ', ''))
+        except Exception:
+            pass
+    # Also include GPO and SELECT AID FCI values for label/name tags
+    extra_data = b''
+    for key in ('GPO', 'FCITemplate'):
+        v = result.get('Application', {}).get(key, {})
+        if isinstance(v, dict):
+            try:
+                extra_data += bytes.fromhex(v.get('value', '').replace(' ', ''))
+            except Exception:
+                pass
+    all_search_data = all_record_data + extra_data
+
+    # EMV tag definitions:
+    # 0x5A  = PAN
+    # 0x57  = Track2 Equivalent Data (carries static CVC1 in discretionary
+    #         data; Mastercard M/Chip MSD cards return this in the GPO
+    #         response itself, not a record, so search all_search_data)
+    # 0x5F24 = Expiry Date (YYMMDD)
+    # 0x5F20 = Cardholder Name
+    # 0x5F28 = Issuer Country Code
+    # 0x8C / 0x8D = CDOL — skip
+    # 0x9F12 = Application Preferred Name
+    # 0x50   = Application Label
+    tags = tlv_find(all_search_data, 0x5A, 0x57, 0x5F24, 0x5F20, 0x5F28)
+    app_tags = tlv_find(all_search_data, 0x9F12, 0x50)
+    tags[0x9F12] = app_tags[0x9F12]
+    tags[0x50] = app_tags[0x50]
+
+    lw = 14   # longest label: "Issuer Country"
+    details = []
+
+    # App label — show first unique label only
+    seen_labels = set()
+    for v in tags.get(0x50, []) + app_tags.get(0x50, []):
+        try:
+            lbl = v.decode('ascii', errors='replace').strip()
+            if lbl and lbl not in seen_labels:
+                seen_labels.add(lbl)
+                details.append(f"{'App Label':<{lw}} {CY}{lbl}{C0}")
+                result.setdefault('Decoded', {}).setdefault('AppLabel', lbl)
+        except Exception:
+            pass
+
+    # PAN — prefer Track2 D-separator (authoritative, no padding ambiguity)
+    pan_hex = None
+    for v in tags.get(0x57, []):
+        t2 = v.hex().upper()
+        sep = t2.find('D')
+        if sep > 0:
+            pan_hex = t2[:sep]
+            break
+    if not pan_hex:
+        for v in tags.get(0x5A, []):
+            raw = v.hex().upper()
+            pan_hex = raw.rstrip('F') if raw.endswith('F') else raw
+            break
+    if pan_hex:
+        pan_fmt = ' '.join(pan_hex[i:i+4] for i in range(0, len(pan_hex), 4))
+        luhn_ok = _pan_luhn(pan_hex)
+        luhn_str = f'{CG}✓{C0}' if luhn_ok else f'{CR}✗{C0}'
+        details.append(f"{'PAN':<{lw}} {CY}{pan_fmt}{C0}  Luhn: {luhn_str}")
+        result.setdefault('Decoded', {})['PAN'] = pan_hex
+    else:
+        details.append(f"{'PAN':<{lw}} {CR}not found{C0}")
+
+    # Expiry — 5F24 is 3 bytes BCD: YYMMDD
+    expiry_found = False
+    for v in tags.get(0x5F24, []):
+        if len(v) == 3:
+            exp = v.hex().upper()
+            exp_fmt = f'20{exp[0:2]}/{exp[2:4]}'
+            details.append(f"{'Expiry':<{lw}} {CY}{exp_fmt}{C0}")
+            result.setdefault('Decoded', {})['Expiry'] = exp_fmt
+            expiry_found = True
+    # Fallback: extract expiry from Track2 after D separator (YYMM)
+    if not expiry_found and pan_hex:
+        for v in tags.get(0x57, []):
+            t2 = v.hex().upper()
+            sep = t2.find('D')
+            if sep > 0 and len(t2) >= sep + 5:
+                yymm = t2[sep+1:sep+5]
+                if yymm.isdigit():
+                    exp_fmt = f'20{yymm[0:2]}/{yymm[2:4]}'
+                    details.append(f"{'Expiry':<{lw}} {CY}{exp_fmt}{C0} (from Track2)")
+                    result.setdefault('Decoded', {})['Expiry'] = exp_fmt
+                    expiry_found = True
+                    break
+
+    # Service code + discretionary data (Track2, after expiry).
+    # Common layout PVKI(1)+PVV(4)+CVC1(3) is widely documented
+    # (ISO/IEC 7811 vendor refs, MagTek TTL manual) but issuer-defined,
+    # not a fixed standard -- label it as such rather than asserting it.
+    for v in tags.get(0x57, []):
+        t2 = v.hex().upper()
+        sep = t2.find('D')
+        if sep <= 0 or len(t2) < sep + 8:
+            continue
+        svc = t2[sep+5:sep+8]
+        disc = t2[sep+8:].rstrip('F')
+        if svc.isdigit():
+            details.append(f"{'Service Code':<{lw}} {CY}{svc}{C0}")
+            result.setdefault('Decoded', {})['ServiceCode'] = svc
+        if disc:
+            details.append(f"{'Discretionary':<{lw}} {CY}{disc}{C0} (raw)")
+            result.setdefault('Decoded', {})['DiscretionaryData'] = disc
+            if len(disc) >= 8 and disc[:8].isdigit():
+                pvki, pvv, cvc1 = disc[0], disc[1:5], disc[5:8]
+                details.append(f"{'PVKI':<{lw}} {CY}{pvki}{C0} (common layout, not guaranteed)")
+                details.append(f"{'PVV':<{lw}} {CY}{pvv}{C0} (common layout, not guaranteed)")
+                details.append(f"{'CVC1':<{lw}} {CY}{cvc1}{C0} (common layout, not guaranteed)")
+                dec = result.setdefault('Decoded', {})
+                dec['PVKI_guess'] = pvki
+                dec['PVV_guess'] = pvv
+                dec['CVC1_guess'] = cvc1
+        break
+    if not expiry_found:
+        details.append(f"{'Expiry':<{lw}} {CR}not found{C0}")
+
+    # Cardholder Name (tag 5F20: printable ASCII only)
+    for v in tags[0x5F20]:
+        try:
+            if v and all(0x20 <= b <= 0x7E for b in v):
+                name = v.decode('ascii').strip()
+                if name:
+                    details.append(f"{'Cardholder':<{lw}} {CY}{name}{C0}")
+                    result.setdefault('Decoded', {})['CardholderName'] = name
+        except Exception:
+            pass
+
+    # Issuer Country Code (ISO 3166-1 numeric, BCD) -> add the country name
+    for v in tags[0x5F28]:
+        country = v.hex().upper().lstrip('0') or '0'
+        try:
+            # EMV 5F28 is pure ISO 3166-1 numeric. Use the ISO table only --
+            # not the FDX-B code namer, which labels 900+ as manufacturer/
+            # test-transponder codes that never occur on an EMV card.
+            name = ISO3166_NUMERIC.get(int(country))
+        except ValueError:
+            name = None
+        shown = f'{country} ({name})' if name else country
+        details.append(f"{'Issuer Country':<{lw}} {CY}{shown}{C0}")
+        dec = result.setdefault('Decoded', {})
+        dec['IssuerCountry'] = country
+        if name:
+            dec['IssuerCountryName'] = name
+
+    # Application Preferred Name (9F12) — only if different from label
+    for v in tags[0x9F12]:
+        try:
+            name = v.decode('ascii', errors='replace').strip()
+            if name and name not in seen_labels:
+                details.append(f"{'App Name':<{lw}} {CY}{name}{C0}")
+        except Exception:
+            pass
+    return result, details
+
+
 @emv.command('scan')
 class EMVScan(DeviceRequiredUnit):
     """
@@ -4234,339 +4696,10 @@ class EMVScan(DeviceRequiredUnit):
         if not pairs:
             print(f' {CR}No APDU responses captured{C0}')
             return
-        result = {}
-        result['File'] = {'Created': 'chameleon emv scan'}
-        result['Card'] = {'Contactless': {
-            'Communication': 'iso14443-4a',
-            'UID':  uid_str, 'ATQA': atqa_str,
-            'SAK':  f'{sak:02X}', 'ATS': ats_str,
-        }}
-
-        def tlv_to_dict(data):
-            if not data:
-                return {}
-            i = 0
-            tl = 2 if (data[i] & 0x1F) == 0x1F else 1
-            tag_hex = data[:tl].hex().upper()
-            i += tl
-            if i >= len(data):
-                return {}
-            if data[i] & 0x80:
-                nb = data[i] & 0x7F
-                i += 1
-                vlen = int.from_bytes(data[i:i+nb], 'big')
-                i += nb
-            else:
-                vlen = data[i]
-                i += 1
-            val = data[i:i+vlen]
-            return {'tag': tag_hex, 'length': f'{vlen:02X}',
-                    'value': ' '.join(f'{b:02X}' for b in val)}
-
-        def find_tag(data, tag):
-            results = []
-            i = 0
-            while i < len(data) - 1:
-                tl = 2 if (data[i] & 0x1F) == 0x1F else 1
-                if i + tl > len(data):
-                    break
-                cur = data[i:i+tl]
-                i += tl
-                if i >= len(data):
-                    break
-                if data[i] & 0x80:
-                    nb = data[i] & 0x7F
-                    i += 1
-                    vlen = int.from_bytes(data[i:i+nb], 'big')
-                    i += nb
-                else:
-                    vlen = data[i]
-                    i += 1
-                val = data[i:i+vlen]
-                i += vlen
-                if int.from_bytes(cur, 'big') == tag:
-                    results.append(val)
-                elif cur[0] & 0x20:
-                    results.extend(find_tag(val, tag))
-            return results
-
-        # PPSE
-        if pairs:
-            ppse_cmd, ppse_resp = pairs[0]
-            ppse_body = ppse_resp[:-2] if len(ppse_resp) >= 2 else ppse_resp
-            print(f'\n {CG}PPSE OK ({len(ppse_resp)}b){C0}')
-            result['PPSE'] = {
-                'AID': '32 50 41 59 2E 53 59 53 2E 44 44 46 30 31',
-                'FCITemplate': tlv_to_dict(ppse_body),
-            }
-
-        if len(pairs) >= 2:
-            sel_cmd, sel_resp = pairs[1]
-            sel_body = sel_resp[:-2] if len(sel_resp) >= 2 else sel_resp
-            aid_bytes = sel_cmd[5:-1] if len(sel_cmd) > 6 else b''
-            aid_str = ' '.join(f'{b:02X}' for b in aid_bytes)
-            print(f' {CG}SELECT AID OK ({len(sel_resp)}b){C0}')
-            result['Application'] = {'AID': aid_str,
-                                     'FCITemplate': tlv_to_dict(sel_body)}
-
-        if len(pairs) >= 3:
-            gpo_cmd, gpo_resp = pairs[2]
-            gpo_body = gpo_resp[:-2] if len(gpo_resp) >= 2 else gpo_resp
-            print(f' {CG}GPO OK ({len(gpo_resp)}b){C0}')
-            result['Application']['GPO'] = tlv_to_dict(gpo_body)
-            records = []
-            for cb, rb in pairs[3:]:
-                sfi_n = (cb[3] >> 3) & 0x1F if len(cb) >= 4 else 0
-                rec_n = cb[2] if len(cb) >= 3 else 0
-                r_body = rb[:-2] if len(rb) >= 2 else rb
-                print(f' {CG}READ RECORD SFI={sfi_n} rec={rec_n} OK ({len(rb)}b){C0}')
-                records.append({'SFI': f'{sfi_n:02X}', 'RecordNum': f'{rec_n:02X}',
-                                'Offline': '01', 'Data': tlv_to_dict(r_body)})
-            result['Application']['Records'] = records
-
-        # ---- Decode and display key card fields from EMV records --------
-        def _pan_luhn(pan: str) -> bool:
-            digits = [int(c) for c in pan if c.isdigit()]
-            digits.reverse()
-            total = sum(d if i % 2 == 0 else (d * 2 - 9 if d * 2 > 9 else d * 2)
-                        for i, d in enumerate(digits))
-            return total % 10 == 0
-
-        def _find_tag_all(data: bytes, *tags: int):
-            """Recursively find all values for any of the given tags."""
-            results = {}
-            for t in tags:
-                results[t] = []
-            i = 0
-            while i < len(data) - 1:
-                tl = 2 if (data[i] & 0x1F) == 0x1F else 1
-                if i + tl > len(data):
-                    break
-                cur_tag = int.from_bytes(data[i:i+tl], 'big')
-                i += tl
-                if i >= len(data):
-                    break
-                if data[i] & 0x80:
-                    nb = data[i] & 0x7F
-                    i += 1
-                    vlen = int.from_bytes(data[i:i+nb], 'big')
-                    i += nb
-                else:
-                    vlen = data[i]
-                    i += 1
-                val = data[i:i+vlen]
-                i += vlen
-                if cur_tag in results:
-                    results[cur_tag].append(val)
-                # recurse into constructed TLV
-                if data[i - vlen - (1 if vlen < 128 else 2)] & 0x20 if False else (data[i - vlen - 1] & 0x20 if vlen < 128 else False):
-                    sub = _find_tag_all(val, *tags)
-                    for t in tags:
-                        results[t].extend(sub[t])
-            return results
-
-        # Simpler recursive TLV walker
-        def tlv_find(data: bytes, *want_tags: int) -> dict:
-            found = {t: [] for t in want_tags}
-            i = 0
-            while i < len(data):
-                if i + 1 >= len(data):
-                    break
-                b0 = data[i]
-                tl = 2 if (b0 & 0x1F) == 0x1F else 1
-                if i + tl > len(data):
-                    break
-                tag = int.from_bytes(data[i:i+tl], 'big')
-                i += tl
-                if i >= len(data):
-                    break
-                constructed = bool(b0 & 0x20)
-                if data[i] & 0x80:
-                    nb = data[i] & 0x7F
-                    i += 1
-                    if i + nb > len(data):
-                        break
-                    vlen = int.from_bytes(data[i:i+nb], 'big')
-                    i += nb
-                else:
-                    vlen = data[i]
-                    i += 1
-                # For truncated TLV: read whatever bytes are available and
-                # continue parsing — don't break, so we can find tags inside
-                # truncated constructed TLV (e.g. 6F/A5 larger than received data)
-                truncated = (i + vlen > len(data))
-                val = data[i:i+vlen] if not truncated else data[i:]
-                i = (i + vlen) if not truncated else len(data)
-                if tag in found and not truncated:
-                    found[tag].append(val)
-                if constructed:
-                    sub = tlv_find(val, *want_tags)
-                    for t in want_tags:
-                        found[t].extend(sub[t])
-            return found
-
-        # Collect all response bodies for tag search.
-        # tlv_to_dict stores the VALUE (content) of the outermost tag —
-        # so rec['Data']['value'] is already the unwrapped inner bytes.
-        all_record_data = b''
-        for rec in result.get('Application', {}).get('Records', []):
-            raw_hex = rec.get('Data', {}).get('value', '')
-            try:
-                all_record_data += bytes.fromhex(raw_hex.replace(' ', ''))
-            except Exception:
-                pass
-        # Also include GPO and SELECT AID FCI values for label/name tags
-        extra_data = b''
-        for key in ('GPO', 'FCITemplate'):
-            v = result.get('Application', {}).get(key, {})
-            if isinstance(v, dict):
-                try:
-                    extra_data += bytes.fromhex(v.get('value', '').replace(' ', ''))
-                except Exception:
-                    pass
-        all_search_data = all_record_data + extra_data
-
-        # EMV tag definitions:
-        # 0x5A  = PAN
-        # 0x57  = Track2 Equivalent Data (carries static CVC1 in discretionary
-        #         data; Mastercard M/Chip MSD cards return this in the GPO
-        #         response itself, not a record, so search all_search_data)
-        # 0x5F24 = Expiry Date (YYMMDD)
-        # 0x5F20 = Cardholder Name
-        # 0x5F28 = Issuer Country Code
-        # 0x8C / 0x8D = CDOL — skip
-        # 0x9F12 = Application Preferred Name
-        # 0x50   = Application Label
-        tags = tlv_find(all_search_data, 0x5A, 0x57, 0x5F24, 0x5F20, 0x5F28)
-        app_tags = tlv_find(all_search_data, 0x9F12, 0x50)
-        tags[0x9F12] = app_tags[0x9F12]
-        tags[0x50] = app_tags[0x50]
-
-        lw = 14   # longest label: "Issuer Country"
-        details = []
-
-        # App label — show first unique label only
-        seen_labels = set()
-        for v in tags.get(0x50, []) + app_tags.get(0x50, []):
-            try:
-                lbl = v.decode('ascii', errors='replace').strip()
-                if lbl and lbl not in seen_labels:
-                    seen_labels.add(lbl)
-                    details.append(f"{'App Label':<{lw}} {CY}{lbl}{C0}")
-            except Exception:
-                pass
-
-        # PAN — prefer Track2 D-separator (authoritative, no padding ambiguity)
-        pan_hex = None
-        for v in tags.get(0x57, []):
-            t2 = v.hex().upper()
-            sep = t2.find('D')
-            if sep > 0:
-                pan_hex = t2[:sep]
-                break
-        if not pan_hex:
-            for v in tags.get(0x5A, []):
-                raw = v.hex().upper()
-                pan_hex = raw.rstrip('F') if raw.endswith('F') else raw
-                break
-        if pan_hex:
-            pan_fmt = ' '.join(pan_hex[i:i+4] for i in range(0, len(pan_hex), 4))
-            luhn_ok = _pan_luhn(pan_hex)
-            luhn_str = f'{CG}✓{C0}' if luhn_ok else f'{CR}✗{C0}'
-            details.append(f"{'PAN':<{lw}} {CY}{pan_fmt}{C0}  Luhn: {luhn_str}")
-            result.setdefault('Decoded', {})['PAN'] = pan_hex
-        else:
-            details.append(f"{'PAN':<{lw}} {CR}not found{C0}")
-
-        # Expiry — 5F24 is 3 bytes BCD: YYMMDD
-        expiry_found = False
-        for v in tags.get(0x5F24, []):
-            if len(v) == 3:
-                exp = v.hex().upper()
-                exp_fmt = f'20{exp[0:2]}/{exp[2:4]}'
-                details.append(f"{'Expiry':<{lw}} {CY}{exp_fmt}{C0}")
-                result.setdefault('Decoded', {})['Expiry'] = exp_fmt
-                expiry_found = True
-        # Fallback: extract expiry from Track2 after D separator (YYMM)
-        if not expiry_found and pan_hex:
-            for v in tags.get(0x57, []):
-                t2 = v.hex().upper()
-                sep = t2.find('D')
-                if sep > 0 and len(t2) >= sep + 5:
-                    yymm = t2[sep+1:sep+5]
-                    if yymm.isdigit():
-                        exp_fmt = f'20{yymm[0:2]}/{yymm[2:4]}'
-                        details.append(f"{'Expiry':<{lw}} {CY}{exp_fmt}{C0} (from Track2)")
-                        result.setdefault('Decoded', {})['Expiry'] = exp_fmt
-                        expiry_found = True
-                        break
-
-        # Service code + discretionary data (Track2, after expiry).
-        # Common layout PVKI(1)+PVV(4)+CVC1(3) is widely documented
-        # (ISO/IEC 7811 vendor refs, MagTek TTL manual) but issuer-defined,
-        # not a fixed standard -- label it as such rather than asserting it.
-        for v in tags.get(0x57, []):
-            t2 = v.hex().upper()
-            sep = t2.find('D')
-            if sep <= 0 or len(t2) < sep + 8:
-                continue
-            svc = t2[sep+5:sep+8]
-            disc = t2[sep+8:].rstrip('F')
-            if svc.isdigit():
-                details.append(f"{'Service Code':<{lw}} {CY}{svc}{C0}")
-                result.setdefault('Decoded', {})['ServiceCode'] = svc
-            if disc:
-                details.append(f"{'Discretionary':<{lw}} {CY}{disc}{C0} (raw)")
-                result.setdefault('Decoded', {})['DiscretionaryData'] = disc
-                if len(disc) >= 8 and disc[:8].isdigit():
-                    pvki, pvv, cvc1 = disc[0], disc[1:5], disc[5:8]
-                    details.append(f"{'PVKI':<{lw}} {CY}{pvki}{C0} (common layout, not guaranteed)")
-                    details.append(f"{'PVV':<{lw}} {CY}{pvv}{C0} (common layout, not guaranteed)")
-                    details.append(f"{'CVC1':<{lw}} {CY}{cvc1}{C0} (common layout, not guaranteed)")
-                    dec = result.setdefault('Decoded', {})
-                    dec['PVKI_guess'] = pvki
-                    dec['PVV_guess'] = pvv
-                    dec['CVC1_guess'] = cvc1
-            break
-        if not expiry_found:
-            details.append(f"{'Expiry':<{lw}} {CR}not found{C0}")
-
-        # Cardholder Name (tag 5F20: printable ASCII only)
-        for v in tags[0x5F20]:
-            try:
-                if v and all(0x20 <= b <= 0x7E for b in v):
-                    name = v.decode('ascii').strip()
-                    if name:
-                        details.append(f"{'Cardholder':<{lw}} {CY}{name}{C0}")
-                        result.setdefault('Decoded', {})['CardholderName'] = name
-            except Exception:
-                pass
-
-        # Issuer Country Code (ISO 3166-1 numeric, BCD) -> add the country name
-        for v in tags[0x5F28]:
-            country = v.hex().upper().lstrip('0') or '0'
-            try:
-                # EMV 5F28 is pure ISO 3166-1 numeric. Use the ISO table only --
-                # not the FDX-B code namer, which labels 900+ as manufacturer/
-                # test-transponder codes that never occur on an EMV card.
-                name = ISO3166_NUMERIC.get(int(country))
-            except ValueError:
-                name = None
-            shown = f'{country} ({name})' if name else country
-            details.append(f"{'Issuer Country':<{lw}} {CY}{shown}{C0}")
-            dec = result.setdefault('Decoded', {})
-            dec['IssuerCountry'] = country
-            if name:
-                dec['IssuerCountryName'] = name
-
-        # Application Preferred Name (9F12) — only if different from label
-        for v in tags[0x9F12]:
-            try:
-                name = v.decode('ascii', errors='replace').strip()
-                if name and name not in seen_labels:
-                    details.append(f"{'App Name':<{lw}} {CY}{name}{C0}")
-            except Exception:
-                pass
+        result, details = _emv_decode_pairs(
+            pairs, uid_str=uid_str, atqa_str=atqa_str, sak=sak, ats_str=ats_str,
+            verbose=True,
+        )
 
         print('')
         for line in _box('Card Details', details, color=CG, min_width=38):

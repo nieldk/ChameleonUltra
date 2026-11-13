@@ -448,6 +448,49 @@ class ChameleonCMD:
         """Clear all static APDU responses from the active HF14A_4 slot."""
         return self.device.send_cmd_sync(Command.HF14A_4_STATIC_RESP, b'\x00')
 
+    def hf14a_4_get_static_resp_info(self):
+        """
+        Read back the active slot's static response table size, without
+        reading the APDU contents themselves.
+
+        Returns:
+            dict with flash_count/flash_bytes (persisted table) and
+            ram_count/ram_bytes (RAM-only overflow, lost on power cycle).
+        """
+        resp = self.device.send_cmd_sync(Command.HF14A_4_STATIC_RESP_INFO, b'')
+        d = resp.data
+        return {
+            "flash_count": d[0],
+            "flash_bytes": (d[1] << 8) | d[2],
+            "ram_count": d[3],
+            "ram_bytes": (d[4] << 8) | d[5],
+        }
+
+    def hf14a_4_dump_static_responses(self):
+        """
+        Read back the active slot's persisted static APDU response table.
+
+        Returns a list of (cmd: bytes, resp: bytes) pairs, in storage
+        order. Does not include the RAM-only large-response overflow
+        (never persisted; see hf14a_4_get_static_resp_info's ram_* fields).
+        """
+        resp = self.device.send_cmd_sync(Command.HF14A_4_STATIC_RESP_DUMP, b'')
+        d = resp.data
+        count = d[0]
+        off = 1
+        pairs = []
+        for _ in range(count):
+            cmd_len = d[off]
+            off += 1
+            c = bytes(d[off:off + cmd_len])
+            off += cmd_len
+            resp_len = d[off]
+            off += 1
+            r = bytes(d[off:off + resp_len])
+            off += resp_len
+            pairs.append((c, r))
+        return pairs
+
     def hf14a_raw(self, options, resp_timeout_ms=100, data=[], bitlen=None):
         """
         Send raw cmd to 14a tag.

@@ -87,6 +87,29 @@ void nfc_tag_14a_4_add_static_response(const uint8_t *cmd,  uint8_t cmd_len,
                                        const uint8_t *resp, uint16_t resp_len);
 void nfc_tag_14a_4_clear_static_responses(void);
 
+/* Static response table introspection (hw slot list display).
+ * flash_* covers the persisted table (NFC_14A_4_MAX_STATIC_RESP_LEN cap per
+ * entry); ram_* covers the RAM-only large-response overflow, which is lost
+ * on power cycle. Any output pointer may be NULL. */
+void nfc_tag_14a_4_get_static_response_info(uint8_t *flash_count, uint16_t *flash_bytes,
+                                            uint8_t *ram_count, uint16_t *ram_bytes);
+
+/* Upper bound for nfc_tag_14a_4_dump_static_responses(): count(1) + N *
+ * (cmd_len(1) + cmd + resp_len(1) + resp). resp_len fits one byte since
+ * the flash-backed table caps each entry at NFC_14A_4_MAX_STATIC_RESP_LEN
+ * (253). Comfortably under the data_frame_make() 4096-byte single-frame
+ * cap, so no host-side pagination is needed. */
+#define NFC_14A_4_STATIC_RESP_DUMP_MAX \
+    (1 + NFC_14A_4_MAX_STATIC_RESPONSES * \
+         (1 + NFC_14A_4_MAX_STATIC_CMD_LEN + 1 + NFC_14A_4_MAX_STATIC_RESP_LEN))
+
+/* Serialize the persisted (flash-backed) static response table.
+ * Format: count(1) { cmd_len(1) cmd(n) resp_len(1) resp(m) } * count
+ * buf must be >= NFC_14A_4_STATIC_RESP_DUMP_MAX. Returns bytes written.
+ * Does not include the RAM-only large-response overflow (never
+ * persisted; see nfc_tag_14a_4_get_static_response_info's ram_* fields). */
+uint16_t nfc_tag_14a_4_dump_static_responses(uint8_t *buf, uint16_t buf_size);
+
 /* APDU relay — host-driven responses */
 bool nfc_tag_14a_4_get_pending_apdu(uint8_t *buf, uint16_t *length);
 void nfc_tag_14a_4_set_response(const uint8_t *data, uint16_t length);

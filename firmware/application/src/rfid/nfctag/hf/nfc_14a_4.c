@@ -129,6 +129,40 @@ void nfc_tag_14a_4_clear_static_responses(void) {
     }
 }
 
+void nfc_tag_14a_4_get_static_response_info(uint8_t *flash_count, uint16_t *flash_bytes,
+                                            uint8_t *ram_count, uint16_t *ram_bytes) {
+    uint16_t fb = 0;
+    for (uint8_t i = 0; i < m_static_resp_count; i++) {
+        fb += m_static_resp[i].resp_len;
+    }
+    uint16_t rb = 0;
+    for (uint8_t i = 0; i < m_large_resp_count; i++) {
+        rb += m_large_resp[i].resp_len;
+    }
+    if (flash_count) *flash_count = m_static_resp_count;
+    if (flash_bytes) *flash_bytes = fb;
+    if (ram_count)   *ram_count   = m_large_resp_count;
+    if (ram_bytes)   *ram_bytes   = rb;
+}
+
+uint16_t nfc_tag_14a_4_dump_static_responses(uint8_t *buf, uint16_t buf_size) {
+    if (buf_size < 1) return 0;
+    uint16_t off = 0;
+    buf[off++] = m_static_resp_count;
+    for (uint8_t i = 0; i < m_static_resp_count; i++) {
+        nfc_tag_14a_4_static_response_t *e = &m_static_resp[i];
+        uint16_t need = (uint16_t)(1 + e->cmd_len + 1 + e->resp_len);
+        if (off + need > buf_size) break;  /* buf is sized for the max; shouldn't happen */
+        buf[off++] = e->cmd_len;
+        memcpy(&buf[off], e->cmd, e->cmd_len);
+        off += e->cmd_len;
+        buf[off++] = e->resp_len;
+        memcpy(&buf[off], e->resp, e->resp_len);
+        off += e->resp_len;
+    }
+    return off;
+}
+
 static bool find_static_response(const uint8_t *apdu, uint16_t apdu_len,
                                  uint8_t **resp_out, uint16_t *resp_len_out) {
     /* Flash-backed table */
