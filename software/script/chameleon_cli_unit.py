@@ -1532,20 +1532,35 @@ class HWSlotList(DeviceRequiredUnit):
                             cvm_rules = decoded.get('CVMRules')
                             if cvm_rules:
                                 for idx, rule in enumerate(cvm_rules, 1):
+                                    rule_label = 'CVM Rule ' + str(idx) + ':'
+                                    wrapped = _wrap_text(rule, _HW_SLOT_WRAP_W)
                                     lines.append(
-                                        f'    {"CVM Rule " + str(idx) + ":":36}'
-                                        f'{color_string((CY, rule))}'
+                                        f'    {rule_label:36}{color_string((CY, wrapped[0]))}'
                                     )
+                                    for extra in wrapped[1:]:
+                                        lines.append(
+                                            f'    {"":36}{color_string((CY, extra))}'
+                                        )
                             cdol1 = decoded.get('CDOL1')
                             if cdol1:
+                                wrapped = _wrap_csv(cdol1, _HW_SLOT_WRAP_W)
                                 lines.append(
-                                    f'    {"CDOL1:":36}{color_string((CY, ", ".join(cdol1)))}'
+                                    f'    {"CDOL1:":36}{color_string((CY, wrapped[0]))}'
                                 )
+                                for extra in wrapped[1:]:
+                                    lines.append(
+                                        f'    {"":36}{color_string((CY, extra))}'
+                                    )
                             cdol2 = decoded.get('CDOL2')
                             if cdol2:
+                                wrapped = _wrap_csv(cdol2, _HW_SLOT_WRAP_W)
                                 lines.append(
-                                    f'    {"CDOL2:":36}{color_string((CY, ", ".join(cdol2)))}'
+                                    f'    {"CDOL2:":36}{color_string((CY, wrapped[0]))}'
                                 )
+                                for extra in wrapped[1:]:
+                                    lines.append(
+                                        f'    {"":36}{color_string((CY, extra))}'
+                                    )
                     else:
                         lines.append(
                             f'    {"Static responses:":36}{color_string((C0, "none loaded"))}'
@@ -4344,6 +4359,11 @@ def _emv_decode_apdu(data: bytes) -> str:
 _HF14A_4_MAX_STATIC_RESPONSES = 12
 _HF14A_4_MAX_STATIC_RESP_LEN = 253
 
+# Content width for wrapped continuation lines in HWSlotList's per-slot
+# box, where the field label occupies a fixed 36-column prefix -- chosen
+# to keep the whole line inside an 80-column terminal.
+_HW_SLOT_WRAP_W = 36
+
 # ISO 4217 numeric currency codes -- common ones only, not exhaustive.
 # Used to annotate tag 9F42 (Application Currency Code).
 _ISO4217_NUMERIC = {
@@ -4351,6 +4371,41 @@ _ISO4217_NUMERIC = {
     578: 'NOK', 756: 'CHF', 392: 'JPY', 124: 'CAD', 36: 'AUD',
     156: 'CNY', 191: 'HRK', 985: 'PLN', 203: 'CZK', 348: 'HUF',
 }
+
+
+def _wrap_csv(items, width):
+    """Pack short comma-separated items into width-char lines, whole
+    items only (never split mid-item). Used to keep long field/flag
+    lists (AIP bits, CDOL entries, ...) within a normal terminal width."""
+    lines = []
+    cur = ''
+    for it in items:
+        piece = it if not cur else ', ' + it
+        if cur and len(cur) + len(piece) > width:
+            lines.append(cur)
+            cur = it
+        else:
+            cur += piece
+    if cur:
+        lines.append(cur)
+    return lines or ['']
+
+
+def _wrap_text(text, width):
+    """Greedy word-wrap of a single sentence into width-char lines."""
+    words = text.split(' ')
+    lines = []
+    cur = ''
+    for w in words:
+        piece = w if not cur else ' ' + w
+        if cur and len(cur) + len(piece) > width:
+            lines.append(cur)
+            cur = w
+        else:
+            cur += piece
+    if cur:
+        lines.append(cur)
+    return lines or ['']
 
 
 def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose=True):
@@ -4593,6 +4648,9 @@ def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose
     tags[0x50] = app_tags[0x50]
 
     lw = 20   # longest label: "Issuer PK Remainder"
+    # Content width for wrapped continuation lines, chosen so the whole
+    # box (border + label + value) stays inside an 80-column terminal.
+    _WRAP_W = 54
     details = []
 
     # App label — show first unique label only
@@ -4797,8 +4855,9 @@ def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose
                 aip_bits.append('Issuer authentication supported')
             if b1 & 0x01:
                 aip_bits.append('CDA supported')
-            aip_str = ', '.join(aip_bits) if aip_bits else 'none set'
-            details.append(f"{'AIP':<{lw}} {CY}{v.hex().upper()}{C0}  {aip_str}")
+            details.append(f"{'AIP':<{lw}} {CY}{v.hex().upper()}{C0}")
+            for wline in _wrap_csv(aip_bits, _WRAP_W) if aip_bits else ['none set']:
+                details.append(f"{'':<{lw}} {CY}{wline}{C0}")
             result.setdefault('Decoded', {})['AIP'] = v.hex().upper()
 
     # Application File Locator (94): repeating 4-byte entries
@@ -4810,7 +4869,10 @@ def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose
             start, end, oda = v[i + 1], v[i + 2], v[i + 3]
             entries.append(f'SFI{sfi} rec{start}-{end} (oda:{oda})')
         if entries:
-            details.append(f"{'AFL':<{lw}} {CY}{', '.join(entries)}{C0}")
+            wrapped = _wrap_csv(entries, _WRAP_W)
+            details.append(f"{'AFL':<{lw}} {CY}{wrapped[0]}{C0}")
+            for extra in wrapped[1:]:
+                details.append(f"{'':<{lw}} {CY}{extra}{C0}")
             result.setdefault('Decoded', {})['AFL'] = v.hex().upper()
 
     # Application Usage Control (9F07): 2-byte bitmask (EMV Book 3 Annex C)
@@ -4838,8 +4900,9 @@ def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose
                 auc_bits.append('domestic cashback')
             if b2 & 0x40:
                 auc_bits.append('international cashback')
-            auc_str = ', '.join(auc_bits) if auc_bits else 'none set'
-            details.append(f"{'App Usage Ctrl':<{lw}} {CY}{v.hex().upper()}{C0}  {auc_str}")
+            details.append(f"{'App Usage Ctrl':<{lw}} {CY}{v.hex().upper()}{C0}")
+            for wline in _wrap_csv(auc_bits, _WRAP_W) if auc_bits else ['none set']:
+                details.append(f"{'':<{lw}} {CY}{wline}{C0}")
             result.setdefault('Decoded', {})['ApplicationUsageControl'] = v.hex().upper()
 
     # Application Version Number (9F08): 2 bytes, scheme-defined — raw only
@@ -4883,7 +4946,11 @@ def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose
             c_name = _cvm_conditions.get(cond, f'cond 0x{cond:02X}')
             rules.append(f'{m_name}{fallback} if {c_name}')
         for idx, rule in enumerate(rules, 1):
-            details.append(f"{'CVM Rule ' + str(idx):<{lw}} {CY}{rule}{C0}")
+            rule_label = 'CVM Rule ' + str(idx)
+            wrapped = _wrap_text(rule, _WRAP_W)
+            details.append(f"{rule_label:<{lw}} {CY}{wrapped[0]}{C0}")
+            for extra in wrapped[1:]:
+                details.append(f"{'':<{lw}} {CY}{extra}{C0}")
         result.setdefault('Decoded', {})['CVMRules'] = rules
 
     # CDOL1/CDOL2 (8C/8D): Data Object List — tag+length pairs only,
@@ -4921,7 +4988,10 @@ def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose
         for v in tags[tagnum]:
             entries = _decode_dol(v)
             if entries:
-                details.append(f"{label:<{lw}} {CY}{', '.join(entries)}{C0}")
+                wrapped = _wrap_csv(entries, _WRAP_W)
+                details.append(f"{label:<{lw}} {CY}{wrapped[0]}{C0}")
+                for extra in wrapped[1:]:
+                    details.append(f"{'':<{lw}} {CY}{extra}{C0}")
                 result.setdefault('Decoded', {})[label] = entries
 
     # PDOL / DDOL (9F38 / 9F49): terminal-supplied object lists, same
@@ -4930,7 +5000,10 @@ def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose
         for v in tags[tagnum]:
             entries = _decode_dol(v)
             if entries:
-                details.append(f"{label:<{lw}} {CY}{', '.join(entries)}{C0}")
+                wrapped = _wrap_csv(entries, _WRAP_W)
+                details.append(f"{label:<{lw}} {CY}{wrapped[0]}{C0}")
+                for extra in wrapped[1:]:
+                    details.append(f"{'':<{lw}} {CY}{extra}{C0}")
                 result.setdefault('Decoded', {})[label] = entries
 
     # Offline data authentication chain: these are opaque binary blobs
