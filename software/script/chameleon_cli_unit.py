@@ -1237,6 +1237,10 @@ class HWSlotList(DeviceRequiredUnit):
         current = selected
         enabled = self.cmd.get_enabled_slots()
         maxnamelength = 0
+        # Content width for wrapped continuation lines, where the field
+        # label occupies a fixed 36-column prefix -- sized to the actual
+        # terminal so the box fits on screen.
+        wrap_w = max(20, _term_width() - 44)
 
         slotnames = []
         all_nicks = self.cmd.get_all_slot_nicks()
@@ -1533,7 +1537,7 @@ class HWSlotList(DeviceRequiredUnit):
                             if cvm_rules:
                                 for idx, rule in enumerate(cvm_rules, 1):
                                     rule_label = 'CVM Rule ' + str(idx) + ':'
-                                    wrapped = _wrap_text(rule, _HW_SLOT_WRAP_W)
+                                    wrapped = _wrap_text(rule, wrap_w)
                                     lines.append(
                                         f'    {rule_label:36}{color_string((CY, wrapped[0]))}'
                                     )
@@ -1543,7 +1547,7 @@ class HWSlotList(DeviceRequiredUnit):
                                         )
                             cdol1 = decoded.get('CDOL1')
                             if cdol1:
-                                wrapped = _wrap_csv(cdol1, _HW_SLOT_WRAP_W)
+                                wrapped = _wrap_csv(cdol1, wrap_w)
                                 lines.append(
                                     f'    {"CDOL1:":36}{color_string((CY, wrapped[0]))}'
                                 )
@@ -1553,7 +1557,7 @@ class HWSlotList(DeviceRequiredUnit):
                                     )
                             cdol2 = decoded.get('CDOL2')
                             if cdol2:
-                                wrapped = _wrap_csv(cdol2, _HW_SLOT_WRAP_W)
+                                wrapped = _wrap_csv(cdol2, wrap_w)
                                 lines.append(
                                     f'    {"CDOL2:":36}{color_string((CY, wrapped[0]))}'
                                 )
@@ -4359,11 +4363,6 @@ def _emv_decode_apdu(data: bytes) -> str:
 _HF14A_4_MAX_STATIC_RESPONSES = 12
 _HF14A_4_MAX_STATIC_RESP_LEN = 253
 
-# Content width for wrapped continuation lines in HWSlotList's per-slot
-# box, where the field label occupies a fixed 36-column prefix -- chosen
-# to keep the whole line inside an 80-column terminal.
-_HW_SLOT_WRAP_W = 36
-
 # ISO 4217 numeric currency codes -- common ones only, not exhaustive.
 # Used to annotate tag 9F42 (Application Currency Code).
 _ISO4217_NUMERIC = {
@@ -4373,39 +4372,10 @@ _ISO4217_NUMERIC = {
 }
 
 
-def _wrap_csv(items, width):
-    """Pack short comma-separated items into width-char lines, whole
-    items only (never split mid-item). Used to keep long field/flag
-    lists (AIP bits, CDOL entries, ...) within a normal terminal width."""
-    lines = []
-    cur = ''
-    for it in items:
-        piece = it if not cur else ', ' + it
-        if cur and len(cur) + len(piece) > width:
-            lines.append(cur)
-            cur = it
-        else:
-            cur += piece
-    if cur:
-        lines.append(cur)
-    return lines or ['']
-
-
-def _wrap_text(text, width):
-    """Greedy word-wrap of a single sentence into width-char lines."""
-    words = text.split(' ')
-    lines = []
-    cur = ''
-    for w in words:
-        piece = w if not cur else ' ' + w
-        if cur and len(cur) + len(piece) > width:
-            lines.append(cur)
-            cur = w
-        else:
-            cur += piece
-    if cur:
-        lines.append(cur)
-    return lines or ['']
+# _term_width(), _wrap_csv(), _wrap_text() now live in cli_core.py -- they're
+# generic helpers the shared _box() rendering function also depends on, not
+# EMV-specific, so they're defined once there and reach this module through
+# the `from cli_core import *` / globals().update(vars(cli_core)) block above.
 
 
 def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose=True):
@@ -4648,9 +4618,9 @@ def _emv_decode_pairs(pairs, uid_str='', atqa_str='', sak=0, ats_str='', verbose
     tags[0x50] = app_tags[0x50]
 
     lw = 20   # longest label: "Issuer PK Remainder"
-    # Content width for wrapped continuation lines, chosen so the whole
-    # box (border + label + value) stays inside an 80-column terminal.
-    _WRAP_W = 54
+    # Content width for wrapped continuation lines, sized to the actual
+    # terminal so the whole box (border + label + value) fits on screen.
+    _WRAP_W = max(30, _term_width() - lw - 5)
     details = []
 
     # App label — show first unique label only

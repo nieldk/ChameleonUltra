@@ -102,13 +102,113 @@ def _vpad(s: str, width: int) -> str:
     return s + (' ' * pad if pad > 0 else '')
 
 
+def _term_width(default: int = 80) -> int:
+    """Current terminal width in columns, honoring $COLUMNS, falling back
+    to `default` when not attached to a terminal (piped/redirected output).
+    Clamped to a sane range so a very narrow or very wide terminal doesn't
+    produce a degenerate box. Shared by every command module -- any box or
+    wrapped field anywhere in the CLI should size against this, not a
+    hardcoded column count."""
+    cols = os.environ.get('COLUMNS')
+    if cols and cols.isdigit():
+        w = int(cols)
+    else:
+        try:
+            w = os.get_terminal_size().columns
+        except OSError:
+            w = default
+    return max(60, min(w, 220))
+
+
+def _wrap_csv(items: list, width: int) -> list:
+    """Pack short comma-separated items into width-char lines, whole items
+    only (never split mid-item). For callers that build a field's value as
+    a list of short tokens (flag names, DOL entries, ...) and want them to
+    stay readable instead of landing on one very long line."""
+    lines = []
+    cur = ''
+    for it in items:
+        piece = it if not cur else ', ' + it
+        if cur and len(cur) + len(piece) > width:
+            lines.append(cur)
+            cur = it
+        else:
+            cur += piece
+    if cur:
+        lines.append(cur)
+    return lines or ['']
+
+
+def _wrap_text(text: str, width: int) -> list:
+    """Greedy word-wrap of a single sentence into width-char lines."""
+    words = text.split(' ')
+    lines = []
+    cur = ''
+    for w in words:
+        piece = w if not cur else ' ' + w
+        if cur and len(cur) + len(piece) > width:
+            lines.append(cur)
+            cur = w
+        else:
+            cur += piece
+    if cur:
+        lines.append(cur)
+    return lines or ['']
+
+
+def _wrap_ansi(line: str, width: int) -> list:
+    """Generic word-wrap for a single display line that may contain ANSI
+    color codes. Used as _box()'s fallback for any line a caller did not
+    pre-wrap itself: ANSI escapes never contain spaces, so splitting the
+    raw (uncolored-stripped) string on literal spaces keeps each code
+    attached to whichever word it was already touching. Whatever color was
+    still open at a break is re-applied at the start of the next line, so a
+    span that happens to straddle the wrap point doesn't look reset."""
+    words = line.split(' ')
+    out_lines = []
+    cur_words = []
+    cur_vlen = 0
+    active = ''
+    for w in words:
+        wlen = _vlen(w)
+        piece_len = wlen + (1 if cur_words else 0)
+        if cur_words and cur_vlen + piece_len > width:
+            out_lines.append(' '.join(cur_words))
+            cur_words = [active + w] if active else [w]
+            cur_vlen = wlen
+        else:
+            cur_words.append(w)
+            cur_vlen += piece_len
+        codes = _ANSI_RE.findall(w)
+        if codes:
+            active = codes[-1]
+    if cur_words:
+        out_lines.append(' '.join(cur_words))
+    return out_lines or ['']
+
+
 def _box(title: str, lines: list, color: str = CC, min_width: int = 16) -> list:
-    """Render `lines` (may contain ANSI colors) inside a titled rounded box."""
-    inner_w = max(min_width, max((_vlen(l) for l in lines), default=0), _vlen(title) + 2)
+    """Render `lines` (may contain ANSI colors) inside a titled rounded box.
+
+    Sized to the actual terminal width: any line too long to fit is word-
+    wrapped (ANSI-aware) before the box is drawn, so every command that
+    goes through this one shared function -- not just the ones that
+    pre-wrap their own fields -- automatically fits a narrow terminal."""
+    max_w = max(min_width, _term_width() - 4)
+    wrapped = []
+    for l in lines:
+        if _vlen(l) <= max_w:
+            wrapped.append(l)
+        else:
+            wrapped.extend(_wrap_ansi(l, max_w))
+    inner_w = min(
+        max(min_width, max((_vlen(l) for l in wrapped), default=0), _vlen(title) + 2),
+        max_w,
+    )
     top = f"{color}╭─ {C0}{title}{color} " + "─" * (inner_w - _vlen(title) - 1) + f"╮{C0}"
     bot = f"{color}╰" + "─" * (inner_w + 2) + f"╯{C0}"
     out = [top]
-    for l in lines:
+    for l in wrapped:
         out.append(f"{color}│{C0} {_vpad(l, inner_w)} {color}│{C0}")
     out.append(bot)
     return out
