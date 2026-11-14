@@ -67,6 +67,7 @@ from chameleon_enum import (
 )
 from chameleon_enum import HIDFormat
 from chameleon_enum import StandaloneMode, StandaloneState, StandaloneFlag
+from chameleon_enum import MifareUltralightWriteMode, BatteryHealth
 from crypto1 import Crypto1
 
 # NXP IDs based on https://www.nxp.com/docs/en/application-note/AN10833.pdf
