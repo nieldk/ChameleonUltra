@@ -843,6 +843,7 @@ lf_jablotron = lf.subgroup("jablotron", "Jablotron commands")
 lf_fdxb = lf.subgroup("fdxb", "FDX-B animal tag commands (134.2 kHz)")
 lf_generic = lf.subgroup("generic", "Generic commands")
 lf_idteck = lf.subgroup("idteck", "IDTECK commands")
+lf_pyramid = lf.subgroup("pyramid", "Farpointe/Pyramid commands")
 lf_t55xx = lf.subgroup("t55xx", "T55xx/T5577 raw block commands")
 
 

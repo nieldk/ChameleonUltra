@@ -167,6 +167,7 @@
 #define DATA_CMD_LOGIC_STOP                     (3039)
 #define DATA_CMD_LOGIC_SPI_READ                 (3040)  // in: offset(2) count(2)
 #endif
+#define DATA_CMD_PYRAMID_SCAN                   (3041)  /* RRG uses 3021, taken by FDXB_SCAN in this fork */
 
 //
 // ******************************************************************
