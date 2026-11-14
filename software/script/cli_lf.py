@@ -2231,7 +2231,7 @@ def _t55_print_info(b0, q5):
         print(f" PSK clock frequency       : {_t55_psk_cf((b0 >> 8) & 3, True)}")
         print(f" Inverse data              : {_t55_yn((b0 >> 7) & 1)}")
         dm = (b0 >> 4) & 7
-        print(f" Modulation                : {dm} - {_t55_Q5_MOD_STR[dm]}")
+        print(f" Modulation                : {dm} - {_T55_Q5_MOD_STR[dm]}")
         print(f" Max block                 : {(b0 >> 1) & 7}")
         print(f" Sequence Terminator       : {_t55_yn(b0 & 1)}")
     else:

@@ -1951,25 +1951,25 @@ static data_frame_tx_t *cmd_processor_seos_write_emu_data(uint16_t cmd, uint16_t
     uint16_t offset = 0;
 
     uint8_t len = data[offset++];
-    if (len > NFC_TAG_SEOS_DATA_MAX) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    if (len > NFC_TAG_SEOS_DATA_MAX || offset + len + 1 > length) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
     info->data_len = len;
     memcpy(info->data, data+offset, len);
     offset += len;
 
     len = data[offset++];
-    if (len > NFC_TAG_SEOS_OID_MAX) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    if (len > NFC_TAG_SEOS_OID_MAX || offset + len + 1 > length) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
     info->oid_len = len;
     memcpy(info->oid, data+offset, len);
     offset += len;
 
     len = data[offset++];
-    if (len > NFC_TAG_SEOS_DATA_TAG_MAX) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    if (len > NFC_TAG_SEOS_DATA_TAG_MAX || offset + len + 1 > length) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
     info->data_tag_len = len;
     memcpy(info->data_tag, data+offset, len);
     offset += len;
 
     len = data[offset++];
-    if (len > NFC_TAG_SEOS_DIVERSIFIER_MAX) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    if (len > NFC_TAG_SEOS_DIVERSIFIER_MAX || offset + len + 2 > length) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
     info->diversifier_len = len;
     memcpy(info->diversifier, data+offset, len);
     offset += len;
