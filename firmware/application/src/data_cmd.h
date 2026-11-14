@@ -77,6 +77,7 @@
 #define DATA_CMD_U2F_SET_ATTESTATION            (1060)  /* u8[32] att_priv, u8[] att_cert_der -> provision U2F attestation */
 #define DATA_CMD_GET_BOOTLOADER_VERSION         (1061)
 #define DATA_CMD_GET_FREE_MEMORY                (1062)
+#define DATA_CMD_GET_BATTERY_INFO_EX            (1063)  /* RRG uses 1043 here, taken by GET_BLE_NAME in this fork */
 
 //
 // ******************************************************************
