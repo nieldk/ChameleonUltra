@@ -1651,6 +1651,10 @@ class HWSlotList(DeviceRequiredUnit):
                     lines.append(f"    {'Frame:':36}{color_string((CY, frame.hex().upper()))}")
                     lines.append(f"    {'FC:':36}{color_string((CG, fc))}")
                     lines.append(f"    {'CN:':36}{color_string((CG, cn))}")
+                if lf_tag_type == TagSpecificType.HITAG2:
+                    pages = self.cmd.hitag2_get_emu_id()
+                    lines.append(f"    {'UID:':36}{color_string((CY, bytes(pages[0]).hex().upper()))}")
+                    lines.append(f"    {'Password:':36}{color_string((CY, bytes(pages[1]).hex().upper()))}")
 
             title = f"Slot {slot}" + ("  (active)" if is_active else "")
             box_color = CG if is_active else CC
