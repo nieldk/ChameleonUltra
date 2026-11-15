@@ -143,6 +143,12 @@ NRF_LOG_MODULE_REGISTER();
 // whether a (smaller, re-measured) mute is worth reviving.
 #define HT2_RX_POST_TX_MUTE_US  0u
 
+// Engaging LF_MOD for the antenna-load RX trick below is itself a step on
+// LF_OA_OUT -- mute the slope detector for this long right after turning
+// it on so that step isn't read as a bit edge. Not measured; first guess,
+// same length as the slope-detector's own lookback window (8 samples * 6us).
+#define HT2_RX_MOD_ENGAGE_MUTE_US  48u
+
 // ADC sample period: TIMER3/PPI drives SAADC at 16MHz/96 = 166.667kHz
 // (lf_125khz_radio.c psk166_capture_init()).
 #define HT2_SAMPLE_PERIOD_US  6u
@@ -196,6 +202,11 @@ static uint8_t m_avg_pos;
 static int16_t m_dbg_min;
 static int16_t m_dbg_max;
 static int32_t m_dbg_max_delta;
+
+// Defined below with the TX bit-framing code; forward-declared here so the
+// RX session functions can hold the antenna loaded while listening.
+static void ht2_mod_on(void);
+static void ht2_mod_off(void);
 
 void hitag2_tag_load(const uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE]) {
     memcpy(m_pages, pages, sizeof(m_pages));
@@ -363,6 +374,22 @@ static void hitag2_rx_log_dbg(void) {
                  m_dbg_min, m_dbg_max, m_dbg_max_delta);
 }
 
+// Reported hardware finding (parallel work on a generic two-way LF link on
+// this same board): an unloaded antenna rings enough that a tag reading a
+// reader's BPLM gaps sees them smoothed at the field detector; holding
+// LF_MOD on while listening damps that ringing and sharpens the gaps.
+// First attempt (34d3131) turned it on with no settle time, right where
+// decode state resets -- every frame in the next real-hardware log capped
+// at 1-7 bits, including the very first one, which fits "the engage step
+// itself is poisoning the start of every frame" better than "this doesn't
+// help": a scattered-noise explanation wouldn't hit every single frame
+// that hard. HT2_RX_MOD_ENGAGE_MUTE_US below holds off the edge decision
+// (not the average/history, same as the TX mute) just past that step.
+// Must be OFF before hitag2_tx_frame() starts: it needs a real off-to-on
+// transition on its first SOF bit, not a continuation of an already-on
+// line, so hitag2_rx_pause_for_tx() releases it and hitag2_rx_resume_after_tx()
+// re-applies it (with its own settle mute) once our own TX is done.
+
 // Session start/end: the only places that touch the SAADC channel itself
 // (full driver init/uninit, non-trivial latency -- see hitag2_reply()'s
 // pause/resume below for why that latency matters and is avoided there).
@@ -370,9 +397,12 @@ static void hitag2_rx_start(void) {
     hitag2_rx_reset_decode_state();
     hitag2_rx_reset_dbg();
     lf_125khz_radio_saadc166_enable_hitag2(hitag2_adc_callback);
+    ht2_mod_on();
+    m_rx_mute_samples_left = HT2_RX_MOD_ENGAGE_MUTE_US / HT2_SAMPLE_PERIOD_US;
 }
 
 static void hitag2_rx_stop(void) {
+    ht2_mod_off();
     lf_125khz_radio_saadc166_disable_hitag2();
     hitag2_rx_log_dbg();
 }
@@ -386,6 +416,7 @@ static void hitag2_rx_stop(void) {
 // 26-29 bits instead of 32, always right after a reply. The driver re-init
 // latency was eating the first several bits of the reader's real response.
 static void hitag2_rx_pause_for_tx(void) {
+    ht2_mod_off();
     lf_125khz_radio_saadc166_pause_hitag2();
     hitag2_rx_log_dbg();
 }
@@ -393,8 +424,15 @@ static void hitag2_rx_pause_for_tx(void) {
 static void hitag2_rx_resume_after_tx(void) {
     hitag2_rx_reset_decode_state();
     hitag2_rx_reset_dbg();
-    m_rx_mute_samples_left = HT2_RX_POST_TX_MUTE_US / HT2_SAMPLE_PERIOD_US;
     lf_125khz_radio_saadc166_resume_hitag2();
+    ht2_mod_on();
+    // Post-TX-ringing mute (HT2_RX_POST_TX_MUTE_US) and this engage-step
+    // mute are different theories about different transients; tried
+    // separately so a real-hardware log can tell them apart. Longer wins
+    // if both are ever nonzero at once.
+    uint32_t tx_mute  = HT2_RX_POST_TX_MUTE_US    / HT2_SAMPLE_PERIOD_US;
+    uint32_t mod_mute = HT2_RX_MOD_ENGAGE_MUTE_US / HT2_SAMPLE_PERIOD_US;
+    m_rx_mute_samples_left = (tx_mute > mod_mute) ? tx_mute : mod_mute;
 }
 
 // Non-blocking: true if a frame looks complete (reader has gone quiet for
