@@ -35,27 +35,32 @@ NRF_LOG_MODULE_REGISTER();
  * LF_MOD high" matches ANT_NO_MOD()'s own idle-low convention, same as the
  * working viking.c RF/32 tag emulation on this same pin.
  *
- * RX decodes the reader's downlink on LF_OA_OUT via GPIOTE, the same pin
- * and peripheral reader-mode's own EM4x05/Indala decode uses
- * (lf_125khz_radio.c gpiote_init()). LF_OA_OUT and the tag-mode field-sense
- * tap (LF_RSSI) share one root node on the schematic (LF_OA, the rectified
- * raw antenna envelope) with no feedback to this device's own driven
- * carrier, so it reads an externally-driven reader field the same way
- * reader mode reads its own. LF_RSSI itself (previously used here) is
- * documented elsewhere in this tree as a ~2ms-time-constant tap -- far too
- * slow for Hitag2's ~48-240us BPLM timing; LF_OA_OUT's active-filtered path
- * is the fix for that, not a plain pin swap.
+ * RX tap, 2nd attempt: LF_RSSI_PIN via GPIOTE, not LF_OA_OUT.
  *
- * Two things this still needs real hardware to settle, not guessed here:
- *   - LF_OA_OUT's two op-amp filter stages are powered by READER_POWER
- *     (schematic net LF_AMP_PWR), off by default in tag-emulation mode
- *     (see rfid_main.c tag_mode_enter()) -- enabled only for the duration
- *     of a Hitag2 session below.
- *   - Estimating this board's own filter corners from the schematic's R/C
- *     values (roughly 34kHz then 5kHz) puts the settling time in the same
- *     order of magnitude as a 160us "0" bit period -- plausible, not
- *     comfortably margined. Only a scope on LF_OA_OUT against a real
- *     reader can confirm consecutive short gaps stay resolvable.
+ * First attempt used LF_OA_OUT (reader-mode's own decode pin). Many
+ * captures across two PM3 units never produced a clean multi-edge BPLM
+ * frame, down to zero or one short edge burst per reader attempt, while a
+ * passive EM410x read at the same position worked fine. LF_OA_OUT's path
+ * is behind two op-amp filter stages (READER_POWER/LF_AMP_PWR) sized for
+ * reader mode's own strong self-generated field, not confirmed to resolve
+ * an external reader's shallower modulation depth -- no scope here to
+ * check that margin.
+ *
+ * LF_RSSI_PIN is the plain rectified-envelope tap already used for
+ * field-presence sensing (is_lf_field_exists()), no amp stage, no settle
+ * delay. Its documented ~2ms time constant is nominally too slow for a
+ * 160-240us bit period, but that estimate was never confirmed against real
+ * hardware either, and it has not been tried. Worth ruling in or out before
+ * assuming the RX side needs a scope.
+ *
+ * LF_RSSI_PIN is also LPCOMP's input for field sensing, so GPIOTE and
+ * LPCOMP would fight over the same pin if both ran at once. Avoided here by
+ * never re-enabling LPCOMP for the length of a Hitag2 session: LPCOMP is
+ * already disabled on session start (lpcomp_event_handler()), and this file
+ * no longer calls is_lf_field_exists() itself -- field loss is instead
+ * inferred from RX inactivity (see HT2_SESSION_IDLE_US), and reported back
+ * through lf_tag_em_hitag2_field_lost() so LPCOMP gets re-armed for the
+ * next reader approach.
  * --------------------------------------------------------------------- */
 
 #define HT2_SOF_BITS        6
@@ -70,7 +75,7 @@ NRF_LOG_MODULE_REGISTER();
 // Downlink (reader -> tag) bit-period classification, same constants as
 // lf_hitag2_data.c's reader-mode TX (verified against PM3): T_0=20 Tc,
 // T_1=30 Tc. Classify by the gap between consecutive rising edges on
-// LF_OA_OUT (each marks the field coming back on after one bit's low
+// LF_RSSI_PIN (each marks the field coming back on after one bit's low
 // pulse -- see header comment for why rising, not falling).
 #define HT2_RX_T0_US   (20u * 8u)
 #define HT2_RX_T1_US   (30u * 8u)
@@ -79,17 +84,11 @@ NRF_LOG_MODULE_REGISTER();
 // No new rising edge within this long -> the reader's frame is done.
 #define HT2_RX_FRAME_GAP_US  400u
 
-// LF_OA_OUT's op-amp stages need READER_POWER (LF_AMP_PWR) on; give them
-// time to settle before trusting edges. Not a measured value -- a
-// conservative guess pending a scope check.
-#define HT2_RX_AMP_SETTLE_US  1000u
-
-// How often hitag2_tag_tick() re-checks is_lf_field_exists(). That call
-// re-enables and samples LPCOMP on LF_RSSI, which shares its analog root
-// node with LF_OA_OUT on this board -- doing that every single main-loop
-// tick was suspected of injecting a glitch onto LF_OA_OUT once per pass.
-// 50ms is far looser than needed just for field-loss detection.
-#define HT2_FIELD_CHECK_INTERVAL_US 50000u
+// No RX edge at all for this long -> treat the reader as gone. Well past
+// PM3's own 2s client-side retry window, so a real in-progress exchange
+// never gets cut off; loose because this is inactivity-based field-loss,
+// not a per-frame timeout.
+#define HT2_SESSION_IDLE_US  3000000u
 
 static uint8_t m_pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE];
 
@@ -107,16 +106,19 @@ static volatile bool     m_rx_have_edge;
 static volatile uint32_t m_rx_dbg_periods[HT2_RX_DEBUG_PERIODS];
 static volatile uint8_t  m_rx_dbg_nperiods;
 
-// Diagnostic only: plain polled reads of LF_OA_OUT's digital level, main-loop
-// rate, independent of GPIOTE. Tells apart "GPIOTE is missing real edges"
-// (poll would see the pin move) from "the pin genuinely isn't moving"
-// (poll stays flat too).
+// Diagnostic only: plain polled reads of LF_RSSI_PIN's digital level,
+// main-loop rate, independent of GPIOTE. Tells apart "GPIOTE is missing
+// real edges" (poll would see the pin move) from "the pin genuinely isn't
+// moving" (poll stays flat too).
 static bool     m_rx_dbg_poll_level;
 static bool     m_rx_dbg_poll_level_valid;
 static uint16_t m_rx_dbg_poll_transitions;
-static uint32_t m_last_field_check_us;
 static bool     m_rx_dbg_poll_last_seen_high;
 static bool     m_rx_dbg_poll_last_seen_low;
+
+// Last RX activity (any edge, classified or not). Session idle-timeout is
+// measured from this, not from is_lf_field_exists() -- see header comment.
+static uint32_t m_last_activity_us;
 
 void hitag2_tag_load(const uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE]) {
     memcpy(m_pages, pages, sizeof(m_pages));
@@ -136,7 +138,7 @@ static void hitag2_rx_push_bit(bool bit) {
     m_rx_nbits++;
 }
 
-// GPIOTE rising-edge handler on LF_OA_OUT: field just came back on after
+// GPIOTE rising-edge handler on LF_RSSI_PIN: field just came back on after
 // one bit's low pulse. The bit value is carried by the period since the
 // PREVIOUS rising edge, not by this pulse's own width (BPLM: the low
 // pulse itself, T_LOW, is the same ~6 Tc for both bit values).
@@ -162,26 +164,12 @@ static void hitag2_rx_edge_cb(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t actio
     }
     m_rx_last_edge_us = now;
     m_rx_have_edge = true;
+    m_last_activity_us = now;
 }
 
-// LF_OA_OUT's op-amp stages are unpowered during normal tag emulation
-// (tag_mode_enter() clears READER_POWER). Powered once for the whole
-// session (hitag2_tag_tick()), not per-reply -- hitag2_reply() only
-// pauses the GPIOTE edge decode around our own TX, it does not need the
-// amp re-settled each time.
-static void hitag2_amp_power_on(void) {
-    nrf_gpio_cfg_output(READER_POWER);
-    nrf_gpio_pin_set(READER_POWER);
-    bsp_delay_us(HT2_RX_AMP_SETTLE_US);
-}
-
-static void hitag2_amp_power_off(void) {
-    nrf_gpio_pin_clear(READER_POWER);
-}
-
-// Same pin and peripheral as lf_125khz_radio.c's reader-mode decode
-// (gpiote_init()/LOTOHI on LF_OA_OUT) -- no separate nrfx_gpiote_init()
-// call here either, matching that proven precedent in this codebase.
+// LF_RSSI_PIN needs no amp power and no settle delay (see header comment).
+// Same timer/GPIOTE setup pattern as the LF_OA_OUT attempt, just a
+// different pin.
 static void hitag2_rx_start(void) {
     memset((void *)m_rx_bits, 0, sizeof(m_rx_bits));
     m_rx_nbits = 0;
@@ -191,7 +179,6 @@ static void hitag2_rx_start(void) {
     m_rx_dbg_poll_transitions = 0;
     m_rx_dbg_poll_last_seen_high = false;
     m_rx_dbg_poll_last_seen_low = false;
-    m_last_field_check_us = 0;
 
     nrfx_timer_config_t tcfg = NRFX_TIMER_DEFAULT_CONFIG;
     tcfg.frequency = NRF_TIMER_FREQ_1MHz;
@@ -199,15 +186,16 @@ static void hitag2_rx_start(void) {
     tcfg.bit_width = NRF_TIMER_BIT_WIDTH_32;
     nrfx_timer_init(&m_ht_timer, &tcfg, NULL);
     nrfx_timer_enable(&m_ht_timer);
+    m_last_activity_us = nrfx_timer_capture(&m_ht_timer, NRF_TIMER_CC_CHANNEL0);
 
     nrfx_gpiote_in_config_t cfg = NRFX_GPIOTE_CONFIG_IN_SENSE_LOTOHI(false);
-    nrfx_gpiote_in_init(LF_OA_OUT, &cfg, hitag2_rx_edge_cb);
-    nrfx_gpiote_in_event_enable(LF_OA_OUT, true);
+    nrfx_gpiote_in_init(LF_RSSI_PIN, &cfg, hitag2_rx_edge_cb);
+    nrfx_gpiote_in_event_enable(LF_RSSI_PIN, true);
 }
 
 static void hitag2_rx_stop(void) {
-    nrfx_gpiote_in_event_disable(LF_OA_OUT);
-    nrfx_gpiote_in_uninit(LF_OA_OUT);
+    nrfx_gpiote_in_event_disable(LF_RSSI_PIN);
+    nrfx_gpiote_in_uninit(LF_RSSI_PIN);
     nrfx_timer_disable(&m_ht_timer);
     nrfx_timer_uninit(&m_ht_timer);
 }
@@ -335,8 +323,8 @@ static bool m_session_armed;
 
 void hitag2_tag_session_start(void) {
     // Called from lf_tag_em.c's LPCOMP ISR -- must return immediately.
-    // Only arms the flag; hitag2_tag_tick() does the actual work (which
-    // includes powering the LF_OA_OUT amp chain) from thread context.
+    // Only arms the flag; hitag2_tag_tick() does the actual work from
+    // thread context.
     m_authed = false;
     m_session_armed = true;
 }
@@ -349,35 +337,30 @@ bool hitag2_tag_tick(void) {
     }
 
     if (!rx_running) {
-        hitag2_amp_power_on();
         hitag2_rx_start();
         rx_running = true;
         return true;
     }
 
-    // is_lf_field_exists() re-enables LPCOMP and samples it, and LF_RSSI
-    // shares its analog root node with LF_OA_OUT on this board (see header
-    // comment) -- calling it every single tick was suspected of injecting a
-    // small glitch onto LF_OA_OUT once per main-loop pass. Debug logging
-    // showed RX "edges" repeating at a near-constant ~3ms spacing matching
-    // plausible main-loop timing, not anything BPLM-shaped -- throttling
-    // this check removes that as a source while still catching real field
-    // loss promptly enough (50ms is well under any protocol timeout here).
+    // No is_lf_field_exists() here: that call drives LPCOMP, which shares
+    // LF_RSSI_PIN with this file's own GPIOTE use, and LPCOMP is already
+    // disabled for the session (lpcomp_event_handler()). Field loss is
+    // inferred from RX inactivity instead, and reported through
+    // lf_tag_em_hitag2_field_lost() so LPCOMP gets re-armed afterward --
+    // without that call, m_is_lf_emulating stayed stuck true and no later
+    // reader approach this boot ever re-triggered the LPCOMP ISR.
     uint32_t now_us = nrfx_timer_capture(&m_ht_timer, NRF_TIMER_CC_CHANNEL0);
-    if ((now_us - m_last_field_check_us) >= HT2_FIELD_CHECK_INTERVAL_US) {
-        m_last_field_check_us = now_us;
-        if (!is_lf_field_exists()) {
-            hitag2_rx_stop();
-            hitag2_amp_power_off();
-            rx_running = false;
-            m_session_armed = false;
-            return false;
-        }
+    if ((now_us - m_last_activity_us) >= HT2_SESSION_IDLE_US) {
+        hitag2_rx_stop();
+        rx_running = false;
+        m_session_armed = false;
+        lf_tag_em_hitag2_field_lost();
+        return false;
     }
 
     // Plain polled read of the same pin GPIOTE is watching, main-loop rate.
     // Independent evidence of whether the pin is moving at all.
-    bool level = nrf_gpio_pin_read(LF_OA_OUT) != 0;
+    bool level = nrf_gpio_pin_read(LF_RSSI_PIN) != 0;
     if (!m_rx_dbg_poll_level_valid) {
         m_rx_dbg_poll_level = level;
         m_rx_dbg_poll_level_valid = true;
