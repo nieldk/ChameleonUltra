@@ -190,10 +190,14 @@ static void hitag2_rx_stop(void) {
 }
 
 // Non-blocking: true if a frame looks complete (reader has gone quiet for
-// HT2_RX_FRAME_GAP_US after at least one decoded bit). Called from
+// HT2_RX_FRAME_GAP_US since the last edge, classified or not). Called from
 // hitag2_tag_tick(), main-loop context, every iteration -- not a wait loop.
 static bool hitag2_rx_frame_ready(void) {
-    if (!m_rx_have_edge || m_rx_nbits == 0) {
+    // Only require an edge to have been seen at all, not a classified bit --
+    // gating on m_rx_nbits meant unclassified (out-of-window) edges never
+    // timed out, so a run of noise could sit open indefinitely and only
+    // close once a later edge happened to fall inside a T0/T1 window.
+    if (!m_rx_have_edge) {
         return false;
     }
     uint32_t since = nrfx_timer_capture(&m_ht_timer, NRF_TIMER_CC_CHANNEL0) - m_rx_last_edge_us;
