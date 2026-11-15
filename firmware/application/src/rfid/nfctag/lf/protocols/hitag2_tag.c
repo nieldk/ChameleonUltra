@@ -263,6 +263,7 @@ static uint32_t page_u32(uint8_t page) {
 // WRITE_PAGE needs a two-frame exchange this first cut does not do), 10
 // bits = READ_PAGE/READ_PAGE_INVERTED.
 static void hitag2_handle_frame(uint8_t nbits, uint32_t value) {
+    NRF_LOG_INFO("hitag2 rx frame: %d bits, value 0x%08X", nbits, value);
     if (nbits == 5) {
         m_authed = false;
         hitag2_reply(page_u32(HITAG2_PAGE_UID), 32);
