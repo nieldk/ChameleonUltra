@@ -537,6 +537,8 @@ class TagSpecificType(enum.IntEnum):
             return "IDTECK"
         elif self == TagSpecificType.Indala:
             return "Indala"
+        elif self == TagSpecificType.HITAG2:
+            return "Hitag2"
         elif self == TagSpecificType.MIFARE_Mini:
             return "Mifare Mini"
         elif self == TagSpecificType.MIFARE_1024:
