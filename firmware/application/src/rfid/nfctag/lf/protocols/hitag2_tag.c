@@ -58,10 +58,16 @@ NRF_LOG_MODULE_REGISTER();
  * within ~1.8ms of the reader going quiet and the 2048-sample buffers
  * used for Indala are ~12ms/buffer -- far too slow here.
  *
- * HT2_SLOPE_THRESH is a starting value, not a measured one -- needs real
- * hardware to tune against this board's actual field-on/field-off ADC
- * swing. Session start/end logs the raw sample min/max seen so that value
- * can be set from real numbers instead of guessed twice.
+ * First real-hardware test of the slope detector: dozens of bogus 1-3 bit
+ * "frames" per field session, no valid 5/32/10 bit frame ever decoded.
+ * Raw min/max logged -116..14328 against HT2_SLOPE_THRESH=200 -- ~1.4% of
+ * the swing, so the 125kHz carrier's own ripple on LF_OA_OUT (6us/sample
+ * vs the carrier's 8us period is close to aliasing it, not oversampling
+ * it) was crossing threshold every few samples on its own. Added a 4-tap
+ * moving-average pre-filter (kills ripple, too fast to smear a real
+ * 160-240us-period transition) and raised the threshold; m_dbg_max_delta
+ * now logs the largest delta actually seen so the next round tunes from a
+ * measured number instead of another guess.
  * --------------------------------------------------------------------- */
 
 #define HT2_SOF_BITS        6
@@ -99,8 +105,16 @@ NRF_LOG_MODULE_REGISTER();
 // what carries over, not the constant.
 #define HT2_SLOPE_LOOKBACK_SAMPLES 8
 
-// Starting guess, needs real-hardware tuning -- see header comment.
-#define HT2_SLOPE_THRESH 200
+// Moving-average width applied before slope detection (see the callback
+// comment). ~24us at 6us/sample: several 125kHz carrier cycles, so it
+// averages out carrier ripple, but well under one bit period (160-240us)
+// so a real transition still shows up sharply.
+#define HT2_AVG_TAPS 4
+
+// Raised from 200 after the first real-hardware test -- see header
+// comment. Still a guess, not a measurement; m_dbg_max_delta below is
+// there so the next test replaces it with a real number.
+#define HT2_SLOPE_THRESH 1500
 
 // Minimum samples between accepted edges, so one envelope ramp (several
 // samples each showing delta > threshold while climbing) counts once, not
@@ -122,9 +136,15 @@ static uint8_t  m_hist_pos;
 static uint8_t  m_hist_filled;
 static uint32_t m_holdoff_left;
 
+// Moving-average pre-filter state, persists across ADC callback invocations.
+static int16_t m_avg_buf[HT2_AVG_TAPS];
+static int32_t m_avg_sum;
+static uint8_t m_avg_pos;
+
 // Diagnostic only, for tuning HT2_SLOPE_THRESH against real hardware.
 static int16_t m_dbg_min;
 static int16_t m_dbg_max;
+static int32_t m_dbg_max_delta;
 
 void hitag2_tag_load(const uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE]) {
     memcpy(m_pages, pages, sizeof(m_pages));
@@ -177,10 +197,22 @@ static void hitag2_adc_callback(nrf_saadc_value_t *buf, size_t len) {
         if (sample < m_dbg_min) m_dbg_min = sample;
         if (sample > m_dbg_max) m_dbg_max = sample;
 
-        int32_t delayed = (m_hist_filled >= HT2_SLOPE_LOOKBACK_SAMPLES) ? m_hist[m_hist_pos] : sample;
-        int32_t delta = (int32_t)sample - delayed;
+        // Average before slope detection: raw samples carry visible
+        // 125kHz carrier ripple (6us/sample is close to aliasing the
+        // carrier's own 8us period, not safely oversampling it), and on
+        // real hardware that ripple alone crossed HT2_SLOPE_THRESH every
+        // few samples -- see header comment.
+        m_avg_sum -= m_avg_buf[m_avg_pos];
+        m_avg_buf[m_avg_pos] = sample;
+        m_avg_sum += sample;
+        m_avg_pos = (uint8_t)((m_avg_pos + 1) % HT2_AVG_TAPS);
+        int16_t filtered = (int16_t)(m_avg_sum / HT2_AVG_TAPS);
 
-        m_hist[m_hist_pos] = sample;
+        int32_t delayed = (m_hist_filled >= HT2_SLOPE_LOOKBACK_SAMPLES) ? m_hist[m_hist_pos] : filtered;
+        int32_t delta = (int32_t)filtered - delayed;
+        if (delta > m_dbg_max_delta) m_dbg_max_delta = delta;
+
+        m_hist[m_hist_pos] = filtered;
         m_hist_pos = (uint8_t)((m_hist_pos + 1) % HT2_SLOPE_LOOKBACK_SAMPLES);
         if (m_hist_filled < HT2_SLOPE_LOOKBACK_SAMPLES) {
             m_hist_filled++;
@@ -231,16 +263,20 @@ static void hitag2_rx_start(void) {
     m_hist_pos = 0;
     m_hist_filled = 0;
     m_holdoff_left = 0;
+    memset(m_avg_buf, 0, sizeof(m_avg_buf));
+    m_avg_sum = 0;
+    m_avg_pos = 0;
     m_dbg_min = 32767;   // INT16_MAX: first sample updates it
     m_dbg_max = -32768;  // INT16_MIN: first sample updates it
+    m_dbg_max_delta = 0;
 
     lf_125khz_radio_saadc166_enable_hitag2(hitag2_adc_callback);
 }
 
 static void hitag2_rx_stop(void) {
     lf_125khz_radio_saadc166_disable_hitag2();
-    NRF_LOG_INFO("hitag2 rx adc range: min=%d max=%d (tune HT2_SLOPE_THRESH against this)",
-                 m_dbg_min, m_dbg_max);
+    NRF_LOG_INFO("hitag2 rx adc range: min=%d max=%d max_delta=%d (tune HT2_SLOPE_THRESH against this)",
+                 m_dbg_min, m_dbg_max, m_dbg_max_delta);
 }
 
 // Non-blocking: true if a frame looks complete (reader has gone quiet for
