@@ -236,6 +236,12 @@ static void hitag2_rx_edge(uint32_t sample_idx) {
             // Counted (not just ignored) so the per-frame log can show
             // whether a short frame lost bits mid-stream (this count > 0)
             // or simply started late (count == 0, elapsed time short).
+            // Logged with its actual duration: short (<HT2_RX_T0_US) means
+            // a spurious edge slipped past the averaging filter; long
+            // (>HT2_RX_T1_US) means a real transition was missed and two
+            // bit periods merged into one gap. Different problems, same
+            // symptom from nbits alone -- this is what tells them apart.
+            NRF_LOG_INFO("hitag2 rx dropped gap: %u us", period);
             m_rx_dropped_gaps++;
         }
     } else {
