@@ -79,6 +79,18 @@ NRF_LOG_MODULE_REGISTER();
  * TIMER3/PPI sample trigger for a reply (hitag2_rx_pause_for_tx()/
  * _resume_after_tx()), leaving the SAADC channel live; the full init/uninit
  * is now only done once, at session start/end.
+ *
+ * Third real-hardware test: deficit shrank but didn't close -- 28-31 bits
+ * of 32, still always right after our own reply. RfidResearchGroup/
+ * proxmark3's own ReaderHitag() (armsrc/hitag2.c) documents the identical
+ * physical mechanism from their side: a tag's (or tag-simulator's) own
+ * reply disturbs its own LF front end, and decoding too soon into the
+ * recovery ramp loses an edge partway through a 32-bit frame -- their fix
+ * was to simply wait longer (t_wait_2) before trusting the line again.
+ * Same fix here: hitag2_rx_resume_after_tx() now mutes the edge decision
+ * (not the moving-average/history bookkeeping, which stays warm) for
+ * HT2_RX_POST_TX_MUTE_US after resuming, so our own ringdown can't
+ * misalign the T0/T1 reference for the bits that follow it.
  * --------------------------------------------------------------------- */
 
 #define HT2_SOF_BITS        6
@@ -105,6 +117,13 @@ NRF_LOG_MODULE_REGISTER();
 // time to settle before trusting samples. Not a measured value -- a
 // conservative guess pending a scope check.
 #define HT2_RX_AMP_SETTLE_US  1000u
+
+// Our own TX ringing in the front end on resume -- see
+// hitag2_rx_resume_after_tx() / the adc callback's mute branch. Real
+// hardware lost up to 4 bit periods (<=960us at T1=240us) off the start of
+// every 32-bit password frame to this; 1200us is that deficit plus margin,
+// not an independently measured settle time.
+#define HT2_RX_POST_TX_MUTE_US  1200u
 
 // ADC sample period: TIMER3/PPI drives SAADC at 16MHz/96 = 166.667kHz
 // (lf_125khz_radio.c psk166_capture_init()).
@@ -140,6 +159,7 @@ static volatile uint32_t m_rx_last_edge_us;
 static volatile bool     m_rx_have_edge;
 static volatile uint32_t m_rx_total_samples;
 static volatile bool     m_rx_frame_ready_flag;
+static volatile uint32_t m_rx_mute_samples_left;
 
 // Slope-detector state, persists across ADC callback invocations.
 static int16_t  m_hist[HT2_SLOPE_LOOKBACK_SAMPLES];
@@ -221,13 +241,28 @@ static void hitag2_adc_callback(nrf_saadc_value_t *buf, size_t len) {
 
         int32_t delayed = (m_hist_filled >= HT2_SLOPE_LOOKBACK_SAMPLES) ? m_hist[m_hist_pos] : filtered;
         int32_t delta = (int32_t)filtered - delayed;
-        if (delta > m_dbg_max_delta) m_dbg_max_delta = delta;
 
         m_hist[m_hist_pos] = filtered;
         m_hist_pos = (uint8_t)((m_hist_pos + 1) % HT2_SLOPE_LOOKBACK_SAMPLES);
         if (m_hist_filled < HT2_SLOPE_LOOKBACK_SAMPLES) {
             m_hist_filled++;
         }
+
+        if (m_rx_mute_samples_left > 0) {
+            // Our own TX disturbs our own front end the same way PM3's
+            // reader-mode code found simulating a tag disturbs theirs
+            // (armsrc/hitag2.c ReaderHitag(), t_wait_2 comment): on real
+            // hardware the ringdown right after resuming RX was corrupting
+            // the first edge or two, which then misaligned the T0/T1
+            // reference for several genuine bits after it -- 32-bit
+            // password frames (key 00000000) were landing as 28-31 bits,
+            // every time. Average/history above stays warm through this;
+            // only the edge decision is held off.
+            m_rx_mute_samples_left--;
+            continue;
+        }
+
+        if (delta > m_dbg_max_delta) m_dbg_max_delta = delta;
 
         if (m_holdoff_left > 0) {
             m_holdoff_left--;
@@ -280,6 +315,7 @@ static void hitag2_rx_reset_decode_state(void) {
     memset(m_avg_buf, 0, sizeof(m_avg_buf));
     m_avg_sum = 0;
     m_avg_pos = 0;
+    m_rx_mute_samples_left = 0;  // resume_after_tx() below sets this for real
 }
 
 static void hitag2_rx_reset_dbg(void) {
@@ -323,6 +359,7 @@ static void hitag2_rx_pause_for_tx(void) {
 static void hitag2_rx_resume_after_tx(void) {
     hitag2_rx_reset_decode_state();
     hitag2_rx_reset_dbg();
+    m_rx_mute_samples_left = HT2_RX_POST_TX_MUTE_US / HT2_SAMPLE_PERIOD_US;
     lf_125khz_radio_saadc166_resume_hitag2();
 }
 
