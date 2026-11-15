@@ -171,10 +171,12 @@ class HWLfXtalTrim(DeviceRequiredUnit):
         if args.clear:
             self.cmd.set_lf_xtal_trim(0)
             print(f' {CG}Trim cleared.{C0}')
+            print(f' {CY}Do not forget to store your settings in flash! (hw settings store){C0}')
             return
         if args.set is not None:
             self.cmd.set_lf_xtal_trim(args.set)
             print(f' {CG}Trim set to {args.set} tenths of a ppm ({args.set / 10:+.1f} ppm).{C0}')
+            print(f' {CY}Do not forget to store your settings in flash! (hw settings store){C0}')
             return
         current = self.cmd.get_lf_xtal_trim()
         print(f' Current LF emulation timing trim: {current} tenths of a ppm ({current / 10:+.1f} ppm)')
