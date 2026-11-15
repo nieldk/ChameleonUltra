@@ -197,11 +197,6 @@ static int16_t m_dbg_min;
 static int16_t m_dbg_max;
 static int32_t m_dbg_max_delta;
 
-// Defined below with the TX bit-framing code; forward-declared here so the
-// RX session functions can hold the antenna loaded while listening.
-static void ht2_mod_on(void);
-static void ht2_mod_off(void);
-
 void hitag2_tag_load(const uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE]) {
     memcpy(m_pages, pages, sizeof(m_pages));
 }
@@ -368,19 +363,6 @@ static void hitag2_rx_log_dbg(void) {
                  m_dbg_min, m_dbg_max, m_dbg_max_delta);
 }
 
-// Holding LF_MOD on (antenna loaded) while listening, not just while
-// transmitting, is a hardware trick reported against this same Q3/antenna
-// node: an unloaded antenna rings enough that the reader's own BPLM gaps
-// arrive smoothed at LF_OA_OUT, which is the shallow-edge symptom behind
-// every dropped_gaps count seen so far, on every frame, independent of
-// HT2_SLOPE_THRESH or the averaging filter. Reported, not yet confirmed on
-// this hardware -- next real log should show whether dropped_gaps drops
-// with this in place.
-// Must be OFF before hitag2_tx_frame() starts: it needs a real off-to-on
-// transition on its first SOF bit, not a continuation of an already-on
-// line, so hitag2_rx_pause_for_tx() releases it and hitag2_rx_resume_after_tx()
-// re-applies it once our own TX is done.
-
 // Session start/end: the only places that touch the SAADC channel itself
 // (full driver init/uninit, non-trivial latency -- see hitag2_reply()'s
 // pause/resume below for why that latency matters and is avoided there).
@@ -388,11 +370,9 @@ static void hitag2_rx_start(void) {
     hitag2_rx_reset_decode_state();
     hitag2_rx_reset_dbg();
     lf_125khz_radio_saadc166_enable_hitag2(hitag2_adc_callback);
-    ht2_mod_on();
 }
 
 static void hitag2_rx_stop(void) {
-    ht2_mod_off();
     lf_125khz_radio_saadc166_disable_hitag2();
     hitag2_rx_log_dbg();
 }
@@ -406,7 +386,6 @@ static void hitag2_rx_stop(void) {
 // 26-29 bits instead of 32, always right after a reply. The driver re-init
 // latency was eating the first several bits of the reader's real response.
 static void hitag2_rx_pause_for_tx(void) {
-    ht2_mod_off();
     lf_125khz_radio_saadc166_pause_hitag2();
     hitag2_rx_log_dbg();
 }
@@ -416,7 +395,6 @@ static void hitag2_rx_resume_after_tx(void) {
     hitag2_rx_reset_dbg();
     m_rx_mute_samples_left = HT2_RX_POST_TX_MUTE_US / HT2_SAMPLE_PERIOD_US;
     lf_125khz_radio_saadc166_resume_hitag2();
-    ht2_mod_on();
 }
 
 // Non-blocking: true if a frame looks complete (reader has gone quiet for
