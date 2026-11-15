@@ -6,9 +6,10 @@ the host computer's clock over a run of several minutes, and stores a
 correction value the firmware applies to every LF tag-emulation PWM step's
 duration (see lf_wave_form_apply_trim() in lf_tag_em.c). The stored value is
 just a ppm correction -- what number to put there is up to the person
-running it: it might be the negative of their own measured crystal error
-(to get this device's LF emulation as close to nominal timing as possible),
-or a value chosen to deliberately match a specific reader's own clock error.
+running it: it might be their own measured crystal error, same sign, (to get
+this device's LF emulation as close to nominal timing as possible), or
+(this device's own ppm - a specific reader's own ppm) to deliberately match
+that reader's clock instead of nominal.
 
 Accuracy is bounded by the host computer's own clock, which this tool makes
 no attempt to check against anything external (no NTP). For a tighter
@@ -143,10 +144,11 @@ class HWLfXtalMeasure(DeviceRequiredUnit):
         print('')
         print(" To cancel out this device's own crystal error (make its LF emulation")
         print(" timing match nominal), set a trim of about "
-              f"{-ppm * 10:+.0f} (tenths of a ppm):")
-        print(f"   lf xtal trim --set {-ppm * 10:.0f}")
-        print(" To instead match a specific reader with its own known offset, use that")
-        print(" reader's ppm (negated) rather than this device's own measurement.")
+              f"{ppm * 10:+.0f} (tenths of a ppm):")
+        print(f"   lf xtal trim --set {ppm * 10:.0f}")
+        print(" To instead match a specific reader with its own known offset, use")
+        print(" (this device's own ppm - that reader's own ppm) instead, same sign")
+        print(" convention as above (positive = runs fast).")
 
 
 @lf_xtal.command("trim")
