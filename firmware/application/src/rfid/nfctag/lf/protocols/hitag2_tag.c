@@ -100,6 +100,16 @@ static volatile bool     m_rx_have_edge;
 static volatile uint32_t m_rx_dbg_periods[HT2_RX_DEBUG_PERIODS];
 static volatile uint8_t  m_rx_dbg_nperiods;
 
+// Diagnostic only: plain polled reads of LF_OA_OUT's digital level, main-loop
+// rate, independent of GPIOTE. Tells apart "GPIOTE is missing real edges"
+// (poll would see the pin move) from "the pin genuinely isn't moving"
+// (poll stays flat too).
+static bool     m_rx_dbg_poll_level;
+static bool     m_rx_dbg_poll_level_valid;
+static uint16_t m_rx_dbg_poll_transitions;
+static bool     m_rx_dbg_poll_last_seen_high;
+static bool     m_rx_dbg_poll_last_seen_low;
+
 void hitag2_tag_load(const uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE]) {
     memcpy(m_pages, pages, sizeof(m_pages));
 }
@@ -169,6 +179,10 @@ static void hitag2_rx_start(void) {
     m_rx_nbits = 0;
     m_rx_have_edge = false;
     m_rx_dbg_nperiods = 0;
+    m_rx_dbg_poll_level_valid = false;
+    m_rx_dbg_poll_transitions = 0;
+    m_rx_dbg_poll_last_seen_high = false;
+    m_rx_dbg_poll_last_seen_low = false;
 
     nrfx_timer_config_t tcfg = NRFX_TIMER_DEFAULT_CONFIG;
     tcfg.frequency = NRF_TIMER_FREQ_1MHz;
@@ -340,6 +354,22 @@ bool hitag2_tag_tick(void) {
         return false;
     }
 
+    // Plain polled read of the same pin GPIOTE is watching, main-loop rate.
+    // Independent evidence of whether the pin is moving at all.
+    bool level = nrf_gpio_pin_read(LF_OA_OUT) != 0;
+    if (!m_rx_dbg_poll_level_valid) {
+        m_rx_dbg_poll_level = level;
+        m_rx_dbg_poll_level_valid = true;
+    } else if (level != m_rx_dbg_poll_level) {
+        m_rx_dbg_poll_transitions++;
+        m_rx_dbg_poll_level = level;
+    }
+    if (level) {
+        m_rx_dbg_poll_last_seen_high = true;
+    } else {
+        m_rx_dbg_poll_last_seen_low = true;
+    }
+
     if (hitag2_rx_frame_ready()) {
         uint8_t nbits = m_rx_nbits;
         uint32_t value = hitag2_rx_value(nbits);
@@ -356,6 +386,12 @@ bool hitag2_tag_tick(void) {
         for (uint8_t i = 0; i < nperiods; i++) {
             NRF_LOG_INFO("  [%d] %d", i, periods[i]);
         }
+        NRF_LOG_INFO("hitag2 rx poll: %d transitions, saw high=%d low=%d",
+                     m_rx_dbg_poll_transitions, m_rx_dbg_poll_last_seen_high,
+                     m_rx_dbg_poll_last_seen_low);
+        m_rx_dbg_poll_transitions = 0;
+        m_rx_dbg_poll_last_seen_high = false;
+        m_rx_dbg_poll_last_seen_low = false;
 
         // hitag2_reply() (called from here, for a match) stops and
         // restarts RX itself around the TX burst; harmless no-op otherwise.
