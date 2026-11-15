@@ -321,11 +321,6 @@ bool hitag2_tag_tick(void) {
         hitag2_amp_power_off();
         rx_running = false;
         m_session_armed = false;
-        // Without this, m_is_lf_emulating (lf_tag_em.c) stayed stuck true
-        // past the end of the session, so no later reader approach this
-        // boot ever re-triggered the LPCOMP ISR -- only a slot change or
-        // reboot would.
-        lf_tag_em_hitag2_field_lost();
         return false;
     }
 
@@ -346,14 +341,6 @@ int lf_tag_hitag2_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffe
     return type == TAG_TYPE_HITAG2 ? LF_HITAG2_TAG_ID_SIZE : 0;
 }
 
-bool lf_tag_hitag2_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
-    // Default: UID DE AD BE EF, password 00000000, password-mode config
-    // (crypto bit clear), tag password 00000000, user pages zeroed.
-    uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE] = {
-        {0xDE, 0xAD, 0xBE, 0xEF},
-        {0x00, 0x00, 0x00, 0x00},
-        {0x00, 0x00, 0x00, 0x00},
-        {0x06, 0x00, 0x00, 0x00},
-    };
-    return lf_tag_data_factory(slot, tag_type, (uint8_t *)pages, sizeof(pages));
-}
+// lf_tag_hitag2_data_factory() lives in lf_tag_em.c, not here -- it needs
+// lf_tag_data_factory(), which is internal to that file (same pattern as
+// every other LF protocol's *_data_factory).
