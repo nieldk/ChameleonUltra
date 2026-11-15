@@ -192,6 +192,24 @@ void lf_125khz_radio_saadc166_disable(void) {
     unregister_lf_adc_callback();
 }
 
+/* Same 166.67kHz TIMER3/PPI trigger, routed to the short-buffer Hitag2
+ * registration (register_hitag2_adc_callback()) instead of the 2048-sample
+ * one above -- see HITAG2_ADC_BUF_LEN in ble_main.c for why. */
+void lf_125khz_radio_saadc166_enable_hitag2(lf_adc_callback_t cb) {
+    register_hitag2_adc_callback(cb);
+    psk166_capture_init();
+    nrfx_err_t err_code = nrfx_ppi_channel_enable(m_psk166_saadc_ppi);
+    APP_ERROR_CHECK(err_code);
+    nrfx_timer_enable(&m_psk166_timer);
+}
+
+void lf_125khz_radio_saadc166_disable_hitag2(void) {
+    nrfx_timer_disable(&m_psk166_timer);
+    nrfx_err_t err_code = nrfx_ppi_channel_disable(m_psk166_saadc_ppi);
+    APP_ERROR_CHECK(err_code);
+    unregister_hitag2_adc_callback();
+}
+
 void lf_125khz_radio_gpiote_enable(void) {
     nrfx_err_t err_code;
     err_code = nrfx_ppi_channel_enable(m_pwm_timer_count_ppi_channel);

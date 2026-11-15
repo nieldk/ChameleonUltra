@@ -74,6 +74,16 @@ static void lf_field_lost(void) {
     NRF_LOG_INFO("LF FIELD LOST");
 }
 
+// hitag2_tag.c has no PWM/EVT_STOPPED hook, so its own field-loss path
+// can't reach lf_field_lost() directly (static, and m_is_lf_emulating is
+// file-local). Without this, m_is_lf_emulating stayed stuck true past the
+// end of a Hitag2 session, so lpcomp_event_handler() short-circuited on
+// every later LPCOMP UP event and the tag never responded to a second
+// reader approach in the same boot.
+void lf_tag_em_hitag2_field_lost(void) {
+    lf_field_lost();
+}
+
 /**
  * @brief Judge field status
  */

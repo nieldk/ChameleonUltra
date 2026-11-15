@@ -23,6 +23,11 @@ void ble_update_device_name(void);
 void register_lf_adc_callback(lf_adc_callback_t cb);
 void unregister_lf_adc_callback(void);
 
+/* Same AIN5/166.67kHz LF capture, short low-latency buffers -- for Hitag2's
+ * tag-emulation RX, which must reply within ~1.8ms of the reader going quiet. */
+void register_hitag2_adc_callback(lf_adc_callback_t cb);
+void unregister_hitag2_adc_callback(void);
+
 /* Relay mode: temporarily take over advertising with raw relay data.
  * Call ble_main_relay_adv_restore() when relay stops. */
 void ble_main_relay_adv_set(const uint8_t *raw_adv, uint8_t len);

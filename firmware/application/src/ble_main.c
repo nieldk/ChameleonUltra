@@ -91,9 +91,16 @@ NRF_BLE_GATT_DEF(m_gatt);                                                       
 NRF_BLE_QWR_DEF(m_qwr);                                                             /**< Context for the Queued Write module.*/
 BLE_ADVERTISING_DEF(m_advertising);                                                 /**< Advertising module instance. */
 
+// Hitag2's RX needs the sample-level latency the 2048-sample LF buffers above
+// don't give: at 166.67kHz that's ~12ms/buffer, and a reply is due within
+// ~1.8ms of the reader's frame ending. Reuses the same adc_buf storage with a
+// shorter re-arm length instead of a second static array.
+#define HITAG2_ADC_BUF_LEN 8
+
 uint16_t          batt_lvl_in_milli_volts = 0;
 uint8_t           percentage_batt_lvl = 0;
 static nrf_saadc_value_t adc_buf[ADC_BUF_COUNT][ADC_BUF_SIZE];
+static size_t     m_lf_adc_rearm_len     = ADC_BUF_SIZE;
 static uint16_t   m_conn_handle          = BLE_CONN_HANDLE_INVALID;                 /**< Handle of the current connection. */
 static uint16_t   m_ble_nus_max_data_len = BLE_GATT_ATT_MTU_DEFAULT - 3;            /**< Maximum length of data (in bytes) that can be transmitted to the peer by the Nordic UART service module. */
 lf_adc_callback_t m_lf_adc_callback      = NULL;
@@ -849,7 +856,7 @@ static void peer_manager_init(void) {
 void saadc_event_handler(nrfx_saadc_evt_t const *p_event) {
     if (p_event->type == NRFX_SAADC_EVT_DONE && m_lf_adc_callback != NULL) {
         ret_code_t err_code;
-        err_code = nrfx_saadc_buffer_convert(&adc_buf[next_free_buf_index()][0], ADC_BUF_SIZE);
+        err_code = nrfx_saadc_buffer_convert(&adc_buf[next_free_buf_index()][0], m_lf_adc_rearm_len);
         APP_ERROR_CHECK(err_code);
 
         m_lf_adc_callback(p_event->data.done.p_buffer, p_event->data.done.size);
@@ -968,6 +975,39 @@ void register_lf_adc_callback(lf_adc_callback_t cb) {
 
 void unregister_lf_adc_callback(void) {
     nrfx_saadc_uninit();
+    adc_configure();
+    m_lf_adc_callback = NULL;
+}
+
+// Same AIN5/166.67kHz LF capture as register_lf_adc_callback(), short buffers
+// instead of ADC_BUF_SIZE -- see HITAG2_ADC_BUF_LEN.
+void register_hitag2_adc_callback(lf_adc_callback_t cb) {
+    m_lf_adc_callback = cb;
+    m_lf_adc_rearm_len = HITAG2_ADC_BUF_LEN;
+
+    nrfx_saadc_uninit();
+
+    ret_code_t err_code;
+
+    nrfx_saadc_config_t cfg = NRFX_SAADC_DEFAULT_CONFIG;
+    err_code = nrfx_saadc_init(&cfg, saadc_event_handler);
+    APP_ERROR_CHECK(err_code);
+
+    nrf_saadc_channel_config_t ch = NRFX_SAADC_DEFAULT_CHANNEL_CONFIG_SE(NRF_SAADC_INPUT_AIN5);
+    ch.acq_time = NRF_SAADC_ACQTIME_3US;
+    err_code = nrfx_saadc_channel_init(ADC_CHANNEL, &ch);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrfx_saadc_buffer_convert(&adc_buf[next_free_buf_index()][0], HITAG2_ADC_BUF_LEN);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrfx_saadc_buffer_convert(&adc_buf[next_free_buf_index()][0], HITAG2_ADC_BUF_LEN);
+    APP_ERROR_CHECK(err_code);
+}
+
+void unregister_hitag2_adc_callback(void) {
+    nrfx_saadc_uninit();
+    m_lf_adc_rearm_len = ADC_BUF_SIZE;
     adc_configure();
     m_lf_adc_callback = NULL;
 }

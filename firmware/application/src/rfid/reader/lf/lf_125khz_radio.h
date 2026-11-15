@@ -31,6 +31,11 @@ void lf_125khz_radio_saadc_disable(void);
 /* 166.67 kHz TIMER3-triggered sampling, for PSK1 fc/2 (real Indala) read. */
 void lf_125khz_radio_saadc166_enable(lf_adc_callback_t cb);
 void lf_125khz_radio_saadc166_disable(void);
+
+/* Same TIMER3/PPI trigger, short low-latency buffers -- for Hitag2 tag-
+ * emulation RX (see ble_main.c HITAG2_ADC_BUF_LEN). */
+void lf_125khz_radio_saadc166_enable_hitag2(lf_adc_callback_t cb);
+void lf_125khz_radio_saadc166_disable_hitag2(void);
 void lf_125khz_radio_gpiote_disable(void);
 
 void start_lf_125khz_radio(void);

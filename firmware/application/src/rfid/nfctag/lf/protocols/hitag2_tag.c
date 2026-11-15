@@ -2,12 +2,12 @@
 
 #include <string.h>
 
+#include "ble_main.h"
 #include "bsp_delay.h"
 #include "hw_connect.h"
+#include "lf_125khz_radio.h"
 #include "lf_tag_em.h"
 #include "nrf_gpio.h"
-#include "nrfx_gpiote.h"
-#include "nrfx_timer.h"
 
 #define NRF_LOG_MODULE_NAME hitag2_tag
 #include "nrf_log.h"
@@ -35,27 +35,33 @@ NRF_LOG_MODULE_REGISTER();
  * LF_MOD high" matches ANT_NO_MOD()'s own idle-low convention, same as the
  * working viking.c RF/32 tag emulation on this same pin.
  *
- * RX decodes the reader's downlink on LF_OA_OUT via GPIOTE, the same pin
- * and peripheral reader-mode's own EM4x05/Indala decode uses
- * (lf_125khz_radio.c gpiote_init()). LF_OA_OUT and the tag-mode field-sense
- * tap (LF_RSSI) share one root node on the schematic (LF_OA, the rectified
- * raw antenna envelope) with no feedback to this device's own driven
- * carrier, so it reads an externally-driven reader field the same way
- * reader mode reads its own. LF_RSSI itself (previously used here) is
- * documented elsewhere in this tree as a ~2ms-time-constant tap -- far too
- * slow for Hitag2's ~48-240us BPLM timing; LF_OA_OUT's active-filtered path
- * is the fix for that, not a plain pin swap.
+ * RX, 2nd design: ADC slope detection on LF_OA_OUT, not a GPIOTE level
+ * threshold.
  *
- * Two things this still needs real hardware to settle, not guessed here:
- *   - LF_OA_OUT's two op-amp filter stages are powered by READER_POWER
- *     (schematic net LF_AMP_PWR), off by default in tag-emulation mode
- *     (see rfid_main.c tag_mode_enter()) -- enabled only for the duration
- *     of a Hitag2 session below.
- *   - Estimating this board's own filter corners from the schematic's R/C
- *     values (roughly 34kHz then 5kHz) puts the settling time in the same
- *     order of magnitude as a 160us "0" bit period -- plausible, not
- *     comfortably margined. Only a scope on LF_OA_OUT against a real
- *     reader can confirm consecutive short gaps stay resolvable.
+ * The first design used NRFX_GPIOTE_CONFIG_IN_SENSE_LOTOHI on LF_OA_OUT --
+ * a fixed digital-level threshold crossing. PM3's own SimulateHitag2()
+ * (armsrc/hitag2.c) documents hitting exactly this failure mode on their
+ * hardware for this exact scenario (a tag decoding an external reader's
+ * field with no self-driven carrier to reference against): a level
+ * threshold needs the envelope back over it before it reports the next
+ * gap, and on a run of BPLM zero bits it never gets there, so several bits
+ * merge into one interval -- measured there as total failure, not partial
+ * (two Proxmarks 1cm apart: start_auth=0 answers=0). Their fix was slope
+ * detection in their FPGA: compare each sample to one ~32us earlier, call
+ * an edge on the difference, not the absolute level. That isn't portable
+ * (no FPGA here), but the principle is.
+ *
+ * This reuses lf_125khz_radio.c's existing TIMER3/PPI-triggered SAADC
+ * capture (same 166.67kHz rate already proven for reader-mode Indala
+ * fc/2 decode, AIN5 = LF_OA_OUT), routed through its own short-buffer
+ * registration (ble_main.c's HITAG2_ADC_BUF_LEN) since Hitag2 must reply
+ * within ~1.8ms of the reader going quiet and the 2048-sample buffers
+ * used for Indala are ~12ms/buffer -- far too slow here.
+ *
+ * HT2_SLOPE_THRESH is a starting value, not a measured one -- needs real
+ * hardware to tune against this board's actual field-on/field-off ADC
+ * swing. Session start/end logs the raw sample min/max seen so that value
+ * can be set from real numbers instead of guessed twice.
  * --------------------------------------------------------------------- */
 
 #define HT2_SOF_BITS        6
@@ -69,29 +75,56 @@ NRF_LOG_MODULE_REGISTER();
 
 // Downlink (reader -> tag) bit-period classification, same constants as
 // lf_hitag2_data.c's reader-mode TX (verified against PM3): T_0=20 Tc,
-// T_1=30 Tc. Classify by the gap between consecutive rising edges on
-// LF_OA_OUT (each marks the field coming back on after one bit's low
-// pulse -- see header comment for why rising, not falling).
+// T_1=30 Tc. Classify by the time between consecutive slope-detected edges
+// (each marks the field coming back on after one bit's low pulse).
 #define HT2_RX_T0_US   (20u * 8u)
 #define HT2_RX_T1_US   (30u * 8u)
 #define HT2_RX_JIT_US  48u  // +/- window around each threshold
 
-// No new rising edge within this long -> the reader's frame is done.
+// No new edge within this long -> the reader's frame is done.
 #define HT2_RX_FRAME_GAP_US  400u
 
 // LF_OA_OUT's op-amp stages need READER_POWER (LF_AMP_PWR) on; give them
-// time to settle before trusting edges. Not a measured value -- a
+// time to settle before trusting samples. Not a measured value -- a
 // conservative guess pending a scope check.
 #define HT2_RX_AMP_SETTLE_US  1000u
 
-static uint8_t m_pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE];
+// ADC sample period: TIMER3/PPI drives SAADC at 16MHz/96 = 166.667kHz
+// (lf_125khz_radio.c psk166_capture_init()).
+#define HT2_SAMPLE_PERIOD_US  6u
 
-static nrfx_timer_t m_ht_timer = NRFX_TIMER_INSTANCE(3);
+// Slope window: compare each sample to one this many samples back. Sized to
+// HT2_RX's own T_LOW (~48us = 8 samples at 6us/sample), not PM3's ~32us --
+// their sample rate differs, the principle (span the low-pulse duration) is
+// what carries over, not the constant.
+#define HT2_SLOPE_LOOKBACK_SAMPLES 8
+
+// Starting guess, needs real-hardware tuning -- see header comment.
+#define HT2_SLOPE_THRESH 200
+
+// Minimum samples between accepted edges, so one envelope ramp (several
+// samples each showing delta > threshold while climbing) counts once, not
+// several times. Shorter than the smallest valid inter-edge gap (T0, 160us).
+#define HT2_SLOPE_HOLDOFF_SAMPLES 10
+
+static uint8_t m_pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE];
 
 static volatile uint32_t m_rx_bits[64 / 32 + 1];
 static volatile uint8_t  m_rx_nbits;
 static volatile uint32_t m_rx_last_edge_us;
 static volatile bool     m_rx_have_edge;
+static volatile uint32_t m_rx_total_samples;
+static volatile bool     m_rx_frame_ready_flag;
+
+// Slope-detector state, persists across ADC callback invocations.
+static int16_t  m_hist[HT2_SLOPE_LOOKBACK_SAMPLES];
+static uint8_t  m_hist_pos;
+static uint8_t  m_hist_filled;
+static uint32_t m_holdoff_left;
+
+// Diagnostic only, for tuning HT2_SLOPE_THRESH against real hardware.
+static int16_t m_dbg_min;
+static int16_t m_dbg_max;
 
 void hitag2_tag_load(const uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE]) {
     memcpy(m_pages, pages, sizeof(m_pages));
@@ -111,16 +144,14 @@ static void hitag2_rx_push_bit(bool bit) {
     m_rx_nbits++;
 }
 
-// GPIOTE rising-edge handler on LF_OA_OUT: field just came back on after
-// one bit's low pulse. The bit value is carried by the period since the
-// PREVIOUS rising edge, not by this pulse's own width (BPLM: the low
-// pulse itself, T_LOW, is the same ~6 Tc for both bit values).
-static void hitag2_rx_edge_cb(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action) {
-    (void)pin;
-    (void)action;
-    uint32_t now = nrfx_timer_capture(&m_ht_timer, NRF_TIMER_CC_CHANNEL0);
+// Slope-detected edge: field just came back on after one bit's low pulse.
+// The bit value is carried by the time since the PREVIOUS edge, not by this
+// pulse's own width (BPLM: the low pulse itself, T_LOW, is the same ~6 Tc
+// for both bit values).
+static void hitag2_rx_edge(uint32_t sample_idx) {
+    uint32_t now_us = sample_idx * HT2_SAMPLE_PERIOD_US;
     if (m_rx_have_edge) {
-        uint32_t period = now - m_rx_last_edge_us;
+        uint32_t period = now_us - m_rx_last_edge_us;
         bool is_one = (period >= (HT2_RX_T1_US - HT2_RX_JIT_US) && period <= (HT2_RX_T1_US + HT2_RX_JIT_US));
         bool is_zero = (period >= (HT2_RX_T0_US - HT2_RX_JIT_US) && period <= (HT2_RX_T0_US + HT2_RX_JIT_US));
         if (is_one) {
@@ -132,15 +163,54 @@ static void hitag2_rx_edge_cb(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t actio
         // frame-start/stop guard, not a data bit; ignore it rather than
         // guess, and let the frame-gap timeout close the frame.
     }
-    m_rx_last_edge_us = now;
+    m_rx_last_edge_us = now_us;
     m_rx_have_edge = true;
+}
+
+// SAADC DONE callback (lf_adc_callback_t), runs in interrupt context via
+// lf_125khz_radio_saadc166_enable_hitag2(). Slope-detects edges in this
+// buffer, pushes them through the same classifier as the pin-interrupt
+// design did, then checks whether the frame has gone quiet.
+static void hitag2_adc_callback(nrf_saadc_value_t *buf, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        int16_t sample = (int16_t)buf[i];
+        if (sample < m_dbg_min) m_dbg_min = sample;
+        if (sample > m_dbg_max) m_dbg_max = sample;
+
+        int32_t delayed = (m_hist_filled >= HT2_SLOPE_LOOKBACK_SAMPLES) ? m_hist[m_hist_pos] : sample;
+        int32_t delta = (int32_t)sample - delayed;
+
+        m_hist[m_hist_pos] = sample;
+        m_hist_pos = (uint8_t)((m_hist_pos + 1) % HT2_SLOPE_LOOKBACK_SAMPLES);
+        if (m_hist_filled < HT2_SLOPE_LOOKBACK_SAMPLES) {
+            m_hist_filled++;
+        }
+
+        if (m_holdoff_left > 0) {
+            m_holdoff_left--;
+        } else if (delta > HT2_SLOPE_THRESH) {
+            hitag2_rx_edge(m_rx_total_samples + i);
+            m_holdoff_left = HT2_SLOPE_HOLDOFF_SAMPLES;
+        }
+    }
+    m_rx_total_samples += (uint32_t)len;
+
+    // Checked here, not just in hitag2_tag_tick(), so frame-gap detection
+    // is bounded by one buffer period (HITAG2_ADC_BUF_LEN samples) rather
+    // than also waiting on the next main-loop pass.
+    if (m_rx_have_edge && m_rx_nbits > 0) {
+        uint32_t since = (m_rx_total_samples * HT2_SAMPLE_PERIOD_US) - m_rx_last_edge_us;
+        if (since >= HT2_RX_FRAME_GAP_US) {
+            m_rx_frame_ready_flag = true;
+        }
+    }
 }
 
 // LF_OA_OUT's op-amp stages are unpowered during normal tag emulation
 // (tag_mode_enter() clears READER_POWER). Powered once for the whole
 // session (hitag2_tag_tick()), not per-reply -- hitag2_reply() only
-// pauses the GPIOTE edge decode around our own TX, it does not need the
-// amp re-settled each time.
+// pauses the ADC capture around our own TX, it does not need the amp
+// re-settled each time.
 static void hitag2_amp_power_on(void) {
     nrf_gpio_cfg_output(READER_POWER);
     nrf_gpio_pin_set(READER_POWER);
@@ -151,42 +221,33 @@ static void hitag2_amp_power_off(void) {
     nrf_gpio_pin_clear(READER_POWER);
 }
 
-// Same pin and peripheral as lf_125khz_radio.c's reader-mode decode
-// (gpiote_init()/LOTOHI on LF_OA_OUT) -- no separate nrfx_gpiote_init()
-// call here either, matching that proven precedent in this codebase.
 static void hitag2_rx_start(void) {
     memset((void *)m_rx_bits, 0, sizeof(m_rx_bits));
     m_rx_nbits = 0;
     m_rx_have_edge = false;
+    m_rx_total_samples = 0;
+    m_rx_frame_ready_flag = false;
+    memset(m_hist, 0, sizeof(m_hist));
+    m_hist_pos = 0;
+    m_hist_filled = 0;
+    m_holdoff_left = 0;
+    m_dbg_min = 32767;   // INT16_MAX: first sample updates it
+    m_dbg_max = -32768;  // INT16_MIN: first sample updates it
 
-    nrfx_timer_config_t tcfg = NRFX_TIMER_DEFAULT_CONFIG;
-    tcfg.frequency = NRF_TIMER_FREQ_1MHz;
-    tcfg.mode = NRF_TIMER_MODE_TIMER;
-    tcfg.bit_width = NRF_TIMER_BIT_WIDTH_32;
-    nrfx_timer_init(&m_ht_timer, &tcfg, NULL);
-    nrfx_timer_enable(&m_ht_timer);
-
-    nrfx_gpiote_in_config_t cfg = NRFX_GPIOTE_CONFIG_IN_SENSE_LOTOHI(false);
-    nrfx_gpiote_in_init(LF_OA_OUT, &cfg, hitag2_rx_edge_cb);
-    nrfx_gpiote_in_event_enable(LF_OA_OUT, true);
+    lf_125khz_radio_saadc166_enable_hitag2(hitag2_adc_callback);
 }
 
 static void hitag2_rx_stop(void) {
-    nrfx_gpiote_in_event_disable(LF_OA_OUT);
-    nrfx_gpiote_in_uninit(LF_OA_OUT);
-    nrfx_timer_disable(&m_ht_timer);
-    nrfx_timer_uninit(&m_ht_timer);
+    lf_125khz_radio_saadc166_disable_hitag2();
+    NRF_LOG_INFO("hitag2 rx adc range: min=%d max=%d (tune HT2_SLOPE_THRESH against this)",
+                 m_dbg_min, m_dbg_max);
 }
 
 // Non-blocking: true if a frame looks complete (reader has gone quiet for
-// HT2_RX_FRAME_GAP_US after at least one decoded bit). Called from
-// hitag2_tag_tick(), main-loop context, every iteration -- not a wait loop.
+// HT2_RX_FRAME_GAP_US after at least one decoded bit). The actual check
+// runs in hitag2_adc_callback(); this just reads the flag it sets.
 static bool hitag2_rx_frame_ready(void) {
-    if (!m_rx_have_edge || m_rx_nbits == 0) {
-        return false;
-    }
-    uint32_t since = nrfx_timer_capture(&m_ht_timer, NRF_TIMER_CC_CHANNEL0) - m_rx_last_edge_us;
-    return since >= HT2_RX_FRAME_GAP_US;
+    return m_rx_frame_ready_flag;
 }
 
 static uint32_t hitag2_rx_value(uint8_t nbits) {
@@ -220,8 +281,8 @@ static void hitag2_tx_bit(bool bit) {
 }
 
 // Sends 6-bit SOF (all 1s) + the low `nbits` of `value`, MSB first, then
-// releases the antenna. GPIOTE RX must already be stopped by the caller --
-// our own modulation would otherwise retrigger hitag2_rx_edge_cb.
+// releases the antenna. ADC RX must already be stopped by the caller --
+// our own modulation would otherwise feed back into the slope detector.
 static void hitag2_tx_frame(uint32_t value, uint8_t nbits) {
     for (uint8_t i = 0; i < HT2_SOF_BITS; i++) {
         hitag2_tx_bit(true);
@@ -263,6 +324,7 @@ static uint32_t page_u32(uint8_t page) {
 // WRITE_PAGE needs a two-frame exchange this first cut does not do), 10
 // bits = READ_PAGE/READ_PAGE_INVERTED.
 static void hitag2_handle_frame(uint8_t nbits, uint32_t value) {
+    NRF_LOG_INFO("hitag2 rx frame: %d bits, value 0x%08X", nbits, value);
     if (nbits == 5) {
         m_authed = false;
         hitag2_reply(page_u32(HITAG2_PAGE_UID), 32);
@@ -321,10 +383,16 @@ bool hitag2_tag_tick(void) {
         hitag2_amp_power_off();
         rx_running = false;
         m_session_armed = false;
+        // Without this, m_is_lf_emulating (lf_tag_em.c) stayed stuck true
+        // past the end of the session, so no later reader approach this
+        // boot ever re-triggered the LPCOMP ISR -- only a slot change or
+        // reboot would.
+        lf_tag_em_hitag2_field_lost();
         return false;
     }
 
     if (hitag2_rx_frame_ready()) {
+        m_rx_frame_ready_flag = false;
         uint8_t nbits = m_rx_nbits;
         uint32_t value = hitag2_rx_value(nbits);
         m_rx_nbits = 0;
