@@ -351,6 +351,14 @@ bool hitag2_tag_tick(void) {
     // reader approach this boot ever re-triggered the LPCOMP ISR.
     uint32_t now_us = nrfx_timer_capture(&m_ht_timer, NRF_TIMER_CC_CHANNEL0);
     if ((now_us - m_last_activity_us) >= HT2_SESSION_IDLE_US) {
+        // Diagnostics below normally only print when a frame completes
+        // (hitag2_rx_frame_ready()), so a session with zero edges ever
+        // would otherwise close silently -- print what the poll saw here
+        // too, since "no edge, ever" vs "edges, never classified" is
+        // exactly the question an all-silent timeout can't answer.
+        NRF_LOG_INFO("hitag2 session idle: %d raw periods captured, %d poll transitions, saw high=%d low=%d",
+                     m_rx_dbg_nperiods, m_rx_dbg_poll_transitions,
+                     m_rx_dbg_poll_last_seen_high, m_rx_dbg_poll_last_seen_low);
         hitag2_rx_stop();
         rx_running = false;
         m_session_armed = false;
