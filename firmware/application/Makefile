@@ -66,6 +66,8 @@ SRC_FILES += \
   $(PROJ_DIR)/ble_main.c \
   $(PROJ_DIR)/rfid_main.c \
   $(PROJ_DIR)/settings.c \
+  $(PROJ_DIR)/timer1_lock.c \
+  $(PROJ_DIR)/lf_xtal_counter.c \
   $(PROJ_DIR)/app_standalone.c \
   $(PROJ_DIR)/app_cmd_standalone.c \
   $(PROJ_DIR)/standalone_led.c \
