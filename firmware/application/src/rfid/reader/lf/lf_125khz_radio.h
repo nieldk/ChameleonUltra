@@ -36,6 +36,15 @@ void lf_125khz_radio_saadc166_disable(void);
  * emulation RX (see ble_main.c HITAG2_ADC_BUF_LEN). */
 void lf_125khz_radio_saadc166_enable_hitag2(lf_adc_callback_t cb);
 void lf_125khz_radio_saadc166_disable_hitag2(void);
+
+/* Lightweight pause/resume for Hitag2's per-reply RX turnaround: only the
+ * TIMER3/PPI sample trigger, not the SAADC channel itself (psk166_capture_init()
+ * is a one-time setup, so this is safe without re-registering). Unlike
+ * enable/disable_hitag2() above, this does not touch the ADC driver, so it
+ * has none of its re-init latency -- see hitag2_tag.c for why that mattered. */
+void lf_125khz_radio_saadc166_pause_hitag2(void);
+void lf_125khz_radio_saadc166_resume_hitag2(void);
+
 void lf_125khz_radio_gpiote_disable(void);
 
 void start_lf_125khz_radio(void);

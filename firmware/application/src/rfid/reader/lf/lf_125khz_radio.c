@@ -210,6 +210,26 @@ void lf_125khz_radio_saadc166_disable_hitag2(void) {
     unregister_hitag2_adc_callback();
 }
 
+/* register_hitag2_adc_callback()/unregister_hitag2_adc_callback() do a full
+ * nrfx_saadc_uninit()+init()+channel_init() -- fine once per session, too
+ * slow around every single TX reply: on real hardware this cost enough
+ * turnaround latency that the start of the reader's real response was
+ * getting clipped (a 32-bit password frame landing as 26-29 bits). These
+ * two only touch the timer/PPI, which psk166_capture_init() already set up
+ * once and leaves alone -- the SAADC channel stays live and armed under
+ * the pause. */
+void lf_125khz_radio_saadc166_pause_hitag2(void) {
+    nrfx_timer_disable(&m_psk166_timer);
+    nrfx_err_t err_code = nrfx_ppi_channel_disable(m_psk166_saadc_ppi);
+    APP_ERROR_CHECK(err_code);
+}
+
+void lf_125khz_radio_saadc166_resume_hitag2(void) {
+    nrfx_err_t err_code = nrfx_ppi_channel_enable(m_psk166_saadc_ppi);
+    APP_ERROR_CHECK(err_code);
+    nrfx_timer_enable(&m_psk166_timer);
+}
+
 void lf_125khz_radio_gpiote_enable(void) {
     nrfx_err_t err_code;
     err_code = nrfx_ppi_channel_enable(m_pwm_timer_count_ppi_channel);

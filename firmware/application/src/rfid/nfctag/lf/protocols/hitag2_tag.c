@@ -68,6 +68,17 @@ NRF_LOG_MODULE_REGISTER();
  * 160-240us-period transition) and raised the threshold; m_dbg_max_delta
  * now logs the largest delta actually seen so the next round tunes from a
  * measured number instead of another guess.
+ *
+ * Second real-hardware test: garbage dropped a lot, but password frames
+ * (key 00000000, value 0x00000000 -- a strong tell) landed as 26-29 bits
+ * instead of 32, always right after our own reply. Cause: hitag2_reply()
+ * was pausing/resuming RX via hitag2_rx_stop()/hitag2_rx_start(), which do
+ * a full SAADC uninit()+init()+channel_init() -- that driver re-init
+ * latency, repeated around every single TX, was clipping the first several
+ * bits of the reader's actual response. Fixed by pausing/resuming only the
+ * TIMER3/PPI sample trigger for a reply (hitag2_rx_pause_for_tx()/
+ * _resume_after_tx()), leaving the SAADC channel live; the full init/uninit
+ * is now only done once, at session start/end.
  * --------------------------------------------------------------------- */
 
 #define HT2_SOF_BITS        6
@@ -253,7 +264,10 @@ static void hitag2_amp_power_off(void) {
     nrf_gpio_pin_clear(READER_POWER);
 }
 
-static void hitag2_rx_start(void) {
+// Clears decoded-bit and slope-detector state for a fresh frame. Shared by
+// the full session start/resume paths below -- neither should carry over
+// a partial bit/history from whatever was happening before.
+static void hitag2_rx_reset_decode_state(void) {
     memset((void *)m_rx_bits, 0, sizeof(m_rx_bits));
     m_rx_nbits = 0;
     m_rx_have_edge = false;
@@ -266,17 +280,50 @@ static void hitag2_rx_start(void) {
     memset(m_avg_buf, 0, sizeof(m_avg_buf));
     m_avg_sum = 0;
     m_avg_pos = 0;
+}
+
+static void hitag2_rx_reset_dbg(void) {
     m_dbg_min = 32767;   // INT16_MAX: first sample updates it
     m_dbg_max = -32768;  // INT16_MIN: first sample updates it
     m_dbg_max_delta = 0;
+}
 
+static void hitag2_rx_log_dbg(void) {
+    NRF_LOG_INFO("hitag2 rx adc range: min=%d max=%d max_delta=%d (tune HT2_SLOPE_THRESH against this)",
+                 m_dbg_min, m_dbg_max, m_dbg_max_delta);
+}
+
+// Session start/end: the only places that touch the SAADC channel itself
+// (full driver init/uninit, non-trivial latency -- see hitag2_reply()'s
+// pause/resume below for why that latency matters and is avoided there).
+static void hitag2_rx_start(void) {
+    hitag2_rx_reset_decode_state();
+    hitag2_rx_reset_dbg();
     lf_125khz_radio_saadc166_enable_hitag2(hitag2_adc_callback);
 }
 
 static void hitag2_rx_stop(void) {
     lf_125khz_radio_saadc166_disable_hitag2();
-    NRF_LOG_INFO("hitag2 rx adc range: min=%d max=%d max_delta=%d (tune HT2_SLOPE_THRESH against this)",
-                 m_dbg_min, m_dbg_max, m_dbg_max_delta);
+    hitag2_rx_log_dbg();
+}
+
+// Per-reply RX turnaround (around our own TX burst). Pauses/resumes only
+// the TIMER3/PPI sample trigger, not the SAADC channel -- hitag2_rx_start()/
+// _stop() do a full nrfx_saadc_uninit()+init()+channel_init() each time,
+// which was fine once per session but far too slow called around every
+// single TX: on real hardware this was the actual cause of 32-bit password
+// frames (key 00000000 -- hence the telltale value 0x00000000) landing as
+// 26-29 bits instead of 32, always right after a reply. The driver re-init
+// latency was eating the first several bits of the reader's real response.
+static void hitag2_rx_pause_for_tx(void) {
+    lf_125khz_radio_saadc166_pause_hitag2();
+    hitag2_rx_log_dbg();
+}
+
+static void hitag2_rx_resume_after_tx(void) {
+    hitag2_rx_reset_decode_state();
+    hitag2_rx_reset_dbg();
+    lf_125khz_radio_saadc166_resume_hitag2();
 }
 
 // Non-blocking: true if a frame looks complete (reader has gone quiet for
@@ -330,10 +377,10 @@ static void hitag2_tx_frame(uint32_t value, uint8_t nbits) {
 }
 
 static void hitag2_reply(uint32_t value, uint8_t nbits) {
-    hitag2_rx_stop();
+    hitag2_rx_pause_for_tx();
     bsp_delay_us(HT2_T_WAIT_RESP_US);
     hitag2_tx_frame(value, nbits);
-    hitag2_rx_start();
+    hitag2_rx_resume_after_tx();
 }
 
 static uint16_t hitag2_page_frame_expect(uint8_t opcode, uint8_t page) {
