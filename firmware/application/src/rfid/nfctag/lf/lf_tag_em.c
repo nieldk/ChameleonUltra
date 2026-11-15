@@ -642,3 +642,16 @@ bool lf_tag_pyramid_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
     };
     return lf_tag_data_factory(slot, tag_type, tag_id, sizeof(tag_id));
 }
+
+/** @brief Hitag2 default frame: UID DE AD BE EF, password mode, no crypto. */
+bool lf_tag_hitag2_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
+    // Default: UID DE AD BE EF, password 00000000, password-mode config
+    // (crypto bit clear), tag password 00000000, user pages zeroed.
+    uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE] = {
+        {0xDE, 0xAD, 0xBE, 0xEF},
+        {0x00, 0x00, 0x00, 0x00},
+        {0x00, 0x00, 0x00, 0x00},
+        {0x06, 0x00, 0x00, 0x00},
+    };
+    return lf_tag_data_factory(slot, tag_type, (uint8_t *)pages, sizeof(pages));
+}
