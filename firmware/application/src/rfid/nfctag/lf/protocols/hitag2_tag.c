@@ -93,6 +93,13 @@ static volatile uint8_t  m_rx_nbits;
 static volatile uint32_t m_rx_last_edge_us;
 static volatile bool     m_rx_have_edge;
 
+// Diagnostic only: every edge's raw period (not just the ones that passed
+// classification), so a frame that decodes short can be told apart from
+// "no more edges arrived" vs "edges arrived outside the T0/T1 windows".
+#define HT2_RX_DEBUG_PERIODS 16
+static volatile uint32_t m_rx_dbg_periods[HT2_RX_DEBUG_PERIODS];
+static volatile uint8_t  m_rx_dbg_nperiods;
+
 void hitag2_tag_load(const uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE]) {
     memcpy(m_pages, pages, sizeof(m_pages));
 }
@@ -121,6 +128,9 @@ static void hitag2_rx_edge_cb(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t actio
     uint32_t now = nrfx_timer_capture(&m_ht_timer, NRF_TIMER_CC_CHANNEL0);
     if (m_rx_have_edge) {
         uint32_t period = now - m_rx_last_edge_us;
+        if (m_rx_dbg_nperiods < HT2_RX_DEBUG_PERIODS) {
+            m_rx_dbg_periods[m_rx_dbg_nperiods++] = period;
+        }
         bool is_one = (period >= (HT2_RX_T1_US - HT2_RX_JIT_US) && period <= (HT2_RX_T1_US + HT2_RX_JIT_US));
         bool is_zero = (period >= (HT2_RX_T0_US - HT2_RX_JIT_US) && period <= (HT2_RX_T0_US + HT2_RX_JIT_US));
         if (is_one) {
@@ -158,6 +168,7 @@ static void hitag2_rx_start(void) {
     memset((void *)m_rx_bits, 0, sizeof(m_rx_bits));
     m_rx_nbits = 0;
     m_rx_have_edge = false;
+    m_rx_dbg_nperiods = 0;
 
     nrfx_timer_config_t tcfg = NRFX_TIMER_DEFAULT_CONFIG;
     tcfg.frequency = NRF_TIMER_FREQ_1MHz;
@@ -330,6 +341,18 @@ bool hitag2_tag_tick(void) {
         uint32_t value = hitag2_rx_value(nbits);
         m_rx_nbits = 0;
         m_rx_have_edge = false;
+
+        uint8_t nperiods = m_rx_dbg_nperiods;
+        uint32_t periods[HT2_RX_DEBUG_PERIODS];
+        for (uint8_t i = 0; i < nperiods; i++) {
+            periods[i] = m_rx_dbg_periods[i];
+        }
+        m_rx_dbg_nperiods = 0;
+        NRF_LOG_INFO("hitag2 rx edges: %d raw periods (us):", nperiods);
+        for (uint8_t i = 0; i < nperiods; i++) {
+            NRF_LOG_INFO("  [%d] %d", i, periods[i]);
+        }
+
         // hitag2_reply() (called from here, for a match) stops and
         // restarts RX itself around the TX burst; harmless no-op otherwise.
         hitag2_handle_frame(nbits, value);
