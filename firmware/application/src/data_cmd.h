@@ -307,10 +307,13 @@
 #define DATA_CMD_INDALA_GET_EMU_ID              (5015)
 #define DATA_CMD_FDXB_SET_EMU_ID                (5016)
 #define DATA_CMD_FDXB_GET_EMU_ID                (5017)
+#define DATA_CMD_HITAG2_SET_EMU_ID              (5018)  // in: 32 bytes, 8 pages
+#define DATA_CMD_HITAG2_GET_EMU_ID              (5019)  // out: 32 bytes, 8 pages
 
 #define DATA_CMD_EM4X05_SCAN                    (3030)
 #define DATA_CMD_EM4X05_READSNIFF               (3032)
 #define DATA_CMD_LF_SNIFF                       (3031)
 #define DATA_CMD_LF_SEARCH                      (3033)  // PM3-style: sweep all LF decoders, first hit
+#define DATA_CMD_LF_HITAG2_READ                 (3034)  // in: 4-byte password; out: 8 pages * 4 bytes (password mode only)
 
 #endif

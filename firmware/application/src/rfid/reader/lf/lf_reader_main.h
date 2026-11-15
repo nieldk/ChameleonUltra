@@ -7,6 +7,7 @@
 #include "lf_125khz_radio.h"
 #if defined(PROJECT_CHAMELEON_ULTRA)
 #include "lf_em4x05_data.h"
+#include "lf_hitag2_data.h"
 #endif
 #include "lf_reader_data.h"
 

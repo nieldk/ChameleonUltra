@@ -1124,6 +1124,27 @@ class ChameleonCMD:
             resp.parsed = struct.unpack('!IIIBB', resp.data[:14])
         return resp
 
+    @expect_response([Status.LF_TAG_OK, Status.LF_TAG_NO_FOUND])
+    def hitag2_read(self, password: bytes):
+        """
+        Password-mode Hitag2 session: START_AUTH, read UID, send `password`,
+        and if the tag accepts it, read every other page (crypto mode is
+        not supported).
+
+        :param password: 4-byte reader password (this device's own page-1
+            value, i.e. what a real reader would be configured with)
+        :return: parsed tuple (status, pages) where pages is a list of 8
+            bytes objects (4 bytes each), or None if the tag never answered
+            or rejected the password
+        """
+        resp = self.device.send_cmd_sync(Command.LF_HITAG2_READ, bytes(password))
+        if resp.status == Status.LF_TAG_OK:
+            pages = [resp.data[i * 4:(i + 1) * 4] for i in range(8)]
+            resp.parsed = (resp.status, pages)
+        else:
+            resp.parsed = (resp.status, None)
+        return resp
+
     @expect_response(Status.LF_TAG_OK)
     def viking_scan(self):
         """
@@ -1590,6 +1611,28 @@ class ChameleonCMD:
         """
         resp = self.device.send_cmd_sync(Command.FDXB_GET_EMU_ID)
         resp.parsed = resp.data[:13]
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def hitag2_set_emu_id(self, pages: bytes):
+        """
+        Set the 8 Hitag2 pages (32 bytes) emulated by the active slot:
+        page0 UID, page1 reader's password, page2 key-high (crypto mode
+        only, unused here), page3 config+tag password, pages4-7 user data.
+
+        :param pages: 32 bytes (8 pages * 4 bytes)
+        """
+        if len(pages) != 32:
+            raise ValueError("The pages bytes length must equal 32")
+        return self.device.send_cmd_sync(Command.HITAG2_SET_EMU_ID, pages)
+
+    @expect_response(Status.SUCCESS)
+    def hitag2_get_emu_id(self):
+        """
+        Get the emulated Hitag2 pages (32 bytes, 8 pages * 4 bytes).
+        """
+        resp = self.device.send_cmd_sync(Command.HITAG2_GET_EMU_ID)
+        resp.parsed = [resp.data[i * 4:(i + 1) * 4] for i in range(8)]
         return resp
 
     @expect_response(Status.SUCCESS)

@@ -50,6 +50,7 @@ NRF_LOG_MODULE_REGISTER();
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
 #include "rc522.h"
+#include "protocols/hitag2_tag.h"
 #endif
 
 // Defining soft timers
@@ -1319,6 +1320,10 @@ int main(void) {
         if (!m_battery_status_display_active) {
             field_generator_rainbow_loop();
         }
+        // Hitag2 emulation: decode the external reader's downlink and reply.
+        // Must run from here, not the LPCOMP ISR that arms it -- see
+        // hitag2_tag_session_start()/hitag2_tag_tick() in hitag2_tag.c.
+        hitag2_tag_tick();
 #endif
 
 #if defined(PROJECT_DESFIRE_EMULATION)

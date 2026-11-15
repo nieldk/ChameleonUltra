@@ -29,6 +29,7 @@
 #include "bsp_wdt.h"
 #include "lf_reader_generic.h"
 #include "lf_em4x05_data.h"
+#include "lf_hitag2_data.h"
 #include "protocols/fdxb.h"
 #include "rc522.h"
 #include "hw_connect.h"
@@ -2197,6 +2198,26 @@ static data_frame_tx_t *cmd_processor_pac_get_emu_id(uint16_t cmd, uint16_t stat
     return data_frame_make(cmd, STATUS_SUCCESS, LF_PAC_TAG_ID_SIZE, buffer->buffer);
 }
 
+static data_frame_tx_t *cmd_processor_hitag2_set_emu_id(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length != LF_HITAG2_TAG_ID_SIZE) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    tag_data_buffer_t *buffer = get_buffer_by_tag_type(TAG_TYPE_HITAG2);
+    memcpy(buffer->buffer, data, LF_HITAG2_TAG_ID_SIZE);
+    tag_emulation_load_by_buffer(TAG_TYPE_HITAG2, false);
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
+static data_frame_tx_t *cmd_processor_hitag2_get_emu_id(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    tag_slot_specific_type_t tag_types;
+    tag_emulation_get_specific_types_by_slot(tag_emulation_get_slot(), &tag_types);
+    if (tag_types.tag_lf != TAG_TYPE_HITAG2) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, data);
+    }
+    tag_data_buffer_t *buffer = get_buffer_by_tag_type(TAG_TYPE_HITAG2);
+    return data_frame_make(cmd, STATUS_SUCCESS, LF_HITAG2_TAG_ID_SIZE, buffer->buffer);
+}
+
 static data_frame_tx_t *cmd_processor_jablotron_set_emu_id(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     if (length != LF_JABLOTRON_TAG_ID_SIZE) {
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
@@ -2983,6 +3004,18 @@ static data_frame_tx_t *cmd_processor_em4x05_scan(uint16_t cmd, uint16_t status,
     payload.uid_hi    = U32HTONL(tag.uid_hi);
     payload.is_em4x69 = tag.is_em4x69 ? 1 : 0;
     return data_frame_make(cmd, STATUS_LF_TAG_OK, sizeof(payload), (uint8_t *)&payload);
+}
+
+static data_frame_tx_t *cmd_processor_lf_hitag2_read(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length < 4) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE];
+    bool ok = hitag2_reader_read(data, pages, 500);
+    if (!ok) {
+        return data_frame_make(cmd, STATUS_LF_TAG_NO_FOUND, 0, NULL);
+    }
+    return data_frame_make(cmd, STATUS_LF_TAG_OK, sizeof(pages), (uint8_t *)pages);
 }
 
 static data_frame_tx_t *cmd_processor_lf_sniff(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
@@ -5148,6 +5181,7 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_IOPROX_DECODE_RAW,            NULL,                        cmd_processor_ioprox_decode_raw,             NULL                   },
     {    DATA_CMD_IOPROX_COMPOSE_ID,            NULL,                        cmd_processor_ioprox_compose_id,             NULL                   },
     {    DATA_CMD_EM4X05_SCAN,                  before_reader_run,           cmd_processor_em4x05_scan,                   NULL                   },
+    {    DATA_CMD_LF_HITAG2_READ,               before_reader_run,           cmd_processor_lf_hitag2_read,                NULL                   },
     {    DATA_CMD_LF_SNIFF,                     before_reader_run,           cmd_processor_lf_sniff,                      NULL                   },
     {    DATA_CMD_LOGIC_ARM,                    NULL,                        cmd_processor_logic_arm,                     NULL                   },
     {    DATA_CMD_LOGIC_READ,                   NULL,                        cmd_processor_logic_read,                    NULL                   },
@@ -5223,6 +5257,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_INDALA_GET_EMU_ID,              NULL,                      cmd_processor_indala_get_emu_id,             NULL                   },
     {    DATA_CMD_FDXB_SET_EMU_ID,                NULL,                      cmd_processor_fdxb_set_emu_id,               NULL                   },
     {    DATA_CMD_FDXB_GET_EMU_ID,                NULL,                      cmd_processor_fdxb_get_emu_id,               NULL                   },
+    {    DATA_CMD_HITAG2_SET_EMU_ID,              NULL,                      cmd_processor_hitag2_set_emu_id,             NULL                   },
+    {    DATA_CMD_HITAG2_GET_EMU_ID,              NULL,                      cmd_processor_hitag2_get_emu_id,             NULL                   },
 
     {    DATA_CMD_SEOS_READ_EMU_DATA,             NULL,                      cmd_processor_seos_read_emu_data,            NULL                   },
     {    DATA_CMD_SEOS_WRITE_EMU_DATA,            NULL,                      cmd_processor_seos_write_emu_data,           NULL                   },

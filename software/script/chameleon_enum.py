@@ -264,10 +264,13 @@ class Command(enum.IntEnum):
     INDALA_GET_EMU_ID = 5015
     FDXB_SET_EMU_ID = 5016
     FDXB_GET_EMU_ID = 5017
+    HITAG2_SET_EMU_ID = 5018
+    HITAG2_GET_EMU_ID = 5019
     EM4X05_SCAN = 3030
     EM4X05_READSNIFF = 3032
     LF_SNIFF = 3031
     LF_SEARCH = 3033
+    LF_HITAG2_READ = 3034
 
 
 @enum.unique
@@ -426,7 +429,8 @@ class TagSpecificType(enum.IntEnum):
     # T5577
     # EM4x05/4x69
     # EM4x50/4x70
-    # Hitag series
+    # Hitag2: password mode only, no crypto mode
+    HITAG2 = 400
 
     TAG_TYPES_LF_END = 999
 

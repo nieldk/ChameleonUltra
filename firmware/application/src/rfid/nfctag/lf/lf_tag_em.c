@@ -15,6 +15,7 @@
 #include "protocols/idteck.h"
 #include "protocols/ioprox.h"
 #include "protocols/jablotron.h"
+#include "protocols/hitag2_tag.h"
 #include "protocols/pac.h"
 #include "protocols/pyramid.h"
 #include "protocols/viking.h"
@@ -112,6 +113,15 @@ static void lpcomp_event_handler(nrf_lpcomp_event_t event) {
     // LED status update
     set_slot_light_color(RGB_BLUE);
     TAG_FIELD_LED_ON()
+
+    if (m_tag_type == TAG_TYPE_HITAG2) {
+        // Just arms the session flag -- the actual interactive work (and
+        // its own field-loss check) runs from hitag2_tag_tick(), called
+        // every main-loop iteration (app_main.c), never from this ISR.
+        hitag2_tag_session_start();
+        NRF_LOG_INFO("LF FIELD DETECTED (hitag2)");
+        return;
+    }
 
     // Play a finite burst then stop — field check happens in EVT_STOPPED after
     // PWM has fully released LF_MOD, so ANT_NO_MOD() and the settle delay are
@@ -413,6 +423,17 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         pyramid.free(codec);
         NRF_LOG_INFO("load lf pyramid data finish.");
         return LF_PYRAMID_TAG_ID_SIZE;
+    }
+
+    if (type == TAG_TYPE_HITAG2 && buffer->length >= LF_HITAG2_TAG_ID_SIZE) {
+        // Interactive, not a looping broadcast -- no m_pwm_seq here.
+        // lpcomp_event_handler() branches on m_tag_type and calls
+        // hitag2_tag_session_start() instead; hitag2_tag_tick() (called
+        // from app_main.c's main loop) does the actual session work.
+        m_tag_type = type;
+        hitag2_tag_load((const uint8_t (*)[HITAG2_PAGE_SIZE])buffer->buffer);
+        NRF_LOG_INFO("load lf hitag2 data finish.");
+        return LF_HITAG2_TAG_ID_SIZE;
     }
 
     NRF_LOG_ERROR("no valid data exists in buffer for tag type: %d.", type);
