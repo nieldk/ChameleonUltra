@@ -91,6 +91,22 @@ NRF_LOG_MODULE_REGISTER();
  * (not the moving-average/history bookkeeping, which stays warm) for
  * HT2_RX_POST_TX_MUTE_US after resuming, so our own ringdown can't
  * misalign the T0/T1 reference for the bits that follow it.
+ *
+ * Fourth real-hardware test: no improvement, deficit if anything slightly
+ * worse (as low as 24 of 32 bits, where the worst before muting was 26).
+ * That direction fits a different explanation better: the mute only makes
+ * our total reply-to-listening latency longer, and if the reader starts
+ * its next frame on a schedule of its own rather than reacting to our
+ * modulation actually stopping, a longer blind window after our TX can
+ * only cost more of the reader's frame, not less. HT2_RX_POST_TX_MUTE_US
+ * is disabled (0) pending real evidence either way. Added instead: each
+ * decoded frame now also logs its edge-to-edge span in us and how many
+ * inter-edge gaps were classified as neither T0 nor T1 and dropped
+ * (hitag2_rx_edge()'s m_rx_dropped_gaps) -- dropped>0 means bits are being
+ * lost mid-frame (jitter/noise), dropped==0 with a short span means the
+ * frame was simply picked up late. One tells us to chase noise rejection
+ * further, the other tells us to chase reply timing; guessing at another
+ * constant without that distinction is how the last two rounds went.
  * --------------------------------------------------------------------- */
 
 #define HT2_SOF_BITS        6
@@ -118,12 +134,14 @@ NRF_LOG_MODULE_REGISTER();
 // conservative guess pending a scope check.
 #define HT2_RX_AMP_SETTLE_US  1000u
 
-// Our own TX ringing in the front end on resume -- see
-// hitag2_rx_resume_after_tx() / the adc callback's mute branch. Real
-// hardware lost up to 4 bit periods (<=960us at T1=240us) off the start of
-// every 32-bit password frame to this; 1200us is that deficit plus margin,
-// not an independently measured settle time.
-#define HT2_RX_POST_TX_MUTE_US  1200u
+// Disabled (0) -- see header comment's 4th-test note. Set to 1200 for one
+// round on the theory that our own TX ringing was corrupting the first
+// edge after resume; the next test's deficit didn't shrink and plausibly
+// grew, which fits "this mute only shortens our listening window" better
+// than "this fixes a ringing artifact". Left in place, not deleted, since
+// the frame-span/dropped-gap log added alongside it is what should decide
+// whether a (smaller, re-measured) mute is worth reviving.
+#define HT2_RX_POST_TX_MUTE_US  0u
 
 // ADC sample period: TIMER3/PPI drives SAADC at 16MHz/96 = 166.667kHz
 // (lf_125khz_radio.c psk166_capture_init()).
@@ -156,6 +174,8 @@ static uint8_t m_pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE];
 static volatile uint32_t m_rx_bits[64 / 32 + 1];
 static volatile uint8_t  m_rx_nbits;
 static volatile uint32_t m_rx_last_edge_us;
+static volatile uint32_t m_rx_first_edge_us;
+static volatile uint32_t m_rx_dropped_gaps;
 static volatile bool     m_rx_have_edge;
 static volatile uint32_t m_rx_total_samples;
 static volatile bool     m_rx_frame_ready_flag;
@@ -209,10 +229,17 @@ static void hitag2_rx_edge(uint32_t sample_idx) {
             hitag2_rx_push_bit(true);
         } else if (is_zero) {
             hitag2_rx_push_bit(false);
+        } else {
+            // Out-of-window gap -- most likely the reader's own
+            // frame-start/stop guard, not a data bit; ignore it rather
+            // than guess, and let the frame-gap timeout close the frame.
+            // Counted (not just ignored) so the per-frame log can show
+            // whether a short frame lost bits mid-stream (this count > 0)
+            // or simply started late (count == 0, elapsed time short).
+            m_rx_dropped_gaps++;
         }
-        // else: out-of-window gap -- most likely the reader's own
-        // frame-start/stop guard, not a data bit; ignore it rather than
-        // guess, and let the frame-gap timeout close the frame.
+    } else {
+        m_rx_first_edge_us = now_us;
     }
     m_rx_last_edge_us = now_us;
     m_rx_have_edge = true;
@@ -316,6 +343,7 @@ static void hitag2_rx_reset_decode_state(void) {
     m_avg_sum = 0;
     m_avg_pos = 0;
     m_rx_mute_samples_left = 0;  // resume_after_tx() below sets this for real
+    m_rx_dropped_gaps = 0;
 }
 
 static void hitag2_rx_reset_dbg(void) {
@@ -515,8 +543,17 @@ bool hitag2_tag_tick(void) {
         m_rx_frame_ready_flag = false;
         uint8_t nbits = m_rx_nbits;
         uint32_t value = hitag2_rx_value(nbits);
+        // Span from this frame's first accepted edge to its last, and how
+        // many inter-edge gaps fell outside both T0/T1 windows and got
+        // dropped rather than counted as a bit -- decides between "started
+        // late" (dropped==0, span roughly matches nbits*160-240us) and
+        // "lost bits mid-frame" (dropped>0) for a short frame.
+        uint32_t span_us = m_rx_have_edge ? (m_rx_last_edge_us - m_rx_first_edge_us) : 0;
+        uint32_t dropped = m_rx_dropped_gaps;
         m_rx_nbits = 0;
         m_rx_have_edge = false;
+        m_rx_dropped_gaps = 0;
+        NRF_LOG_INFO("hitag2 rx frame span: %u us, dropped_gaps=%u", span_us, dropped);
         // hitag2_reply() (called from here, for a match) stops and
         // restarts RX itself around the TX burst; harmless no-op otherwise.
         hitag2_handle_frame(nbits, value);
