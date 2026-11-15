@@ -84,6 +84,13 @@ NRF_LOG_MODULE_REGISTER();
 // conservative guess pending a scope check.
 #define HT2_RX_AMP_SETTLE_US  1000u
 
+// How often hitag2_tag_tick() re-checks is_lf_field_exists(). That call
+// re-enables and samples LPCOMP on LF_RSSI, which shares its analog root
+// node with LF_OA_OUT on this board -- doing that every single main-loop
+// tick was suspected of injecting a glitch onto LF_OA_OUT once per pass.
+// 50ms is far looser than needed just for field-loss detection.
+#define HT2_FIELD_CHECK_INTERVAL_US 50000u
+
 static uint8_t m_pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE];
 
 static nrfx_timer_t m_ht_timer = NRFX_TIMER_INSTANCE(3);
@@ -107,6 +114,7 @@ static volatile uint8_t  m_rx_dbg_nperiods;
 static bool     m_rx_dbg_poll_level;
 static bool     m_rx_dbg_poll_level_valid;
 static uint16_t m_rx_dbg_poll_transitions;
+static uint32_t m_last_field_check_us;
 static bool     m_rx_dbg_poll_last_seen_high;
 static bool     m_rx_dbg_poll_last_seen_low;
 
@@ -183,6 +191,7 @@ static void hitag2_rx_start(void) {
     m_rx_dbg_poll_transitions = 0;
     m_rx_dbg_poll_last_seen_high = false;
     m_rx_dbg_poll_last_seen_low = false;
+    m_last_field_check_us = 0;
 
     nrfx_timer_config_t tcfg = NRFX_TIMER_DEFAULT_CONFIG;
     tcfg.frequency = NRF_TIMER_FREQ_1MHz;
@@ -346,12 +355,24 @@ bool hitag2_tag_tick(void) {
         return true;
     }
 
-    if (!is_lf_field_exists()) {
-        hitag2_rx_stop();
-        hitag2_amp_power_off();
-        rx_running = false;
-        m_session_armed = false;
-        return false;
+    // is_lf_field_exists() re-enables LPCOMP and samples it, and LF_RSSI
+    // shares its analog root node with LF_OA_OUT on this board (see header
+    // comment) -- calling it every single tick was suspected of injecting a
+    // small glitch onto LF_OA_OUT once per main-loop pass. Debug logging
+    // showed RX "edges" repeating at a near-constant ~3ms spacing matching
+    // plausible main-loop timing, not anything BPLM-shaped -- throttling
+    // this check removes that as a source while still catching real field
+    // loss promptly enough (50ms is well under any protocol timeout here).
+    uint32_t now_us = nrfx_timer_capture(&m_ht_timer, NRF_TIMER_CC_CHANNEL0);
+    if ((now_us - m_last_field_check_us) >= HT2_FIELD_CHECK_INTERVAL_US) {
+        m_last_field_check_us = now_us;
+        if (!is_lf_field_exists()) {
+            hitag2_rx_stop();
+            hitag2_amp_power_off();
+            rx_running = false;
+            m_session_armed = false;
+            return false;
+        }
     }
 
     // Plain polled read of the same pin GPIOTE is watching, main-loop rate.
