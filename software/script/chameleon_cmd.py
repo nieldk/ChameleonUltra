@@ -1043,6 +1043,66 @@ class ChameleonCMD:
             resp.parsed = (bool(overflow), total, calls, cc)
         return resp
 
+    @expect_response([Status.SUCCESS, Status.DEVICE_MODE_ERROR])
+    def lf_xtal_start(self):
+        """
+        Hold HFXO on and start a free-running 16 MHz tick count on TIMER1,
+        for measuring this device's own crystal ppm offset against an
+        external time reference. parsed = busy (True if TIMER1 is on loan
+        to something else, e.g. an in-progress `hf 14a sniff --tap`).
+        """
+        resp = self.device.send_cmd_sync(Command.LF_XTAL_START)
+        resp.parsed = (resp.status == Status.DEVICE_MODE_ERROR)
+        return resp
+
+    @expect_response([Status.SUCCESS, Status.PAR_ERR])
+    def lf_xtal_read(self):
+        """
+        Sample the running tick counter. parsed = (not_running, raw_ticks,
+        hfclk_lapsed, running). raw_ticks is a raw 32-bit register that
+        wraps roughly every 268 s -- the caller is responsible for polling
+        more often than that and accumulating across wraps.
+        """
+        resp = self.device.send_cmd_sync(Command.LF_XTAL_READ)
+        if resp.status == Status.PAR_ERR:
+            resp.parsed = (True, 0, False, False)
+        else:
+            raw_ticks, hfclk_lapsed, running = struct.unpack('!IBB', resp.data[:6])
+            resp.parsed = (False, raw_ticks, bool(hfclk_lapsed), bool(running))
+        return resp
+
+    @expect_response([Status.SUCCESS, Status.PAR_ERR])
+    def lf_xtal_stop(self):
+        """
+        Final sample (taken before teardown), then release HFXO and TIMER1.
+        parsed = (not_running, raw_ticks, hfclk_lapsed).
+        """
+        resp = self.device.send_cmd_sync(Command.LF_XTAL_STOP)
+        if resp.status == Status.PAR_ERR:
+            resp.parsed = (True, 0, False)
+        else:
+            raw_ticks, hfclk_lapsed, _running = struct.unpack('!IBB', resp.data[:6])
+            resp.parsed = (False, raw_ticks, bool(hfclk_lapsed))
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def get_lf_xtal_trim(self):
+        """parsed = signed trim value in tenths of a ppm (0 = no correction)"""
+        resp = self.device.send_cmd_sync(Command.GET_LF_XTAL_TRIM)
+        resp.parsed = struct.unpack('!h', resp.data[:2])[0]
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def set_lf_xtal_trim(self, trim_ppm_x10: int):
+        """
+        :param trim_ppm_x10: signed tenths-of-a-ppm correction applied to
+            every LF tag-emulation PWM step's duration. Positive lengthens
+            (slows) the emulated bit timing, negative shortens (speeds) it.
+        """
+        trim_ppm_x10 = max(-32768, min(32767, int(trim_ppm_x10)))
+        payload = struct.pack('!h', trim_ppm_x10)
+        return self.device.send_cmd_sync(Command.SET_LF_XTAL_TRIM, payload)
+
     @expect_response(Status.LF_TAG_OK)
     def em4x05_scan(self, pwd: int = 0):
         """

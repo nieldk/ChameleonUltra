@@ -18,6 +18,7 @@
 #include "protocols/pac.h"
 #include "protocols/pyramid.h"
 #include "protocols/viking.h"
+#include "settings.h"
 #include "syssleep.h"
 #include "tag_emulation.h"
 #include "tag_persistence.h"
@@ -242,6 +243,70 @@ void lf_tag_125khz_sense_switch(bool enable) {
     }
 }
 
+/**
+ * Scale every wave-form step's real-world duration by the stored LF crystal
+ * trim (settings_get_lf_xtal_trim_ppm_x10(), see settings.h), so the whole
+ * frame's total duration ends up right even though a single step's own
+ * correction is far below one tick.
+ *
+ * A single ppm-scale correction per step, rounded independently, is NOT
+ * enough: at 125 kHz PWM clock (8 us/tick) and a realistic ~100 ppm trim,
+ * one EM410x half-bit (counter_top=64, 512 us) is only off by ~0.05 tick,
+ * which every independent round() throws away -- the whole frame would come
+ * out with zero correction applied. Instead this runs the usual
+ * Bresenham/DDA-style error-accumulation: cum_target tracks the ideal
+ * (fractional) cumulative tick position, cum_applied tracks what has
+ * actually been emitted as whole ticks so far, and each step gets the
+ * difference between the two -- so the sub-tick remainder a step couldn't
+ * use carries forward instead of being discarded, and surfaces as a real
+ * +-1 tick adjustment once it has accumulated enough across later steps.
+ *
+ * Every protocol modulator here encodes a step's duty as a fixed fraction
+ * of its own counter_top (e.g. channel_0 = polarity | counter_top/2 for the
+ * ASK/FSK protocols, same idea for the PSK ones); that fraction is
+ * recomputed against each step's own (possibly adjusted) counter_top, so
+ * the waveform shape stays correct even where a step's length changed.
+ * Polarity (channel_0 bit 15) is preserved. A zero trim is a no-op: nothing
+ * is rewritten, so a sequence built once stays stable across repeated
+ * plays of the same load.
+ *
+ * Call exactly once per freshly-built sequence, right after a modulator()
+ * call — never on every playback — scaling an already-scaled buffer again
+ * would compound the error.
+ */
+static void lf_wave_form_apply_trim(const nrf_pwm_sequence_t *seq) {
+    int16_t trim_x10 = settings_get_lf_xtal_trim_ppm_x10();
+    if (trim_x10 == 0 || seq == NULL || seq->values.p_wave_form == NULL) {
+        return;
+    }
+    double scale = 1.0 + ((double)trim_x10 / 10.0) / 1.0e6;
+    // seq->values.p_wave_form is declared `const` for readers of the
+    // sequence (the PWM peripheral, nrfx_pwm_simple_playback callers); the
+    // backing array itself is a plain mutable static buffer that every
+    // modulator() writes to directly, so rewriting it here through a
+    // non-const view is the same kind of access those modulators already do.
+    nrf_pwm_values_wave_form_t *values = (nrf_pwm_values_wave_form_t *)seq->values.p_wave_form;
+    size_t count = seq->length / 4; // 4 x uint16 fields per wave-form entry
+    double cum_target = 0.0;  // ideal fractional cumulative tick position
+    double cum_applied = 0.0; // whole ticks actually emitted so far
+    for (size_t i = 0; i < count; i++) {
+        uint16_t top = values[i].counter_top;
+        uint16_t pol = values[i].channel_0 & (uint16_t)(1U << 15);
+        uint16_t mag = values[i].channel_0 & (uint16_t)0x7FFF;
+        double duty_frac = (top > 0) ? ((double)mag / (double)top) : 0.5;
+
+        cum_target += (double)top * scale;
+        double new_cum_applied = (double)(int32_t)(cum_target + 0.5);
+        double step_ticks = new_cum_applied - cum_applied;
+        cum_applied = new_cum_applied;
+
+        uint16_t new_top = (step_ticks >= 1.0) ? (uint16_t)step_ticks : 1;
+        uint16_t new_mag = (uint16_t)((double)new_top * duty_frac + 0.5);
+        values[i].counter_top = new_top;
+        values[i].channel_0 = pol | new_mag;
+    }
+}
+
 /** @brief lf card data loader
  * @param type     Refined tag type
  * @param buffer   Data buffer
@@ -254,6 +319,7 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         m_tag_type = type;
         void *codec = p->alloc();
         m_pwm_seq = p->modulator(codec, buffer->buffer);
+        lf_wave_form_apply_trim(m_pwm_seq);
         p->free(codec);
         NRF_LOG_INFO("load lf em410x%s data finish.", type == TAG_TYPE_EM410X_ELECTRA ? " electra" : "");
         return lf_em410x_id_size(type);
@@ -263,6 +329,7 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         m_tag_type = type;
         void *codec = hidprox.alloc();
         m_pwm_seq = hidprox.modulator(codec, buffer->buffer);
+        lf_wave_form_apply_trim(m_pwm_seq);
         hidprox.free(codec);
         NRF_LOG_INFO("load lf hidprox data finish.");
         return LF_HIDPROX_TAG_ID_SIZE;
@@ -272,6 +339,7 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         m_tag_type = type;
         void *codec = indala.alloc();
         m_pwm_seq = indala.modulator(codec, buffer->buffer);
+        lf_wave_form_apply_trim(m_pwm_seq);
         indala.free(codec);
         NRF_LOG_INFO("load lf indala data finish.");
         return LF_INDALA_TAG_ID_SIZE;
@@ -281,6 +349,7 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         m_tag_type = type;
         void *codec = ioprox.alloc();
         m_pwm_seq = ioprox.modulator(codec, buffer->buffer);
+        lf_wave_form_apply_trim(m_pwm_seq);
         ioprox.free(codec);
         NRF_LOG_INFO("load lf ioprox data finish.");
         return LF_IOPROX_TAG_ID_SIZE;
@@ -290,6 +359,7 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         m_tag_type = type;
         void *codec = viking.alloc();
         m_pwm_seq = viking.modulator(codec, buffer->buffer);
+        lf_wave_form_apply_trim(m_pwm_seq);
         viking.free(codec);
         NRF_LOG_INFO("load lf viking data finish.");
         return LF_VIKING_TAG_ID_SIZE;
@@ -299,6 +369,7 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         m_tag_type = type;
         void *codec = pac.alloc();
         m_pwm_seq = pac.modulator(codec, buffer->buffer);
+        lf_wave_form_apply_trim(m_pwm_seq);
         pac.free(codec);
         NRF_LOG_INFO("load lf pac data finish.");
         return LF_PAC_TAG_ID_SIZE;
@@ -308,6 +379,7 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         m_tag_type = type;
         void *codec = jablotron.alloc();
         m_pwm_seq = jablotron.modulator(codec, buffer->buffer);
+        lf_wave_form_apply_trim(m_pwm_seq);
         jablotron.free(codec);
         NRF_LOG_INFO("load lf jablotron data finish.");
         return LF_JABLOTRON_TAG_ID_SIZE;
@@ -317,6 +389,7 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         m_tag_type = type;
         void *codec = fdxb.alloc();
         m_pwm_seq = fdxb.modulator(codec, buffer->buffer);
+        lf_wave_form_apply_trim(m_pwm_seq);
         fdxb.free(codec);
         NRF_LOG_INFO("load lf fdxb data finish.");
         return LF_FDXB_TAG_ID_SIZE;
@@ -326,6 +399,7 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         m_tag_type = type;
         void *codec = idteck.alloc();
         m_pwm_seq = idteck.modulator(codec, buffer->buffer);
+        lf_wave_form_apply_trim(m_pwm_seq);
         idteck.free(codec);
         NRF_LOG_INFO("load lf idteck data finish.");
         return LF_IDTECK_TAG_ID_SIZE;
@@ -335,6 +409,7 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         m_tag_type = type;
         void *codec = pyramid.alloc();
         m_pwm_seq = pyramid.modulator(codec, buffer->buffer);
+        lf_wave_form_apply_trim(m_pwm_seq);
         pyramid.free(codec);
         NRF_LOG_INFO("load lf pyramid data finish.");
         return LF_PYRAMID_TAG_ID_SIZE;

@@ -5,7 +5,7 @@
 
 #include "utils.h"
 
-#define SETTINGS_CURRENT_VERSION 7
+#define SETTINGS_CURRENT_VERSION 8
 #define SETTINGS_SLEEP_TIMEOUT_DEFAULT_S 8   // default wake timeout in seconds (matches SLEEP_DELAY_MS_BUTTON_WAKEUP)
 #define SETTINGS_SLEEP_TIMEOUT_MIN_S      5
 #define SETTINGS_SLEEP_TIMEOUT_MAX_S      60
@@ -66,6 +66,17 @@ typedef struct ALIGN_U32 {
     // BLE_NAME_MAX_LEN + 1 bytes (add on version7)
     char ble_name[BLE_NAME_MAX_LEN + 1]; // NUL-terminated custom BLE name; empty string = use firmware default
 
+    // 2 bytes (add on version8)
+    // Signed correction, in tenths of a ppm, applied to every LF
+    // tag-emulation PWM step's duration (see lf_wave_form_apply_trim() in
+    // lf_tag_em.c): output duration is scaled by (1 + value/1e7). Positive
+    // lengthens (slows) the emulated bit timing, negative shortens (speeds)
+    // it. 0 = no correction. Measured and set via `hw lf xtal`; this field
+    // only stores whatever value the user settled on, it has no opinion on
+    // why they chose it (matching their own crystal's measured error, or
+    // deliberately offsetting to match a specific reader's).
+    int16_t lf_xtal_trim_ppm_x10;
+
     /*
      * Warning !!!!!!!!!!!!!!!!!!!!!! <-------------
      * If you need to add settings,
@@ -98,4 +109,7 @@ bool settings_set_ble_name(const char *name, uint8_t len);
 void settings_init_ble_name_config(void);
 uint8_t settings_get_log_level(void);
 void settings_set_log_level(uint8_t level);
+int16_t settings_get_lf_xtal_trim_ppm_x10(void);
+void settings_set_lf_xtal_trim_ppm_x10(int16_t value_x10);
+void settings_init_lf_xtal_trim_config(void);
 #endif

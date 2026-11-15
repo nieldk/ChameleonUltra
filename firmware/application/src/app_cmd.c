@@ -16,6 +16,8 @@
 #include "app_util_platform.h"
 #include "nrfx_ppi.h"
 #include "logic_analyzer.h"
+#include "timer1_lock.h"
+#include "lf_xtal_counter.h"
 #include "settings.h"
 #include "delayed_reset.h"
 #include "logflash.h"
@@ -569,6 +571,21 @@ static data_frame_tx_t *cmd_processor_set_sleep_timeout(uint16_t cmd, uint16_t s
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
     }
     settings_set_sleep_timeout(data[0]);
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
+static data_frame_tx_t *cmd_processor_get_lf_xtal_trim(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    int16_t trim_x10 = settings_get_lf_xtal_trim_ppm_x10();
+    uint16_t out = U16HTONS((uint16_t)trim_x10);
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(out), (uint8_t *)&out);
+}
+
+static data_frame_tx_t *cmd_processor_set_lf_xtal_trim(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length != 2) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    int16_t trim_x10 = (int16_t)(((uint16_t)data[0] << 8) | data[1]);
+    settings_set_lf_xtal_trim_ppm_x10(trim_x10);
     return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
 }
 
@@ -3087,6 +3104,44 @@ static data_frame_tx_t *cmd_processor_logic_stop(uint16_t cmd, uint16_t status, 
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(out), (uint8_t *)&out);
 }
 
+static data_frame_tx_t *lf_xtal_status_response(uint16_t cmd, lf_xtal_status_t rc, const lf_xtal_sample_t *s) {
+    if (rc == LF_XTAL_BUSY) {
+        return data_frame_make(cmd, STATUS_DEVICE_MODE_ERROR, 0, NULL);
+    }
+    if (rc == LF_XTAL_NOT_RUNNING) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    struct {
+        uint32_t raw_ticks;
+        uint8_t  hfclk_lapsed;
+        uint8_t  running;
+    } PACKED out;
+    out.raw_ticks     = U32HTONL(s->raw_ticks);
+    out.hfclk_lapsed  = s->hfclk_lapsed ? 1 : 0;
+    out.running       = s->running ? 1 : 0;
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(out), (uint8_t *)&out);
+}
+
+static data_frame_tx_t *cmd_processor_lf_xtal_start(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    lf_xtal_status_t rc = lf_xtal_counter_start();
+    if (rc != LF_XTAL_OK) {
+        return data_frame_make(cmd, STATUS_DEVICE_MODE_ERROR, 0, NULL);
+    }
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
+static data_frame_tx_t *cmd_processor_lf_xtal_read(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    lf_xtal_sample_t s;
+    lf_xtal_status_t rc = lf_xtal_counter_read(&s);
+    return lf_xtal_status_response(cmd, rc, &s);
+}
+
+static data_frame_tx_t *cmd_processor_lf_xtal_stop(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    lf_xtal_sample_t s;
+    lf_xtal_status_t rc = lf_xtal_counter_stop(&s);
+    return lf_xtal_status_response(cmd, rc, &s);
+}
+
 /* ========================================================================
  * HF14A AUTH TRACE — full anticoll + Crypto1 auth flow, every frame returned.
  *
@@ -3544,6 +3599,12 @@ static void hf14a_sniff_tx_frame_cb(const uint8_t *data, uint16_t szBits) {
  *
  * PROJECT_CHAMELEON_ULTRA only — needs the RC522 reader front-end. */
 uint16_t hf14a_sniff_tap_run(uint32_t timeout_ms, uint16_t *out_cb_count) {
+    /* TIMER1 is on loan below; refuse if lf_xtal_counter.c already holds it
+     * for a crystal measurement run, rather than fight it for the register. */
+    if (!timer1_lock_try_acquire()) {
+        if (out_cb_count) *out_cb_count = 0;
+        return 0;
+    }
     if (timeout_ms == 0 || timeout_ms > 30000) timeout_ms = 5000;
 
     /* Reload active slot data before sniffing — see cmd_processor_hf14a_sniff
@@ -3675,6 +3736,7 @@ uint16_t hf14a_sniff_tap_run(uint32_t timeout_ms, uint16_t *out_cb_count) {
     if (ppi_end_ok)   { nrfx_ppi_channel_disable(ppi_end);   nrfx_ppi_channel_free(ppi_end);   }
     if (ppi_start_ok) { nrfx_ppi_channel_disable(ppi_start); nrfx_ppi_channel_free(ppi_start); }
     NRF_TIMER1->TASKS_STOP = 1;            /* release the us timebase         */
+    timer1_lock_release();
     nfc_tag_14a_set_sniff_passive(false);  /* re-enable normal TX responses  */
     nrf_gpio_pin_set(HF_ANT_SEL);          /* leave coil on NFCT (emulation) */
     pcd_14a_reader_antenna_off();
@@ -5002,6 +5064,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_SET_BLE_PAIRING_ENABLE,       NULL,                        cmd_processor_set_ble_pairing_enable,        NULL                   },
     {    DATA_CMD_GET_SLEEP_TIMEOUT,            NULL,                        cmd_processor_get_sleep_timeout,             NULL                   },
     {    DATA_CMD_SET_SLEEP_TIMEOUT,            NULL,                        cmd_processor_set_sleep_timeout,             NULL                   },
+    {    DATA_CMD_GET_LF_XTAL_TRIM,             NULL,                        cmd_processor_get_lf_xtal_trim,              NULL                   },
+    {    DATA_CMD_SET_LF_XTAL_TRIM,             NULL,                        cmd_processor_set_lf_xtal_trim,              NULL                   },
     {    DATA_CMD_GET_ALL_SLOT_NICKS,           NULL,                        cmd_processor_get_all_slot_nicks,            NULL                   },
     {    DATA_CMD_GET_BOOTLOADER_VERSION,       NULL,                        cmd_processor_get_bootloader_version,        NULL                   },
     {    DATA_CMD_GET_DFU_APP_VERSION,          NULL,                        cmd_processor_get_dfu_app_version,           NULL                   },
@@ -5089,6 +5153,9 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_LOGIC_READ,                   NULL,                        cmd_processor_logic_read,                    NULL                   },
     {    DATA_CMD_LOGIC_STOP,                   NULL,                        cmd_processor_logic_stop,                    NULL                   },
     {    DATA_CMD_LOGIC_SPI_READ,               NULL,                        cmd_processor_logic_spi_read,                NULL                   },
+    {    DATA_CMD_LF_XTAL_START,                NULL,                        cmd_processor_lf_xtal_start,                  NULL                   },
+    {    DATA_CMD_LF_XTAL_READ,                 NULL,                        cmd_processor_lf_xtal_read,                   NULL                   },
+    {    DATA_CMD_LF_XTAL_STOP,                 NULL,                        cmd_processor_lf_xtal_stop,                   NULL                   },
     {    DATA_CMD_HF14A_SNIFF,                  NULL,                        cmd_processor_hf14a_sniff,                   NULL                   },
     {    DATA_CMD_HF14A_AUTH_TRACE,             before_hf_reader_run,        cmd_processor_hf14a_auth_trace,              after_hf_reader_run    },
     {    DATA_CMD_HF14A_PASSIVE_RECV,           before_reader_run,           cmd_processor_hf14a_passive_recv,            NULL                   },

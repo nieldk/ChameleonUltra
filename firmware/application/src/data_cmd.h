@@ -78,6 +78,8 @@
 #define DATA_CMD_GET_BOOTLOADER_VERSION         (1061)
 #define DATA_CMD_GET_FREE_MEMORY                (1062)
 #define DATA_CMD_GET_BATTERY_INFO_EX            (1063)  /* RRG uses 1043 here, taken by GET_BLE_NAME in this fork */
+#define DATA_CMD_GET_LF_XTAL_TRIM               (1064)  /* -> i16 tenths-of-ppm, see settings.h lf_xtal_trim_ppm_x10 */
+#define DATA_CMD_SET_LF_XTAL_TRIM               (1065)  /* i16 tenths-of-ppm */
 
 //
 // ******************************************************************
@@ -168,6 +170,9 @@
 #define DATA_CMD_LOGIC_SPI_READ                 (3040)  // in: offset(2) count(2)
 #endif
 #define DATA_CMD_PYRAMID_SCAN                   (3041)  /* RRG uses 3021, taken by FDXB_SCAN in this fork */
+#define DATA_CMD_LF_XTAL_START                  (3042)  // hold HFXO, start free-running 16MHz tick count on TIMER1
+#define DATA_CMD_LF_XTAL_READ                   (3043)  // out: raw_ticks(4) hfclk_lapsed(1) running(1)
+#define DATA_CMD_LF_XTAL_STOP                   (3044)  // out: same as READ (final sample, before teardown)
 
 //
 // ******************************************************************

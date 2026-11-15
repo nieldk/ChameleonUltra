@@ -64,6 +64,11 @@ void settings_init_ble_name_config(void) {
     memset(config.ble_name, 0, sizeof(config.ble_name)); // empty = use firmware default name
 }
 
+// add on version8
+void settings_init_lf_xtal_trim_config(void) {
+    config.lf_xtal_trim_ppm_x10 = 0; // no correction by default
+}
+
 void settings_init_config(void) {
     settings_update_version_for_config();
     config.animation_config = SettingsAnimationModeFull; // add on version1
@@ -73,6 +78,7 @@ void settings_init_config(void) {
     settings_init_ble_pairing_enable_config();
     settings_init_sleep_timeout_config();
     settings_init_ble_name_config();
+    settings_init_lf_xtal_trim_config();
 }
 
 void settings_migrate(void) {
@@ -98,6 +104,9 @@ void settings_migrate(void) {
 
         case 6:
             settings_init_ble_name_config();
+
+        case 7:
+            settings_init_lf_xtal_trim_config();
 
             /*
              * Add new migration steps ABOVE THIS COMMENT
@@ -325,6 +334,14 @@ uint8_t settings_get_log_level(void) {
 
 void settings_set_log_level(uint8_t level) {
     config.log_level = level;
+}
+
+int16_t settings_get_lf_xtal_trim_ppm_x10(void) {
+    return config.lf_xtal_trim_ppm_x10;
+}
+
+void settings_set_lf_xtal_trim_ppm_x10(int16_t value_x10) {
+    config.lf_xtal_trim_ppm_x10 = value_x10;
 }
 
 /**

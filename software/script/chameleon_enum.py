@@ -62,6 +62,9 @@ class Command(enum.IntEnum):
     GET_SLEEP_TIMEOUT = 1039
     SET_SLEEP_TIMEOUT = 1040
 
+    GET_LF_XTAL_TRIM = 1064
+    SET_LF_XTAL_TRIM = 1065
+
     GET_DFU_APP_VERSION = 1046
 
     # 1041/1042 reserved -- see firmware data_cmd.h (collided with RRG's
@@ -143,6 +146,9 @@ class Command(enum.IntEnum):
     LOGIC_READ = 3038
     LOGIC_STOP = 3039
     LOGIC_SPI_READ = 3040
+    LF_XTAL_START = 3042
+    LF_XTAL_READ = 3043
+    LF_XTAL_STOP = 3044
 
     MF1_WRITE_EMU_BLOCK_DATA = 4000
     HF14A_SET_ANTI_COLL_DATA = 4001
