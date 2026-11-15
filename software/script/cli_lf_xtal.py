@@ -183,7 +183,7 @@ class HWLfXtalMeasure(DeviceRequiredUnit):
                     running_ppm = (slope / NOMINAL_HZ - 1.0) * 1e6
                     print(f'\r {CY}{elapsed:6.0f}s / {duration_s}s  running estimate: {running_ppm:+.2f} ppm{C0}', end='', flush=True)
         finally:
-            not_running, raw_final, lapsed_final, _running = self.cmd.lf_xtal_stop()
+            not_running, raw_final, lapsed_final = self.cmd.lf_xtal_stop()
             lapsed = lapsed or (not not_running and lapsed_final)
 
         print('')
