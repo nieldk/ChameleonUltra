@@ -11,13 +11,22 @@ this device's LF emulation as close to nominal timing as possible), or
 (this device's own ppm - a specific reader's own ppm) to deliberately match
 that reader's clock instead of nominal.
 
-Accuracy is bounded by the host computer's own clock, which this tool makes
-no attempt to check against anything external (no NTP). For a tighter
-reference, see the ChameleonUltra-side tooling this command was prompted by:
-https://mfcarroll.github.io/rfid-test-tools/chameleon/crystal/
+Accuracy is bounded by the host computer's own clock. By default this is
+checked against NTP at the start and end of the run (same idea as the
+ChameleonUltra-side tooling this command was prompted by -- see
+https://mfcarroll.github.io/rfid-test-tools/chameleon/crystal/ -- their
+hfxo_ntp.py does the equivalent check against time.cloudflare.com): the
+host's own drift over the run is measured the same way as the device's
+(a slope, here from two NTP offset samples instead of many tick samples)
+and added to the raw device-vs-host reading to get the device's ppm against
+true time rather than against whatever the host's own clock happens to be
+doing. Pass --no-ntp to skip this (e.g. no network) and get the raw,
+host-relative figure only.
 """
 
 import argparse
+import socket
+import struct
 import time
 
 from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, lf, CG, CY, CR, C0, _box
@@ -29,6 +38,51 @@ WRAP = 1 << 32
 # TIMER1 is free-running 32-bit @ 16 MHz -- wraps every 2**32/16e6 =~ 268 s.
 # Poll well under that so a wrap is never missed between two reads.
 MAX_POLL_INTERVAL_S = 120
+
+NTP_SERVER_DEFAULT = "time.cloudflare.com"
+NTP_PORT = 123
+NTP_EPOCH_DELTA = 2_208_988_800  # seconds between the NTP (1900) and Unix (1970) epochs
+NTP_PACKET = b"\x23" + 47 * b"\x00"  # LI=0, VN=4, Mode=3 (client), rest zero
+
+
+def _ntp_offset_once(server, timeout):
+    """One NTP exchange. Returns (offset, round_trip_delay), both seconds,
+    offset in the standard NTP sense: add it to the host clock to get true
+    time (so a host running fast gives a negative offset)."""
+    t1 = time.time()
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(timeout)
+        sock.sendto(NTP_PACKET, (server, NTP_PORT))
+        data, _ = sock.recvfrom(48)
+    t4 = time.time()
+    if len(data) < 48:
+        raise OSError("short NTP reply")
+    # Receive (t2) and transmit (t3) timestamps: bytes 32-39 and 40-47,
+    # each a 32-bit whole-seconds + 32-bit fraction pair, NTP (1900) epoch.
+    t2_int, t2_frac, t3_int, t3_frac = struct.unpack("!IIII", data[32:48])
+    t2 = (t2_int - NTP_EPOCH_DELTA) + t2_frac / 2 ** 32
+    t3 = (t3_int - NTP_EPOCH_DELTA) + t3_frac / 2 ** 32
+    offset = ((t2 - t1) + (t3 - t4)) / 2.0
+    delay = (t4 - t1) - (t3 - t2)
+    return offset, delay
+
+
+def _ntp_offset(server, attempts=4, timeout=2.0):
+    """Best-of-`attempts` NTP offset (lowest round-trip delay wins, to cut
+    network-jitter noise). Raises OSError if every attempt fails."""
+    best = None
+    last_err = None
+    for _ in range(attempts):
+        try:
+            offset, delay = _ntp_offset_once(server, timeout)
+        except OSError as e:
+            last_err = e
+            continue
+        if best is None or delay < best[1]:
+            best = (offset, delay)
+    if best is None:
+        raise last_err or OSError("NTP query failed")
+    return best[0]
 
 
 def _poll_ticks(cmd, prev_raw, total_offset):
@@ -62,14 +116,19 @@ class HWLfXtalMeasure(DeviceRequiredUnit):
         p.description = (
             "Measure this device's crystal offset in ppm against this computer's "
             "clock. Longer runs are more accurate: ~5 min is rough (+/-2 ppm or so), "
-            "30 min (the default) is tight enough to be useful. Accuracy is capped "
-            "by how good this computer's own clock is -- this command does not "
-            "check it against anything external."
+            "30 min (the default) is tight enough to be useful. By default the "
+            "host clock's own drift is checked against NTP at the start and end "
+            "of the run and corrected for; pass --no-ntp to skip that (e.g. no "
+            "network) and get the raw, host-relative figure instead."
         )
         p.add_argument("--minutes", type=int, default=30, choices=[5, 15, 30, 60],
                        help="measurement duration (default 30)")
         p.add_argument("--interval", type=float, default=5.0,
                        help=f"seconds between samples, max {MAX_POLL_INTERVAL_S} (default 5)")
+        p.add_argument("--no-ntp", action="store_true",
+                       help="skip the NTP host-clock check, report the raw host-relative ppm")
+        p.add_argument("--ntp-server", default=NTP_SERVER_DEFAULT,
+                       help=f"NTP server for the host-clock check (default {NTP_SERVER_DEFAULT})")
         return p
 
     def on_exec(self, args: argparse.Namespace):
@@ -87,6 +146,17 @@ class HWLfXtalMeasure(DeviceRequiredUnit):
         if not_running:
             print(f' {CR}Device reports the counter is not running right after start -- aborting.{C0}')
             return
+
+        ntp_ok = not args.no_ntp
+        ntp_offset_start = None
+        ntp_t0 = None
+        if ntp_ok:
+            try:
+                ntp_offset_start = _ntp_offset(args.ntp_server)
+                ntp_t0 = time.monotonic()
+            except OSError as e:
+                print(f' {CR}NTP check against {args.ntp_server} failed ({e}) -- continuing with the raw, uncorrected figure.{C0}')
+                ntp_ok = False
 
         t0 = time.monotonic()
         prev_raw = raw0
@@ -131,14 +201,36 @@ class HWLfXtalMeasure(DeviceRequiredUnit):
             print(f' {CR}Could not compute a slope (no elapsed-time spread in the samples).{C0}')
             return
 
-        ppm = (slope / NOMINAL_HZ - 1.0) * 1e6
+        raw_ppm = (slope / NOMINAL_HZ - 1.0) * 1e6
+
+        host_ppm = None
+        if ntp_ok:
+            try:
+                ntp_offset_end = _ntp_offset(args.ntp_server)
+                ntp_t_end = time.monotonic()
+                host_elapsed = ntp_t_end - ntp_t0
+                if host_elapsed > 0:
+                    # Standard NTP offset = true_time - host_time, so a host
+                    # running fast makes the offset drift more negative over
+                    # the run; negate that drift to land back on the
+                    # "positive = fast" convention used everywhere else here.
+                    host_ppm = (ntp_offset_start - ntp_offset_end) / host_elapsed * 1e6
+            except OSError as e:
+                print(f' {CR}NTP re-check against {args.ntp_server} failed ({e}) -- reporting the raw, uncorrected figure.{C0}')
+
+        ppm = raw_ppm + host_ppm if host_ppm is not None else raw_ppm
         sign = '+' if ppm >= 0 else ''
         lines = [
             f"{'Samples':<14} {len(xs)}",
             f"{'Duration':<14} {xs[-1]:.0f} s",
             f"{'Measured':<14} {slope:,.1f} Hz (nominal {NOMINAL_HZ:,} Hz)",
-            f"{'Offset':<14} {CY}{sign}{ppm:.2f} ppm{C0}  ({'runs fast' if ppm >= 0 else 'runs slow'})",
         ]
+        if host_ppm is not None:
+            lines.append(f"{'Host drift':<14} {host_ppm:+.2f} ppm (vs {args.ntp_server})")
+            lines.append(f"{'Raw offset':<14} {raw_ppm:+.2f} ppm (uncorrected, vs host clock)")
+            lines.append(f"{'Offset':<14} {CY}{sign}{ppm:.2f} ppm{C0}  ({'runs fast' if ppm >= 0 else 'runs slow'}, NTP-corrected)")
+        else:
+            lines.append(f"{'Offset':<14} {CY}{sign}{ppm:.2f} ppm{C0}  ({'runs fast' if ppm >= 0 else 'runs slow'}, uncorrected -- no NTP)")
         for line in _box('Crystal Measurement', lines, color=CG, min_width=38):
             print(line)
         print('')
