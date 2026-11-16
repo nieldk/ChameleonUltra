@@ -122,3 +122,57 @@ class LFInteractiveClear(DeviceRequiredUnit):
     def on_exec(self, args: argparse.Namespace):
         self.cmd.lf_ia_trace_clear()
         print(" - Trace and counters cleared")
+
+
+lf_interactive_env = lf_interactive.subgroup(
+    "env", "Raw field envelope capture, for bench debugging"
+)
+
+
+@lf_interactive_env.command("arm")
+class LFInteractiveEnvArm(DeviceRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "Arm the raw field envelope ring (the smoothed ADC samples the gap detector itself sees, 10 us apart). "
+            "It keeps recording from here, oldest samples dropping off the back, until a command ends a listening "
+            "session -- then it freezes on that command. With no command, there is no freeze: run 'env read' "
+            "promptly after the test, while it still holds it."
+        )
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        self.cmd.lf_ia_env_arm()
+        print(" - Envelope ring armed -- run the reader test now, then 'lf interactive env read'")
+
+
+@lf_interactive_env.command("read")
+class LFInteractiveEnvRead(DeviceRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "Read back the raw field envelope ring armed by 'env arm'. Prints the newest sample's time, whether "
+            "the ring froze on a command, the sample range, and the samples themselves (ADC counts, 10 us apart)."
+        )
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        samples, last_us, frozen = [], 0, 0
+        while True:
+            frozen, last_us, chunk = self.cmd.lf_ia_env_read(len(samples))
+            if not chunk:
+                break
+            samples += chunk
+        if not samples:
+            print(" - No samples (arm it first with 'lf interactive env arm')")
+            return
+        span_us = len(samples) * 10
+        print(
+            f" - {len(samples)} samples, {span_us / 1e3:.2f} ms, newest at {last_us / 1e6:.6f} s, "
+            f"{'frozen on a command' if frozen else 'still live (not frozen)'}"
+        )
+        print(f" - range {min(samples)} .. {max(samples)} ADC counts")
+        for i in range(0, len(samples), 16):
+            t0_us = last_us - (len(samples) - i) * 10
+            row = " ".join(f"{s:5d}" for s in samples[i:i + 16])
+            print(f"   {t0_us / 1e3:9.2f} ms  {row}")

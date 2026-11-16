@@ -27,10 +27,10 @@ typedef struct __attribute__((packed)) {
     uint32_t max_handler_us;  // the longest ADC buffer handling, including any command handling it did
 } lf_ia_stats_t;
 
-// Niel's fork doesn't wire up the ENV_ARM/ENV_READ USB commands (bench-only,
-// no CLI support ported), so this ring is kept small -- just enough RAM
-// headroom to build, not for actual bench capture depth.
-#define LF_IA_ENV_SAMPLES (256u)
+// 1024 samples at 10 us apart = 10.24 ms of history. Upstream uses 4096; cut for this board's RAM budget. Read
+// promptly after the test -- with no command to freeze it (see below), the ring keeps recording and this is all
+// the lookback there is.
+#define LF_IA_ENV_SAMPLES (1024u)
 
 lf_ia_tuning_t *lf_ia_tuning(void);
 const lf_ia_stats_t *lf_ia_stats(void);

@@ -273,6 +273,8 @@ class Command(enum.IntEnum):
     LF_HITAG2_READ = 3034
     LF_IA_TRACE_READ = 3180
     LF_IA_TRACE_CLEAR = 3181
+    LF_IA_ENV_ARM = 3182
+    LF_IA_ENV_READ = 3183
     LF_IA_TUNING = 3184
 
 

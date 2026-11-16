@@ -3044,6 +3044,30 @@ static data_frame_tx_t *cmd_processor_lf_ia_trace_clear(uint16_t cmd, uint16_t s
     return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
 }
 
+static data_frame_tx_t *cmd_processor_lf_ia_env_arm(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    lf_ia_env_arm();
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
+// In: the offset (u16, big-endian). Out: frozen (u8), the newest sample's time (u32), the number of samples here
+// (u16), then the samples (i16), oldest first. 256 per call, not upstream's 2000 -- this fork's RAM budget is
+// tighter; the host pages with offset, same as trace_read.
+#define LF_IA_ENV_READ_BATCH (256u)
+static data_frame_tx_t *cmd_processor_lf_ia_env_read(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    static uint8_t out[7 + LF_IA_ENV_READ_BATCH * 2];
+    if (length < 2) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    const size_t offset = (size_t)data[0] << 8 | data[1];
+    uint32_t last_us;
+    uint8_t frozen;
+    const uint16_t n = (uint16_t)lf_ia_env_read(offset, (int16_t *)(out + 7), LF_IA_ENV_READ_BATCH, &last_us, &frozen);
+    out[0] = frozen;
+    memcpy(out + 1, &last_us, 4);
+    memcpy(out + 5, &n, 2);
+    return data_frame_make(cmd, STATUS_SUCCESS, (uint16_t)(7 + n * 2u), out);
+}
+
 // In: nothing to read, or a whole lf_ia_tuning_t to set. Out: the tuning, then the counters.
 static data_frame_tx_t *cmd_processor_lf_ia_tuning(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     static uint8_t out[sizeof(lf_ia_tuning_t) + sizeof(lf_ia_stats_t)];
@@ -5223,6 +5247,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_LF_HITAG2_READ,               before_reader_run,           cmd_processor_lf_hitag2_read,                NULL                   },
     {    DATA_CMD_LF_IA_TRACE_READ,             NULL,                        cmd_processor_lf_ia_trace_read,              NULL                   },
     {    DATA_CMD_LF_IA_TRACE_CLEAR,            NULL,                        cmd_processor_lf_ia_trace_clear,             NULL                   },
+    {    DATA_CMD_LF_IA_ENV_ARM,                NULL,                        cmd_processor_lf_ia_env_arm,                 NULL                   },
+    {    DATA_CMD_LF_IA_ENV_READ,               NULL,                        cmd_processor_lf_ia_env_read,                NULL                   },
     {    DATA_CMD_LF_IA_TUNING,                 NULL,                        cmd_processor_lf_ia_tuning,                  NULL                   },
     {    DATA_CMD_LF_SNIFF,                     before_reader_run,           cmd_processor_lf_sniff,                      NULL                   },
     {    DATA_CMD_LOGIC_ARM,                    NULL,                        cmd_processor_logic_arm,                     NULL                   },

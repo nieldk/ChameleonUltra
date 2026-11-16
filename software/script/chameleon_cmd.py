@@ -1195,6 +1195,32 @@ class ChameleonCMD:
         """
         return self.device.send_cmd_sync(Command.LF_IA_TRACE_CLEAR)
 
+    @expect_response(Status.SUCCESS)
+    def lf_ia_env_arm(self):
+        """
+        Arm the interactive LF engine's raw envelope ring. It keeps recording until a command ends the listening
+        session, or is overwritten by newer samples -- read it promptly.
+        """
+        return self.device.send_cmd_sync(Command.LF_IA_ENV_ARM)
+
+    @expect_response(Status.SUCCESS)
+    def lf_ia_env_read(self, offset: int = 0):
+        """
+        Read samples from the envelope ring, from index offset (oldest kept is 0).
+
+        :return: (frozen, newest sample's time in us, list of raw i16 samples)
+        """
+        resp = self.device.send_cmd_sync(
+            Command.LF_IA_ENV_READ, struct.pack(">H", offset)
+        )
+        if resp.status == Status.SUCCESS:
+            frozen = resp.data[0]
+            last_us = struct.unpack_from("<I", resp.data, 1)[0]
+            n = struct.unpack_from("<H", resp.data, 5)[0]
+            samples = list(struct.unpack_from(f"<{n}h", resp.data, 7))
+            resp.parsed = (frozen, last_us, samples)
+        return resp
+
     @expect_response(Status.LF_TAG_OK)
     def viking_scan(self):
         """
