@@ -60,7 +60,20 @@ static void lf_125khz_gpio_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t 
 static void gpiote_init(bool both_edges) {
     nrfx_err_t err_code;
 
-    nrfx_gpiote_in_config_t cfg_toggle = NRFX_GPIOTE_CONFIG_IN_SENSE_TOGGLE(false);
+    /* hi_accuracy picks the channel pool, not a timing-precision nice-to-
+     * have (confirmed in nrfx_gpiote_in_init()): false allocates from the
+     * low-power PORT/SENSE pool, where the GPIOTE IRQ handler has to read
+     * the pin and reprogram SENSE to the opposite level after every single
+     * event before the NEXT edge can even be detected. For LOTOHI-only
+     * that reprogram is the same value every time, cheap enough that every
+     * other LF protocol's capture (unchanged below) has always worked on
+     * it. For TOGGLE it is a real software round-trip between every edge
+     * -- too slow for 16-32 Tc (128-256us) Manchester half-bits, which is
+     * why both_edges capture was only ever seeing the comparator's own
+     * slower self-noise. true allocates a dedicated HW channel instead,
+     * where TOGGLE is a real edge-triggered register with no software
+     * re-arm latency. */
+    nrfx_gpiote_in_config_t cfg_toggle = NRFX_GPIOTE_CONFIG_IN_SENSE_TOGGLE(true);
     nrfx_gpiote_in_config_t cfg_lotohi = NRFX_GPIOTE_CONFIG_IN_SENSE_LOTOHI(false);
     nrfx_gpiote_in_config_t cfg = both_edges ? cfg_toggle : cfg_lotohi;
     err_code = nrfx_gpiote_in_init(LF_OA_OUT, &cfg, lf_125khz_gpio_handler);
