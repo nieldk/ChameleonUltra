@@ -14,6 +14,7 @@ from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, lf, CR, color_str
 lf_interactive = lf.subgroup("interactive", "Interactive LF emulation commands")
 
 LF_IA_TRACE_REC = struct.Struct("<BBBBIIIIIIHHHHIHH16s16s96HHHI")
+LF_IA_TRACE_GAPS = 48  # matches firmware's LF_IA_TRACE_GAPS (lf_ia_trace.h) -- the 96H block is 48 (start_us, width_us) pairs
 LF_IA_VERDICTS = {0: "ignored", 1: "answered", 2: "ended the exchange"}
 LF_IA_DECODES = {
     0: "ok",
@@ -83,7 +84,9 @@ class LFInteractiveTrace(DeviceRequiredUnit):
                 t_tx_end,
             ) = v[:10]
             n_gaps, n_bits, n_tx_bits = v[10:13]
+            split, level, n_noise = v[14:17]
             bits, tx_bits = v[17], v[18]
+            gaps = v[19:19 + 2 * LF_IA_TRACE_GAPS]
             rec_boot, session, t_session = v[-3:]
             if (rec_boot, session) != last_session:
                 last_session = (rec_boot, session)
@@ -102,6 +105,16 @@ class LFInteractiveTrace(DeviceRequiredUnit):
                 else:
                     line += f", decode: {LF_IA_DECODES.get(decode, decode)}"
                 print(line + f", {LF_IA_VERDICTS.get(verdict, verdict)}")
+                if decode != 0:
+                    n = min(n_gaps, LF_IA_TRACE_GAPS)
+                    starts = [gaps[2 * i] for i in range(n)]
+                    widths = [gaps[2 * i + 1] for i in range(n)]
+                    intervals = [starts[i + 1] - starts[i] for i in range(n - 1)]
+                    print(
+                        f"{'':18}field level {level}, {n_noise} noise dips skipped, split {split} us"
+                    )
+                    print(f"{'':18}gap widths (us): {widths}")
+                    print(f"{'':18}intervals (us):  {intervals}")
                 if verdict == 1:
                     late = color_string((CR, " LATE")) if flags & 1 else ""
                     print(
