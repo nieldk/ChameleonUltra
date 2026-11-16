@@ -86,7 +86,9 @@ static lf_ia_tuning_t m_tuning = {
     .settle_us = 300,
     .lost_us = 1500,
     .min_gap_us = 20,
-    .thr_pct = 50,
+    // 50 assumes a gap dips below half the field-on level. On this board's LF_RSSI coupling, a real reader's gaps
+    // only reach ~72-79% of it, confirmed from an envelope capture; 85 catches them with headroom.
+    .thr_pct = 85,
     .quiet_after_cmd = 1,
     .tx_lead_us = 0,
     .eof_us = 0,
