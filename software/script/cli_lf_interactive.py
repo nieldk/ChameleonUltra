@@ -176,3 +176,36 @@ class LFInteractiveEnvRead(DeviceRequiredUnit):
             t0_us = last_us - (len(samples) - i) * 10
             row = " ".join(f"{s:5d}" for s in samples[i:i + 16])
             print(f"   {t0_us / 1e3:9.2f} ms  {row}")
+
+
+@lf_interactive.command("tuning")
+class LFInteractiveTuning(DeviceRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = (
+            "Read or change the interactive LF engine's live tuning. With no options, just prints the current "
+            "values. A change takes effect immediately and is lost on reset -- re-apply after every power cycle "
+            "if it isn't just a one-off test."
+        )
+        parser.add_argument("--settle-us", type=int, help="samples skipped after the load switches on, while the field line settles")
+        parser.add_argument("--lost-us", type=int, help="a gap this long means the field has gone")
+        parser.add_argument("--min-gap-us", type=int, help="shorter dips are noise")
+        parser.add_argument("--thr-pct", type=int, help="a gap is a dip below this percentage of the tracked field-on level")
+        parser.add_argument("--quiet-after-cmd", type=int, choices=[0, 1], help="1: drop the load as soon as a command ends; 0: hold it until the answer starts")
+        parser.add_argument("--tx-lead-us", type=int, help="the answer is armed this much early, to cancel the modulator's start latency")
+        parser.add_argument("--eof-us", type=int, help="overrides the module's eof_us if not 0")
+        parser.add_argument("--rsp-delay-us", type=int, help="overrides the module's answer delay if not 0")
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        tuning = self.cmd.lf_ia_tuning_get()
+        overrides = {
+            f.replace("-", "_"): getattr(args, f.replace("-", "_"))
+            for f in ("settle-us", "lost-us", "min-gap-us", "thr-pct", "quiet-after-cmd", "tx-lead-us", "eof-us", "rsp-delay-us")
+            if getattr(args, f.replace("-", "_")) is not None
+        }
+        if overrides:
+            tuning.update(overrides)
+            tuning = self.cmd.lf_ia_tuning_set(tuning)
+        for k, v in tuning.items():
+            print(f" - {k}: {v}")

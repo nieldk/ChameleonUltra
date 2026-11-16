@@ -1188,6 +1188,39 @@ class ChameleonCMD:
             resp.parsed = dict(zip(names, struct.unpack_from("<7I", resp.data, 14)))
         return resp
 
+    LF_IA_TUNING_FIELDS = (
+        "settle_us", "lost_us", "min_gap_us", "thr_pct", "quiet_after_cmd", "tx_lead_us", "eof_us", "rsp_delay_us",
+    )
+    LF_IA_TUNING_FMT = struct.Struct("<HHHBBhHH")
+
+    @expect_response(Status.SUCCESS)
+    def lf_ia_tuning_get(self):
+        """
+        Read the interactive LF engine's live tuning (settle_us, lost_us, min_gap_us, thr_pct, quiet_after_cmd,
+        tx_lead_us, eof_us, rsp_delay_us). 0 for eof_us/rsp_delay_us means the module's own default applies.
+
+        :return: dict of the tuning fields
+        """
+        resp = self.device.send_cmd_sync(Command.LF_IA_TUNING)
+        if resp.status == Status.SUCCESS:
+            resp.parsed = dict(zip(self.LF_IA_TUNING_FIELDS, self.LF_IA_TUNING_FMT.unpack_from(resp.data)))
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def lf_ia_tuning_set(self, tuning: dict):
+        """
+        Set the interactive LF engine's live tuning. Takes effect immediately, lost on reset -- re-apply after
+        every power cycle if it isn't just a one-off test.
+
+        :param tuning: dict with all of LF_IA_TUNING_FIELDS
+        :return: dict of the tuning fields as the device now has them
+        """
+        packed = self.LF_IA_TUNING_FMT.pack(*(tuning[f] for f in self.LF_IA_TUNING_FIELDS))
+        resp = self.device.send_cmd_sync(Command.LF_IA_TUNING, packed)
+        if resp.status == Status.SUCCESS:
+            resp.parsed = dict(zip(self.LF_IA_TUNING_FIELDS, self.LF_IA_TUNING_FMT.unpack_from(resp.data)))
+        return resp
+
     @expect_response(Status.SUCCESS)
     def lf_ia_trace_clear(self):
         """
