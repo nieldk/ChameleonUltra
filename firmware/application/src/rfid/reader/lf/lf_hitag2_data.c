@@ -273,7 +273,13 @@ bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
                          uint32_t timeout_ms) {
     memset(pages, 0, HITAG2_NUM_PAGES * HITAG2_PAGE_SIZE);
 
+    /* hitag2_reader_get_uid() turns the field on unconditionally; this
+     * function owns the field for the whole session and must turn it back
+     * off on every exit (matches lf_em4x05_data.c's own reader functions --
+     * leaving the field on across a failed attempt denies the tag the fresh
+     * power-up its next START_AUTH needs). */
     if (!hitag2_reader_get_uid(pages[HITAG2_PAGE_UID], timeout_ms)) {
+        stop_lf_125khz_radio();
         return false;
     }
 
@@ -283,6 +289,7 @@ bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
     if (!hitag2_tx_rx(pwd_val, 32, reply, 32, 0, timeout_ms)) {
         /* Tag may have ignored this (wrong password, or crypto mode) --
          * either way there is nothing more we can read without the key. */
+        stop_lf_125khz_radio();
         return false;
     }
     memcpy(pages[HITAG2_PAGE_CONFIG], reply, 4);
@@ -294,10 +301,12 @@ bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
         uint16_t frame = hitag2_page_frame(HITAG2_READ_PAGE, page);
         uint8_t out[4];
         if (!hitag2_tx_rx(frame, 10, out, 32, 0, timeout_ms)) {
+            stop_lf_125khz_radio();
             return false;
         }
         memcpy(pages[page], out, 4);
     }
+    stop_lf_125khz_radio();
     return true;
 }
 
@@ -306,7 +315,9 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
                                 uint32_t timeout_ms) {
     memset(pages, 0, HITAG2_NUM_PAGES * HITAG2_PAGE_SIZE);
 
+    /* Field lifecycle is owned here, same reasoning as hitag2_reader_read(). */
     if (!hitag2_reader_get_uid(pages[HITAG2_PAGE_UID], timeout_ms)) {
+        stop_lf_125khz_radio();
         return false;
     }
 
@@ -325,6 +336,7 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
     uint8_t reply[4];
     if (!hitag2_tx_rx_bytes(nrar, 64, reply, 32, 0, timeout_ms)) {
         /* No answer: wrong key, or the tag is actually in password mode. */
+        stop_lf_125khz_radio();
         return false;
     }
     hitag2_crypto_transcrypt(&cs, reply, 4, 0);
@@ -343,10 +355,12 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
 
         uint8_t out[4];
         if (!hitag2_tx_rx(enc_value, 10, out, 32, 0, timeout_ms)) {
+            stop_lf_125khz_radio();
             return false;
         }
         hitag2_crypto_transcrypt(&cs, out, 4, 0);
         memcpy(pages[page], out, 4);
     }
+    stop_lf_125khz_radio();
     return true;
 }
