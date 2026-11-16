@@ -2404,16 +2404,21 @@ lfHidProx.command("econfig", "Set/get the emulated hidprox card id (in the activ
 // page) isn't ported -- this parser has no repeatable-option support; use
 // --uid/--pwd/--config/--tag-pwd, which cover every page econfig needs for
 // password mode.
-const HT2_PAGE_NAMES = {0:"UID", 1:"Password (reader's)", 2:"Key, high bytes (crypto mode only)", 3:"Config + tag password"};
+const HT2_PAGE_NAMES = {0:"UID", 1:"Password (password mode) / key bytes 2-5 (crypto mode)", 2:"Key bytes 0-1 in bytes 2-3, rest reserved (crypto mode only)", 3:"Config + tag password"};
 function ht2ParseHex4(s, label){
   s = (s||"").trim();
   if(!/^[0-9a-fA-F]{8}$/.test(s)) throw new ArgError(label+" must be 8 hex digits (4 bytes)");
   return hexBytes(s);
 }
+function ht2ParseHex6(s, label){
+  s = (s||"").trim();
+  if(!/^[0-9a-fA-F]{12}$/.test(s)) throw new ArgError(label+" must be 12 hex digits (6 bytes)");
+  return hexBytes(s);
+}
 function ht2PageLines(pages){
   return pages.map((p,i) => "    "+i+"  "+Array.from(p).map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join(" ")+"  "+(HT2_PAGE_NAMES[i]||"User"));
 }
-const lfHitag2 = lf.subgroup("hitag2", "Hitag2 password-mode commands (125 kHz)");
+const lfHitag2 = lf.subgroup("hitag2", "Hitag2 commands (125 kHz) -- password mode, and known-key crypto mode for emulation");
 lfHitag2.command("econfig", "Set/get the emulated Hitag2 tag (8 pages, in the active slot). With no options, shows the slot's current pages", [
   {names:["--uid"], takesValue:true, dest:"uid"},
   {names:["--pwd"], takesValue:true, dest:"pwd"},
@@ -2463,6 +2468,16 @@ lfHitag2.command("read", "Read a Hitag2 tag in password mode: START_AUTH, UID, s
   const pwd = ht2ParseHex4(a.pwd, "--pwd");
   const f = await request(CU.LF_HITAG2_READ, pwd);
   if(!OK_STATUSES.has(f.status)) return ["No answer, or password rejected (wrong key, or tag is in crypto mode)."];
+  const pages = [0,1,2,3,4,5,6,7].map(i => f.data.slice(i*4, i*4+4));
+  return ht2PageLines(pages);
+});
+lfHitag2.command("cread", "Read a Hitag2 tag in crypto mode with a known key (no key recovery): START_AUTH, UID, send a Nr/Ar challenge built from -k, read the rest on acceptance", [
+  {names:["-k","--key"], takesValue:true, dest:"key", required:true},
+], async (a) => {
+  await needReader();
+  const key = ht2ParseHex6(a.key, "--key");
+  const f = await request(CU.LF_HITAG2_CRYPTO_READ, key);
+  if(!OK_STATUSES.has(f.status)) return ["No answer, or challenge rejected (wrong key, or tag is in password mode)."];
   const pages = [0,1,2,3,4,5,6,7].map(i => f.data.slice(i*4, i*4+4));
   return ht2PageLines(pages);
 });

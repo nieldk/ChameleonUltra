@@ -1,14 +1,11 @@
-"""cli_lf_hitag - Hitag2 password-mode read (lf hitag2 ...).
+"""cli_lf_hitag - Hitag2 read, password mode and known-key crypto mode (lf hitag2 ...).
 
-Reads an NXP/Philips Hitag2 tag in password mode: START_AUTH, UID, send a
-reader password, and if the tag accepts it, dump every other page.
-
-Crypto mode (known key only, no key recovery) is implemented in firmware
-for both tag emulation (configurable via `econfig`, see below) and the
-reader side (hitag2_reader_crypto_read() in lf_hitag2_data.c), but the
-reader side has no CLI command yet -- `read` here is password mode only.
-Against a crypto-mode tag, `read` gets no answer to the plaintext password
-frame, same as a password mismatch.
+Reads an NXP/Philips Hitag2 tag: `read` for password mode (START_AUTH, UID,
+send a reader password, and if accepted, dump every other page), `cread`
+for crypto mode with an already-known key (START_AUTH, UID, send a Nr/Ar
+challenge built from the key, and if accepted, dump every other page under
+the resulting keystream). Neither does key recovery -- against the wrong
+mode or an unknown key, both just get no answer, same as a wrong password.
 
 Protocol constants (command codes, frame layout, password-mode and
 crypto-mode sequence) come from RfidResearchGroup/proxmark3's
@@ -39,6 +36,13 @@ def _parse_hex4(s, label):
     s = s.strip()
     if len(s) != 8:
         raise ValueError(f"{label} must be 8 hex digits (4 bytes)")
+    return bytes.fromhex(s)
+
+
+def _parse_hex6(s, label):
+    s = s.strip()
+    if len(s) != 12:
+        raise ValueError(f"{label} must be 12 hex digits (6 bytes)")
     return bytes.fromhex(s)
 
 
@@ -140,6 +144,38 @@ class LFHitag2Read(ReaderRequiredUnit):
         status, pages = self.cmd.hitag2_read(pwd)
         if pages is None:
             print(f" {CR}No answer, or password rejected (wrong key, or tag is in crypto mode).{C0}")
+            return
+
+        for i, page in enumerate(pages):
+            label = PAGE_NAMES.get(i, "User")
+            print(f"    {i}  {page.hex(' ').upper()}  {CG}{label}{C0}")
+
+
+@lf_hitag2.command("cread")
+class LFHitag2CryptoRead(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        p = ArgumentParserNoExit()
+        p.description = (
+            "Read a Hitag2 tag in crypto mode with a known key (no key "
+            "recovery). Sends START_AUTH, reads the UID, sends a Nr/Ar "
+            "challenge built from -k, and on acceptance reads the "
+            "remaining pages under the resulting keystream."
+        )
+        p.add_argument("-k", "--key", required=True, metavar="HEX12",
+                       help="6-byte crypto-mode key, 12 hex digits "
+                            "(same byte order as econfig's --pwd/--page 1-2)")
+        return p
+
+    def on_exec(self, args: argparse.Namespace):
+        try:
+            key = _parse_hex6(args.key, "--key")
+        except ValueError as e:
+            print(f" {CR}{e}{C0}")
+            return
+
+        status, pages = self.cmd.hitag2_crypto_read(key)
+        if pages is None:
+            print(f" {CR}No answer, or challenge rejected (wrong key, or tag is in password mode).{C0}")
             return
 
         for i, page in enumerate(pages):

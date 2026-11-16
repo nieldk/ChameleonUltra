@@ -1128,8 +1128,8 @@ class ChameleonCMD:
     def hitag2_read(self, password: bytes):
         """
         Password-mode Hitag2 session: START_AUTH, read UID, send `password`,
-        and if the tag accepts it, read every other page (crypto mode is
-        not supported).
+        and if the tag accepts it, read every other page. For a crypto-mode
+        tag with a known key, use hitag2_crypto_read instead.
 
         :param password: 4-byte reader password (this device's own page-1
             value, i.e. what a real reader would be configured with)
@@ -1138,6 +1138,28 @@ class ChameleonCMD:
             or rejected the password
         """
         resp = self.device.send_cmd_sync(Command.LF_HITAG2_READ, bytes(password))
+        if resp.status == Status.LF_TAG_OK:
+            pages = [resp.data[i * 4:(i + 1) * 4] for i in range(8)]
+            resp.parsed = (resp.status, pages)
+        else:
+            resp.parsed = (resp.status, None)
+        return resp
+
+    @expect_response([Status.LF_TAG_OK, Status.LF_TAG_NO_FOUND])
+    def hitag2_crypto_read(self, key: bytes):
+        """
+        Crypto-mode Hitag2 session with a known key: START_AUTH, read UID,
+        send a Nr/Ar challenge built from `key` (no key recovery -- the key
+        must already be known), and if accepted, read every other page
+        under the resulting keystream.
+
+        :param key: 6-byte crypto-mode key, same byte order as this
+            device's own page 1/2 key storage (see `lf hitag2 econfig`)
+        :return: parsed tuple (status, pages) where pages is a list of 8
+            bytes objects (4 bytes each), or None if the tag never answered
+            or rejected the challenge
+        """
+        resp = self.device.send_cmd_sync(Command.LF_HITAG2_CRYPTO_READ, bytes(key))
         if resp.status == Status.LF_TAG_OK:
             pages = [resp.data[i * 4:(i + 1) * 4] for i in range(8)]
             resp.parsed = (resp.status, pages)
