@@ -40,9 +40,14 @@ typedef struct {
     uint16_t min_ratio_pct;
     // Map the short class to 1 and the long class to 0, instead of short to 0.
     bool short_is_one;
+    // A frame where every bit has the same value has no second class to measure the reader's own timing against, so
+    // the ratio check above always reads it as one class. If both are set (us, nonzero), such a frame is classified
+    // against this fixed midpoint instead of being given up on. Leave both 0 to disable.
+    uint16_t fallback_t0_us;
+    uint16_t fallback_t1_us;
 } lf_ia_decode_cfg_t;
 
-#define LF_IA_DECODE_CFG_DEFAULT { .min_ratio_pct = 115, .short_is_one = false }
+#define LF_IA_DECODE_CFG_DEFAULT { .min_ratio_pct = 115, .short_is_one = false, .fallback_t0_us = 0, .fallback_t1_us = 0 }
 
 static inline bool lf_ia_bit_get(const uint8_t *bits, size_t i) {
     return (bits[i >> 3] >> (7u - (i & 7u))) & 1u;

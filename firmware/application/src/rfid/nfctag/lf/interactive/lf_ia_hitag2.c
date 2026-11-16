@@ -19,6 +19,8 @@
 #define HT2_DELAY_US  (240u * LF_IA_US_PER_FC)
 #define HT2_BIT_FC    (32u)
 #define HT2_SOF_BITS  (5u)
+#define HT2_T0_US     (20u * LF_IA_US_PER_FC)  // a 0 bit, gap to gap
+#define HT2_T1_US     (30u * LF_IA_US_PER_FC)  // a 1 bit, gap to gap
 
 typedef enum {
     HT2_IDLE,           // waiting for START_AUTH
@@ -123,7 +125,9 @@ static const lf_ia_module_t m_hitag2 = {
     .name = "hitag2",
     .eof_us = HT2_EOF_US,
     .want_decode = true,
-    .decode = LF_IA_DECODE_CFG_DEFAULT,
+    // All 32 bits of a command can share a value (e.g. a zero password), leaving no second class to self-calibrate
+    // against; fall back to the reader's documented fixed timing for that case.
+    .decode = { .min_ratio_pct = 115, .short_is_one = false, .fallback_t0_us = HT2_T0_US, .fallback_t1_us = HT2_T1_US },
     .field_on = field_on,
     .on_command = on_command,
     .field_off = field_off,

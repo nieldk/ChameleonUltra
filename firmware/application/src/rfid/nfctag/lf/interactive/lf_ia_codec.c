@@ -17,17 +17,24 @@ lf_ia_decode_status_t lf_ia_decode_intervals(const uint32_t *intervals, size_t n
         sum += intervals[i];
     }
 
+    uint32_t split;
     if ((uint64_t)hi * 100u < (uint64_t)lo * cfg->min_ratio_pct) {
-        if (split_out) {
-            *split_out = (uint32_t)(sum / n);
+        if (cfg->fallback_t0_us == 0 || cfg->fallback_t1_us == 0) {
+            if (split_out) {
+                *split_out = (uint32_t)(sum / n);
+            }
+            return LF_IA_DECODE_ONE_CLASS;
         }
-        return LF_IA_DECODE_ONE_CLASS;
+        // No second class to self-calibrate against (every bit this frame carries is the same value): fall back to
+        // the module's known fixed timing instead of refusing a protocol-valid frame.
+        split = (cfg->fallback_t0_us + cfg->fallback_t1_us) / 2u;
+    } else {
+        split = lo + (hi - lo) / 2u;
     }
     if (n > max_bits) {
         return LF_IA_DECODE_OVERFLOW;
     }
 
-    const uint32_t split = lo + (hi - lo) / 2u;
     if (split_out) {
         *split_out = split;
     }
