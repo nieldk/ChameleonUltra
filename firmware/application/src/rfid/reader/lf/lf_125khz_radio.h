@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdbool.h>
+
 #include "ble_main.h"
 #include "nrfx_pwm.h"
 
@@ -25,8 +27,18 @@ void lf_125khz_radio_init(void);
 void lf_125khz_radio_uninit(void);
 
 void lf_125khz_radio_saadc_enable(lf_adc_callback_t cb);
-void lf_125khz_radio_gpiote_enable(void);
+/* both_edges: false arms LF_OA_OUT rising-edge-only (every existing caller's
+ * behaviour, unchanged). true arms both edges, for a caller that needs each
+ * run's level (e.g. Manchester run decode) rather than just rising-to-rising
+ * gaps -- see lf_125khz_radio_last_edge_was_rising(). */
+void lf_125khz_radio_gpiote_enable(bool both_edges);
 void lf_125khz_radio_saadc_disable(void);
+
+/* The direction of the edge that triggered the GPIOTE callback currently
+ * running (true = rising/LOTOHI, false = falling/HITOLO). Only meaningful
+ * when read synchronously from within that callback -- enable(true) is what
+ * makes this carry real information; under enable(false) it is always true. */
+bool lf_125khz_radio_last_edge_was_rising(void);
 
 /* 166.67 kHz TIMER3-triggered sampling, for PSK1 fc/2 (real Indala) read. */
 void lf_125khz_radio_saadc166_enable(lf_adc_callback_t cb);

@@ -14,11 +14,12 @@ extern "C" {
  * Protocol constants below are taken from RfidResearchGroup/proxmark3's
  * armsrc/hitag2.c + include/protocols.h (the working reference
  * implementation PM3's "Aurora" release ported from RFIDler), not derived
- * from a datasheet guess. Receive-side Manchester classifier thresholds are
- * the one exception: they are dimensionally scaled from this codebase's own
- * hardware-proven EM4x05 RF/64 classifier (lf_em4x05_data.c) to Hitag2's
- * RF/32 (4 kbit/s) rate, and -- like EM4x05/T55xx read in this tree -- should
- * be expected to need first-hardware-capture tuning.
+ * from a datasheet guess. The reply (tag -> reader) is genuine RF/32
+ * Manchester, decoded with the interactive LF engine's lf_ia_decode_runs()
+ * against both GPIOTE edges on LF_OA_OUT -- the same coding and bit rate
+ * lf_ia_hitag2.c's emulator already answers CU's own reader with. The one
+ * untested part is which LF_OA_OUT level the comparator calls "load": if
+ * replies decode inverted, flip LF_IA_INVERT in hitag2_receive_frame().
  * --------------------------------------------------------------------- */
 
 #define HITAG2_NUM_PAGES   8

@@ -240,7 +240,7 @@ static bool em4x05_login(uint32_t password, uint32_t timeout_ms) {
 
     cb_init(&g_cb, EM4X05_CB_SIZE, sizeof(uint16_t));
     register_rio_callback(em4x05_edge_cb);
-    lf_125khz_radio_gpiote_enable();
+    lf_125khz_radio_gpiote_enable(false);
     clear_lf_counter_value();
 
     bool ack = false;
@@ -281,7 +281,7 @@ static bool em4x05_read_block(uint8_t addr, uint32_t *data, uint32_t timeout_ms)
 
     cb_init(&g_cb, EM4X05_CB_SIZE, sizeof(uint16_t));
     register_rio_callback(em4x05_edge_cb);
-    lf_125khz_radio_gpiote_enable();
+    lf_125khz_radio_gpiote_enable(false);
     clear_lf_counter_value();
 
     manchester modem = {

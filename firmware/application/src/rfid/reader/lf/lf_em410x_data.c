@@ -33,7 +33,7 @@ void gpio_int0_cb(void) {
 
 static void init_em410x_hw(void) {
     register_rio_callback(gpio_int0_cb);
-    lf_125khz_radio_gpiote_enable();
+    lf_125khz_radio_gpiote_enable(false);
 }
 
 static void uninit_em410x_hw(void) {

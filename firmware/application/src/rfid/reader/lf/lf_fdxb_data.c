@@ -32,7 +32,7 @@ static void fdxb_gpio_int0_cb(void) {
 
 static void init_fdxb_hw(void) {
     register_rio_callback(fdxb_gpio_int0_cb);
-    lf_125khz_radio_gpiote_enable();
+    lf_125khz_radio_gpiote_enable(false);
 }
 
 static void uninit_fdxb_hw(void) {

@@ -13,7 +13,7 @@
 #include "nrf_soc.h"
 #include "timeslot.h"
 
-#include "utils/manchester.h"
+#include "lf_ia_codec.h"
 
 #define NRF_LOG_MODULE_NAME lf_hitag2
 #include "nrf_log.h"
@@ -39,33 +39,33 @@ NRF_LOG_MODULE_REGISTER();
 #define HITAG2_T_WAIT_START_AUTH_MAX_TC 232  /* tag gives up waiting for START_AUTH after this */
 #define HITAG2_T_WAIT_RESP_TC           227  /* measured: tag's first answer edge, from reader's last edge */
 
-/* Receive-side Manchester classifier, RF/32 (4 kbit/s): full period 32 Tc,
- * half period 16 Tc. Dimensionally scaled from this codebase's own
- * hardware-proven EM4x05 RF/64 classifier (T1/T15/T2 spacing halved,
- * jitter window halved to match) -- see lf_em4x05_data.c em4x05_rf64_period.
- * First-cut: expect this to need the same kind of hardware-capture tuning
- * EM4x05/T55xx read went through in this tree. */
-#define HITAG2_T1    32u
-#define HITAG2_T15   48u
-#define HITAG2_T2    64u
-#define HITAG2_JIT   8u
+/* Reply (tag -> reader) bit rate: RF/32 Manchester, matching lf_ia_hitag2.c's
+ * HT2_BIT_FC on the emulation side -- same protocol, same carrier, so the
+ * same Tc-per-bit value. Kept as a separate constant here, same as this
+ * file's own HITAG2_T_0_TC/HITAG2_T_1_TC already duplicate the emulator's
+ * HT2_T0_US/HT2_T1_US: the two sides don't share headers. */
+#define HITAG2_BIT_FC   32u
 
 #define HITAG2_RESP_TIMEOUT_TC   600   /* generous window to catch the ~227 Tc answer */
 #define HITAG2_CB_SIZE           64
-
-static uint8_t hitag2_rf32_period(uint8_t interval) {
-    if (interval >= (HITAG2_T1  - HITAG2_JIT) && interval <= (HITAG2_T1  + HITAG2_JIT)) return 0;
-    if (interval >= (HITAG2_T15 - HITAG2_JIT) && interval <= (HITAG2_T15 + HITAG2_JIT)) return 1;
-    if (interval >= (HITAG2_T2  - HITAG2_JIT) && interval <= (HITAG2_T2  + HITAG2_JIT)) return 2;
-    return 3;
-}
+#define HITAG2_MAX_RUNS          140  /* >= 2 * max frame bits (64); merged runs mean fewer in practice */
 
 static circular_buffer g_cb;
 
+/* Pushes one run (level + length, Tc units) per GPIOTE edge on LF_OA_OUT,
+ * for lf_ia_decode_runs() -- requires lf_125khz_radio_gpiote_enable(true)
+ * (both edges), unlike every other LF protocol's rising-edge-only capture.
+ * The level is the run that just ENDED, i.e. the one before this edge: a
+ * rising edge means that run was low, a falling edge means it was high.
+ * Which physical level the comparator calls "load" is not yet confirmed on
+ * real hardware -- if replies decode inverted, flip LF_IA_INVERT in
+ * hitag2_receive_frame() rather than this guess. */
 static void hitag2_edge_cb(void) {
     uint32_t cnt = get_lf_counter_value();
-    uint16_t val = (cnt > 0xff) ? 0xff : (uint16_t)(cnt & 0xff);
-    cb_push_back(&g_cb, &val);
+    uint16_t len = (cnt > LF_IA_RUN_LEN_MAX) ? LF_IA_RUN_LEN_MAX : (uint16_t)cnt;
+    bool completed_run_was_load = !lf_125khz_radio_last_edge_was_rising();
+    uint16_t run = LF_IA_RUN(completed_run_was_load, len);
+    cb_push_back(&g_cb, &run);
     clear_lf_counter_value();
 }
 
@@ -184,39 +184,30 @@ static uint16_t hitag2_page_frame(uint8_t opcode, uint8_t page) {
 static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_ms) {
     cb_init(&g_cb, HITAG2_CB_SIZE, sizeof(uint16_t));
     register_rio_callback(hitag2_edge_cb);
-    lf_125khz_radio_gpiote_enable();
+    lf_125khz_radio_gpiote_enable(true);
     clear_lf_counter_value();
 
-    manchester modem = {
-        .sync = true,
-        .rp   = hitag2_rf32_period,
-    };
-    uint8_t bits[64] = {0};
-    uint8_t bit_count = 0;
+    uint16_t runs[HITAG2_MAX_RUNS];
+    size_t n_runs = 0;
+    bool skipped_first = false;  /* first run is arm-to-first-edge, not a bit */
+    uint8_t bits_buf[(64 + 7) / 8] = {0};
     bool ok = false;
 
     autotimer *p_at = bsp_obtain_timer(0);
     while (!ok && NO_TIMEOUT_1MS(p_at, timeout_ms)) {
-        uint16_t interval = 0;
-        if (!cb_pop_front(&g_cb, &interval)) {
+        uint16_t run = 0;
+        if (!cb_pop_front(&g_cb, &run)) {
             continue;
         }
-        bool mbits[2] = {false, false};
-        int8_t mbitlen = 0;
-        manchester_feed(&modem, (uint8_t)interval, mbits, &mbitlen);
-        if (mbitlen == -1) {
-            /* Only resync before the frame has started; once we've locked
-             * onto real bits a glitch should not silently restart framing
-             * with no indication, but with no fixed preamble to re-anchor
-             * on, a reset-and-retry is the only option available here. */
-            manchester_reset(&modem);
-            bit_count = 0;
+        if (!skipped_first) {
+            skipped_first = true;
             continue;
         }
-        for (int8_t i = 0; i < mbitlen && bit_count < nbits; i++) {
-            bits[bit_count++] = mbits[i] ? 1 : 0;
+        if (n_runs < HITAG2_MAX_RUNS) {
+            runs[n_runs++] = run;
         }
-        if (bit_count >= nbits) {
+        if (lf_ia_decode_runs(runs, n_runs, LF_IA_CODING_MANCHESTER, HITAG2_BIT_FC, 0,
+                               bits_buf, nbits) >= nbits) {
             ok = true;
         }
     }
@@ -228,12 +219,7 @@ static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_m
     if (!ok) {
         return false;
     }
-    memset(out, 0, (nbits + 7) / 8);
-    for (uint8_t i = 0; i < nbits; i++) {
-        if (bits[i]) {
-            out[i / 8] |= (uint8_t)(0x80 >> (i % 8));
-        }
-    }
+    memcpy(out, bits_buf, (size_t)(nbits + 7) / 8);
     return true;
 }
 
@@ -321,11 +307,10 @@ static bool hitag2_tx_rx_bytes(const uint8_t *tx_bytes, uint8_t tx_nbits,
     return hitag2_receive_frame(rx_out, rx_nbits, timeout_ms);
 }
 
-/* Debug aid: send START_AUTH and dump the raw GPIOTE edge intervals (same
- * units hitag2_edge_cb feeds the Manchester classifier, clipped to 0xff) in
- * place of decoding them. The classifier thresholds (HITAG2_T1/T15/T2) are a
- * first-cut dimensional scaling, not hardware-verified -- this is for seeing
- * what the comparator actually produces on real silicon instead of guessing.
+/* Debug aid: send START_AUTH and dump the raw rising-to-rising GPIOTE edge
+ * intervals on LF_OA_OUT (Tc units, truncated to 0xff) in place of decoding
+ * them -- for seeing what the comparator actually produces on real silicon,
+ * separately from hitag2_receive_frame()'s own (both-edge) capture.
  *
  * Also reports rx_arm_gap_ticks: the app_timer (RTC1, ~61us/tick) gap
  * between the last TX edge finishing (timestamped inside the timeslot
@@ -371,18 +356,22 @@ bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out
     uint32_t rx_arm_tick_pre = app_timer_cnt_get();
     cb_init(&g_cb, HITAG2_CB_SIZE, sizeof(uint16_t));
     register_rio_callback(hitag2_edge_cb);
-    lf_125khz_radio_gpiote_enable();
+    lf_125khz_radio_gpiote_enable(false);  /* rising-only: unchanged raw dump, not the run decode */
     clear_lf_counter_value();
     *rx_arm_gap_ticks_out = (rx_arm_tick_pre - g_tx_done_tick) & 0xFFFFFFu;
 
     uint8_t n = 0;
     autotimer *p_at = bsp_obtain_timer(0);
     while (n < max_n && NO_TIMEOUT_1MS(p_at, timeout_ms)) {
-        uint16_t interval = 0;
-        if (!cb_pop_front(&g_cb, &interval)) {
+        uint16_t run = 0;
+        if (!cb_pop_front(&g_cb, &run)) {
             continue;
         }
-        intervals[n++] = (uint8_t)interval;
+        /* Rising-only capture: hitag2_edge_cb()'s level bit is always 0
+         * here, so this is the same rising-to-rising interval as before,
+         * just truncated instead of clamped above 255 (unchanged in
+         * practice -- real runs never get near that). */
+        intervals[n++] = (uint8_t)run;
     }
     bsp_return_timer(p_at);
     lf_125khz_radio_gpiote_disable();

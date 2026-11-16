@@ -32,7 +32,7 @@ static void jablotron_gpio_int0_cb(void) {
 
 static void init_jablotron_hw(void) {
     register_rio_callback(jablotron_gpio_int0_cb);
-    lf_125khz_radio_gpiote_enable();
+    lf_125khz_radio_gpiote_enable(false);
 }
 
 static void uninit_jablotron_hw(void) {

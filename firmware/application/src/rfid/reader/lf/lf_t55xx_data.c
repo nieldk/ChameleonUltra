@@ -366,7 +366,7 @@ uint16_t t55xx_read(uint8_t rf_n, uint8_t mode, uint8_t modulation, uint8_t down
         return 0;
     }
     register_rio_callback(t55xx_edge_cb);
-    lf_125khz_radio_gpiote_enable();
+    lf_125khz_radio_gpiote_enable(false);
     start_lf_125khz_radio();
     bsp_delay_ms(10);  /* T5577 power-on delay before the downlink */
 

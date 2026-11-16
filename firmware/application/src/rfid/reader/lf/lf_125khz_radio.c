@@ -32,24 +32,37 @@ nrf_pwm_sequence_t const m_lf_125khz_pwm_seq_obj = {
     .end_delay = 0
 };
 
+// Direction of the edge currently being handled -- set from `action` (the
+// only place that's available) so a RIO callback (fixed void(void) signature,
+// shared by every LF protocol) can still read it synchronously. Only valid
+// while a GPIOTE callback is on the call stack above the RIO callback.
+static volatile bool m_last_edge_was_rising = true;
+
+bool lf_125khz_radio_last_edge_was_rising(void) {
+    return m_last_edge_was_rising;
+}
+
 /**
  * LF reading card decrease along the trigger collection event
  */
 static void lf_125khz_gpio_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action) {
-    // LF_OA_OUT is LOTOHI-only (see gpiote_init()), so every call here is a
-    // rising edge. Logged through the existing handler/channel rather than a
-    // second GPIOTE owner on this pin -- see logic_analyzer.c's is_owned_pin().
-    logic_hook(LOGIC_SRC_LF_OA, 1);
+    // Under enable(false) (every protocol except Hitag2's new run decode)
+    // this is LOTOHI-only, so action is always a rising edge here, same as
+    // before this was tracked at all.
+    m_last_edge_was_rising = (action == NRF_GPIOTE_POLARITY_LOTOHI);
+    logic_hook(LOGIC_SRC_LF_OA, m_last_edge_was_rising ? 1 : 0);
     // Directly transfer to the event
     gpio_int0_irq_handler();
 }
 
 // The LF collection decline is interrupted, and the GPIO is pulled down
 // by default. The trigger method is triggering
-static void gpiote_init(void) {
+static void gpiote_init(bool both_edges) {
     nrfx_err_t err_code;
 
-    nrfx_gpiote_in_config_t cfg = NRFX_GPIOTE_CONFIG_IN_SENSE_LOTOHI(false);
+    nrfx_gpiote_in_config_t cfg_toggle = NRFX_GPIOTE_CONFIG_IN_SENSE_TOGGLE(false);
+    nrfx_gpiote_in_config_t cfg_lotohi = NRFX_GPIOTE_CONFIG_IN_SENSE_LOTOHI(false);
+    nrfx_gpiote_in_config_t cfg = both_edges ? cfg_toggle : cfg_lotohi;
     err_code = nrfx_gpiote_in_init(LF_OA_OUT, &cfg, lf_125khz_gpio_handler);
     APP_ERROR_CHECK(err_code);
 }
@@ -196,12 +209,12 @@ void lf_125khz_radio_saadc166_disable(void) {
     unregister_lf_adc_callback();
 }
 
-void lf_125khz_radio_gpiote_enable(void) {
+void lf_125khz_radio_gpiote_enable(bool both_edges) {
     nrfx_err_t err_code;
     err_code = nrfx_ppi_channel_enable(m_pwm_timer_count_ppi_channel);
     APP_ERROR_CHECK(err_code);
 
-    gpiote_init();
+    gpiote_init(both_edges);
     nrfx_timer_enable(&m_pwm_timer_counter);
     nrfx_gpiote_in_event_enable(LF_OA_OUT, true);
 }
