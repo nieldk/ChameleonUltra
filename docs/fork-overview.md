@@ -86,6 +86,17 @@ reading another's FDX-B emulation at 134.2 kHz couples weakly and the result
 varies between units. A raw `lf sniff` capture of the emulation shows the
 intended 238 µs bit period (118 µs half-bit).
 
+## Interactive LF engine & Hitag2
+
+A reusable framework for LF tag types that must decode a reader's command and
+answer it in time, not just transmit (`lf/interactive/`: `lf_ia_engine.c`,
+`lf_ia_codec.[ch]`, `lf_ia_trace.[ch]`, `lf_ia_debug.h`). Hitag2 password
+mode (`lf_ia_hitag2.[ch]`, `TAG_TYPE_HITAG2`) is the first protocol on it,
+reader and emulation both (`lf hitag2 read` / `lf hitag2 econfig`). A
+retained exchange trace, live tuning and a raw envelope capture
+(`lf interactive trace` / `tuning` / `env`) debug a new reader or board
+without a reflash. See [lf-interactive-hitag2.md](lf-interactive-hitag2.md).
+
 ## DESFire EV3 slot types
 
 `TAG_TYPE_DESFIRE_EV3_2K/4K/8K` (1306–1308) sit beside the EV1/EV2 types. The

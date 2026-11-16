@@ -50,6 +50,14 @@ cd firmware
 `flash-uf2-app.sh` waits for the `CHAMELEON` UF2 drive, copies the application
 UF2, and the device resets into the new application.
 
+`build.sh`'s closing message says whether this build actually needs the SD+BL
+stage reflashed or just the app: it fingerprints the bootloader's source
+inputs (`bootloader/`, `common/`, `nrf52_sdk/`, `Makefile.defs`) and compares
+against the last build on this machine (cached in `firmware/.bootloader_hash`,
+gitignored). It cannot see what is actually flashed on the device, so the
+first build after cloning, or after deleting that cache file, always says
+"changed".
+
 ## Flashing SoftDevice / bootloader
 
 These are outside the UF2 window, so use one of:
