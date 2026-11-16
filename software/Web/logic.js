@@ -5,7 +5,7 @@
 (function(){
 
 const RATES = {16:0, 8:1, 4:2, 2:3, 1:4};            // MHz -> prescaler
-const NAMED = {hf_cs:0x00, field_led:0x01, spi:0x02};
+const NAMED = {hf_cs:0x00, field_led:0x01, spi:0x02, lf_oa:0x03};
 const EV_CHUNK = 90, SPI_CHUNK = 400, SPI_MAXDATA = 24;
 
 // RC522 register names, from firmware rc522.h

@@ -4,13 +4,14 @@ Records timestamped events from inside the device while other commands run,
 and shows them as a timeline, a plot or a VCD file. No extra hardware.
 Ultra only.
 
-Three sources:
+Four sources:
 
 | Source | What it records |
 |--------|-----------------|
 | `hf_cs` | RC522 chip-select edges (one low pulse per register access) |
 | `field_led` | Reader field LED, low = field on |
 | `spi` | Every RC522 register read/write with its value |
+| `lf_oa` | `LF_OA_OUT` rising edges (reader RX comparator), from the LF reader's own GPIOTE handler |
 
 ## Use
 
@@ -68,14 +69,18 @@ selection of a card with a 7-byte UID:
 
 ```
 RC522_DOSEL/UNSEL, TAG_FIELD_LED_ON/OFF ──► logic_hook() ──► edge buffer
+lf_125khz_gpio_handler() (LF_OA_OUT)    ──► logic_hook() ──► edge buffer
 read/write_register_single/_buffer ───────► logic_spi()  ──► SPI buffer
                                    TIMER4 capture = timestamp
 ```
 
-The firmware logs the signals where it drives them (`rc522.c`,
-`hw_connect.h`, hooks in `firmware/common/logic_hook.h`). GPIOTE pin events
-were tried first and did not fire on the output-driven pins tested, so the
-named sources do not use them.
+The firmware logs the signals where it drives or already observes them
+(`rc522.c`, `hw_connect.h`, `lf_125khz_radio.c`, hooks in
+`firmware/common/logic_hook.h`). `hf_cs`/`field_led` are output pins the
+firmware toggles; `lf_oa` reuses the LF reader's own existing GPIOTE
+handler on `LF_OA_OUT` rather than a second GPIOTE channel on that pin.
+Raw GPIOTE pin events are only used for genuinely spare pins not covered
+by a named source -- see Limits.
 
 * Hooks compile in only with `CONFIG_LOGIC_HOOKS`, which the Ultra application
   Makefile defines. The bootloader and Lite builds get empty inline stubs.
@@ -94,17 +99,21 @@ named sources do not use them.
 
 | ID | Name | Payload |
 |----|------|---------|
-| 3037 | `LOGIC_ARM` | `prescaler(1) n(1) src(n) [merge_ticks(2)]`; src: 0 `hf_cs`, 1 `field_led`, 2 `spi`, `0x40 \| pin` raw |
+| 3037 | `LOGIC_ARM` | `prescaler(1) n(1) src(n) [merge_ticks(2)]`; src: 0 `hf_cs`, 1 `field_led`, 2 `spi`, 3 `lf_oa`, `0x40 \| pin` raw (rejected for driver-owned pins) |
 | 3038 | `LOGIC_READ` | `offset(2) count(2)` events, max 96 per call |
 | 3039 | `LOGIC_STOP` | none; returns overflow, event count, handler calls, 4 capture stamps |
 | 3040 | `LOGIC_SPI_READ` | `offset(2) count(2)` bytes, max 480 per call; returns overflow, drops, total |
 
 ## Limits
 
-* Chip select, the field LED and RC522 register traffic only. The SPI lines,
-  the RF signal and the card side are not captured.
-* Raw pins (`Px.yy`) use GPIOTE events and are experimental: no events were
-  seen for `hf_cs`/`field_led` through that path.
+* Chip select, the field LED, RC522 register traffic and `LF_OA_OUT` only.
+  The SPI lines, the RF signal and the card side are not captured.
+* Raw pins (`Px.yy`) use GPIOTE events and are rejected for any pin a driver
+  already owns (LEDs, buttons, both LF pins, the HF SPI pins, reader power):
+  a second GPIOTE owner on the same pin crashes the device, confirmed for
+  `LF_OA_OUT` (reset via `APP_ERROR_CHECK`) and `LF_ANT_DRIVER` (PWM-owned,
+  exact fault not pinned down) on real hardware. Use the named source for a
+  net that already has one; raw pins are for genuinely spare GPIOs only.
 * A pin is only observed where the firmware logs it; other nets are not
   reachable.
 * 1024 edges / 4 KiB: long polling loops fill the edge buffer, use `--merge`.

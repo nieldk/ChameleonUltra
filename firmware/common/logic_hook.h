@@ -7,6 +7,7 @@
 #define LOGIC_SRC_HF_CS      0x00
 #define LOGIC_SRC_FIELD_LED  0x01
 #define LOGIC_SRC_SPI        0x02   /* RC522 register accesses, logged by value */
+#define LOGIC_SRC_LF_OA      0x03   /* LF_OA_OUT rising edges, from the reader's own GPIOTE handler */
 
 #if defined(PROJECT_CHAMELEON_ULTRA) && defined(CONFIG_LOGIC_HOOKS)
 extern volatile uint8_t g_logic_hook_mask;

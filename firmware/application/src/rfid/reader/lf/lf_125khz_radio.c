@@ -36,6 +36,10 @@ nrf_pwm_sequence_t const m_lf_125khz_pwm_seq_obj = {
  * LF reading card decrease along the trigger collection event
  */
 static void lf_125khz_gpio_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action) {
+    // LF_OA_OUT is LOTOHI-only (see gpiote_init()), so every call here is a
+    // rising edge. Logged through the existing handler/channel rather than a
+    // second GPIOTE owner on this pin -- see logic_analyzer.c's is_owned_pin().
+    logic_hook(LOGIC_SRC_LF_OA, 1);
     // Directly transfer to the event
     gpio_int0_irq_handler();
 }

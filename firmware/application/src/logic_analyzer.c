@@ -25,7 +25,7 @@ static uint32_t          m_pin[LOGIC_MAX_CHANNELS];
 static uint32_t          m_saved_cnf[LOGIC_MAX_CHANNELS];
 static nrf_ppi_channel_t m_ppi[LOGIC_MAX_CHANNELS];
 static uint8_t           m_stage[LOGIC_MAX_CHANNELS]; /* 0 none, 1 gpiote, 2 +ppi, 3 hook */
-static uint8_t           m_hook_ch[2];
+static uint8_t           m_hook_ch[4]; /* indexed by LOGIC_SRC_HF_CS/FIELD_LED/LF_OA (SPI is stage 4, not hooked here) */
 static uint16_t          m_merge;
 volatile uint8_t         g_logic_hook_mask;
 
@@ -41,11 +41,46 @@ static uint16_t          m_spi_drop;
 static volatile uint8_t  m_spi_busy;
 
 static bool is_hook_src(uint8_t src) {
-    return src == LOGIC_SRC_HF_CS || src == LOGIC_SRC_FIELD_LED;
+    return src == LOGIC_SRC_HF_CS || src == LOGIC_SRC_FIELD_LED || src == LOGIC_SRC_LF_OA;
 }
 
 static uint32_t hook_pin(uint8_t src) {
-    return src == LOGIC_SRC_HF_CS ? HF_SPI_SELECT : LED_FIELD;
+    if (src == LOGIC_SRC_HF_CS) {
+        return HF_SPI_SELECT;
+    }
+    if (src == LOGIC_SRC_LF_OA) {
+        return LF_OA_OUT;
+    }
+    return LED_FIELD;
+}
+
+/* Pins a driver already owns. Two confirmed ways raw capture on one of these
+ * crashes the device instead of just losing events:
+ *   - LF_OA_OUT: a second nrfx_gpiote_in_init() on the same pin returns
+ *     NRFX_ERROR_INVALID_STATE, and lf_125khz_radio.c's gpiote_init() wraps
+ *     its own call in APP_ERROR_CHECK, so the next LF command resets.
+ *   - LF_ANT_DRIVER: watching it as raw (hi-accuracy GPIOTE) while
+ *     hitag2_send_bit() repeatedly stop/start_lf_125khz_radio()s the PWM on
+ *     the same pin crashed on real hardware; the exact fault isn't pinned
+ *     down, but the pin is PWM-owned either way.
+ * Rather than find the rest of these one crash at a time, block every named
+ * pin -- raw capture is only safe on a pin nothing else in the firmware
+ * drives or reads. */
+static bool is_owned_pin(uint32_t p) {
+    /* Not static: these are runtime globals (hw_connect_init() sets them per
+     * board rev), not compile-time constants. */
+    const uint32_t owned[] = {
+        LED_FIELD, LED_1, LED_2, LED_3, LED_4, LED_5, LED_6, LED_7, LED_8,
+        LED_R, LED_G, LED_B, BUTTON_1, BUTTON_2, LF_MOD, LF_RSSI_PIN,
+        BAT_SENSE_PIN, LF_ANT_DRIVER, LF_OA_OUT, HF_SPI_SELECT, HF_SPI_MISO,
+        HF_SPI_MOSI, HF_SPI_SCK, HF_ANT_SEL, READER_POWER,
+    };
+    for (uint8_t i = 0; i < ARRAY_SIZE(owned); i++) {
+        if (p == owned[i]) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool resolve_pin(uint8_t src, uint32_t *pin) {
@@ -59,6 +94,9 @@ static bool resolve_pin(uint8_t src, uint32_t *pin) {
     }
     if ((src & 0xC0) == LOGIC_SRC_RAW) {
         uint32_t p = src & 0x3F;
+        if (is_owned_pin(p)) {
+            return false;
+        }
         if (nrf_gpio_pin_present_check(p)) {
             *pin = p;
             return true;
@@ -266,8 +304,12 @@ int logic_start(const uint8_t *src, uint8_t n, uint8_t prescaler, uint16_t merge
             m_hook_ch[src[i]] = i;
             m_stage[i] = 3;
             g_logic_hook_mask |= (uint8_t)(1u << src[i]);
-            /* output pin, input buffer off: read the output latch */
-            if (nrf_gpio_pin_out_read(m_pin[i])) {
+            /* hf_cs/field_led are output pins the firmware drives -- read the
+             * output latch. LF_OA_OUT is the reader's own input (comparator
+             * output read by the MCU), so read the actual pin level instead. */
+            bool level = (src[i] == LOGIC_SRC_LF_OA) ? nrf_gpio_pin_read(m_pin[i])
+                                                      : nrf_gpio_pin_out_read(m_pin[i]);
+            if (level) {
                 m_init_levels |= (uint8_t)(1u << i);
             }
             continue;

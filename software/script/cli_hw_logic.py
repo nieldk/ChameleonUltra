@@ -7,7 +7,7 @@ from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, hw
 
 hw_logic = hw.subgroup("logic", "Edge logic analyser (internal nets / raw pins, VCD export)")
 
-NAMED = {"hf_cs": 0x00, "field_led": 0x01, "spi": 0x02}
+NAMED = {"hf_cs": 0x00, "field_led": 0x01, "spi": 0x02, "lf_oa": 0x03}
 RATES = {16: 0, 8: 1, 4: 2, 2: 3, 1: 4}  # MHz -> prescaler
 CHUNK = 90
 SPI_CHUNK = 400
@@ -389,11 +389,14 @@ class HWLogicStart(DeviceRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
         p = ArgumentParserNoExit()
         p.description = ("Arm edge capture, run other commands, then 'hw logic stop'. "
-                         "Up to 4 sources, 1024 edges max. hf_cs and field_led are logged where the "
-                         "firmware drives them; raw pins rely on GPIOTE events.")
+                         "Up to 4 sources, 1024 edges max. hf_cs, field_led and lf_oa are logged "
+                         "through the firmware's own handler for that net; raw pins rely on GPIOTE "
+                         "events and are rejected for any pin a driver already owns (crashes the "
+                         "device otherwise -- use the named source for those nets instead).")
         p.add_argument("sources", nargs="+", type=_parse_src,
                        help="hf_cs (RC522 chip select), field_led (low = field on), "
-                            "spi (RC522 register accesses with values)")
+                            "spi (RC522 register accesses with values), "
+                            "lf_oa (LF_OA_OUT rising edges, reader RX comparator)")
         p.add_argument("--rate", type=int, choices=sorted(RATES), default=1,
                        help="tick rate in MHz (default 1; the 32-bit stamp wraps after 2^32 ticks)")
         p.add_argument("--merge", type=int, default=0, metavar="US",
