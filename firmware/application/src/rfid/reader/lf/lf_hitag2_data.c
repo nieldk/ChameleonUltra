@@ -68,6 +68,29 @@ static void hitag2_edge_cb(void) {
     clear_lf_counter_value();
 }
 
+/* Each BPLM bit toggles stop/start_lf_125khz_radio(), and that PWM driver
+ * makes its own HFCLK request/release around each toggle -- so across a
+ * whole TX burst it churns the SoftDevice's HFCLK reference count to zero
+ * and back repeatedly, never letting the crystal (HFXO startup is ~0.36ms,
+ * longer than the gap between toggles) actually settle. Confirmed on real
+ * hardware: sd_clock_hfclk_is_running() read false during TX every time.
+ *
+ * Fix is the same one lf_xtal_counter.c already uses for TIMER1: hold our
+ * own HFCLK request for the whole field session. The SoftDevice reference-
+ * counts requests, so our hold keeps the crystal up regardless of how often
+ * the PWM driver's own request/release toggles underneath it. */
+static void hitag2_hfclk_hold(void) {
+    sd_clock_hfclk_request();
+    uint32_t running = 0;
+    while (!running) {
+        sd_clock_hfclk_is_running(&running);
+    }
+}
+
+static void hitag2_hfclk_release(void) {
+    sd_clock_hfclk_release();
+}
+
 /* -----------------------------------------------------------------------
  * Transmit side (reader -> tag), Binary Pulse Length Modulation.
  *
@@ -302,6 +325,7 @@ bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out
     *n_out = 0;
     *rx_arm_gap_ticks_out = 0;
     *hfclk_running_out = false;
+    hitag2_hfclk_hold();
     start_lf_125khz_radio();
     bsp_delay_us(HITAG2_T_WAIT_POWERUP_TC * 8);
 
@@ -317,6 +341,7 @@ bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out
 
     if (!g_timeslot_done) {
         stop_lf_125khz_radio();
+        hitag2_hfclk_release();
         return false;
     }
 
@@ -343,6 +368,7 @@ bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out
     cb_free(&g_cb);
 
     stop_lf_125khz_radio();
+    hitag2_hfclk_release();
     *n_out = n;
     return n > 0;
 }
@@ -352,6 +378,7 @@ bool hitag2_reader_get_uid(uint8_t uid[HITAG2_PAGE_SIZE], uint32_t timeout_ms) {
      * 11000) sent as the low 5 bits -- see HITAG2_START_AUTH's own comment
      * in protocols.h ("left 5 bits only"); hitag2_send_bits sends the low
      * `nbits` bits MSB-first, so passing 0x18/5 here reproduces "11000". */
+    hitag2_hfclk_hold();
     start_lf_125khz_radio();
     bsp_delay_us(HITAG2_T_WAIT_POWERUP_TC * 8);
     bool ok = hitag2_tx_rx(0x18, 5, uid, 32, 0, timeout_ms);
@@ -370,6 +397,7 @@ bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
      * power-up its next START_AUTH needs). */
     if (!hitag2_reader_get_uid(pages[HITAG2_PAGE_UID], timeout_ms)) {
         stop_lf_125khz_radio();
+        hitag2_hfclk_release();
         return false;
     }
 
@@ -380,6 +408,7 @@ bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
         /* Tag may have ignored this (wrong password, or crypto mode) --
          * either way there is nothing more we can read without the key. */
         stop_lf_125khz_radio();
+        hitag2_hfclk_release();
         return false;
     }
     memcpy(pages[HITAG2_PAGE_CONFIG], reply, 4);
@@ -392,11 +421,13 @@ bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
         uint8_t out[4];
         if (!hitag2_tx_rx(frame, 10, out, 32, 0, timeout_ms)) {
             stop_lf_125khz_radio();
+            hitag2_hfclk_release();
             return false;
         }
         memcpy(pages[page], out, 4);
     }
     stop_lf_125khz_radio();
+    hitag2_hfclk_release();
     return true;
 }
 
@@ -408,6 +439,7 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
     /* Field lifecycle is owned here, same reasoning as hitag2_reader_read(). */
     if (!hitag2_reader_get_uid(pages[HITAG2_PAGE_UID], timeout_ms)) {
         stop_lf_125khz_radio();
+        hitag2_hfclk_release();
         return false;
     }
 
@@ -427,6 +459,7 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
     if (!hitag2_tx_rx_bytes(nrar, 64, reply, 32, 0, timeout_ms)) {
         /* No answer: wrong key, or the tag is actually in password mode. */
         stop_lf_125khz_radio();
+        hitag2_hfclk_release();
         return false;
     }
     hitag2_crypto_transcrypt(&cs, reply, 4, 0);
@@ -446,11 +479,13 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
         uint8_t out[4];
         if (!hitag2_tx_rx(enc_value, 10, out, 32, 0, timeout_ms)) {
             stop_lf_125khz_radio();
+            hitag2_hfclk_release();
             return false;
         }
         hitag2_crypto_transcrypt(&cs, out, 4, 0);
         memcpy(pages[page], out, 4);
     }
     stop_lf_125khz_radio();
+    hitag2_hfclk_release();
     return true;
 }
