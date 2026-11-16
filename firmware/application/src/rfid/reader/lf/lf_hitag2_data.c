@@ -257,6 +257,55 @@ static bool hitag2_tx_rx_bytes(const uint8_t *tx_bytes, uint8_t tx_nbits,
     return hitag2_receive_frame(rx_out, rx_nbits, timeout_ms);
 }
 
+/* Debug aid: send START_AUTH and dump the raw GPIOTE edge intervals (same
+ * units hitag2_edge_cb feeds the Manchester classifier, clipped to 0xff) in
+ * place of decoding them. The classifier thresholds (HITAG2_T1/T15/T2) are a
+ * first-cut dimensional scaling, not hardware-verified -- this is for seeing
+ * what the comparator actually produces on real silicon instead of guessing. */
+bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out, uint32_t timeout_ms) {
+    *n_out = 0;
+    start_lf_125khz_radio();
+    bsp_delay_us(HITAG2_T_WAIT_POWERUP_TC * 8);
+
+    g_send_value    = 0x18;  /* START_AUTH, 5 bits -- see hitag2_reader_get_uid */
+    g_send_nbits    = 5;
+    g_timeslot_done = false;
+    uint32_t slot_us = ((uint32_t)5 * HITAG2_T_1_TC * 8) + 2000;
+    request_timeslot(slot_us, hitag2_send_timeslot_cb);
+
+    autotimer *p_wait = bsp_obtain_timer(0);
+    while (!g_timeslot_done && NO_TIMEOUT_1MS(p_wait, 20)) {}
+    bsp_return_timer(p_wait);
+
+    if (!g_timeslot_done) {
+        stop_lf_125khz_radio();
+        return false;
+    }
+
+    cb_init(&g_cb, HITAG2_CB_SIZE, sizeof(uint16_t));
+    register_rio_callback(hitag2_edge_cb);
+    lf_125khz_radio_gpiote_enable();
+    clear_lf_counter_value();
+
+    uint8_t n = 0;
+    autotimer *p_at = bsp_obtain_timer(0);
+    while (n < max_n && NO_TIMEOUT_1MS(p_at, timeout_ms)) {
+        uint16_t interval = 0;
+        if (!cb_pop_front(&g_cb, &interval)) {
+            continue;
+        }
+        intervals[n++] = (uint8_t)interval;
+    }
+    bsp_return_timer(p_at);
+    lf_125khz_radio_gpiote_disable();
+    unregister_rio_callback();
+    cb_free(&g_cb);
+
+    stop_lf_125khz_radio();
+    *n_out = n;
+    return n > 0;
+}
+
 bool hitag2_reader_get_uid(uint8_t uid[HITAG2_PAGE_SIZE], uint32_t timeout_ms) {
     /* START_AUTH is 5 bits, top-aligned in the frame: value 0x18 (binary
      * 11000) sent as the low 5 bits -- see HITAG2_START_AUTH's own comment

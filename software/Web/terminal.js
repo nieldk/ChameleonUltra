@@ -2481,6 +2481,21 @@ lfHitag2.command("cread", "Read a Hitag2 tag in crypto mode with a known key (no
   const pages = [0,1,2,3,4,5,6,7].map(i => f.data.slice(i*4, i*4+4));
   return ht2PageLines(pages);
 });
+lfHitag2.command("raw", "Debug: send START_AUTH and print the raw GPIOTE edge intervals (Tc units) instead of running them through the RF/32 Manchester classifier", [
+], async (a) => {
+  await needReader();
+  const f = okOrThrow(await request(CU.LF_HITAG2_RAW_CAPTURE));
+  const n = f.data.length ? f.data[0] : 0;
+  const intervals = Array.from(f.data.slice(1, 1 + n));
+  if(!intervals.length) return ["No edges captured at all -- comparator saw nothing (check the tag is actually in the field)."];
+  const buckets = [[32,"1T "],[48,"1.5T"],[64,"2T "]];
+  const lines = [`Captured ${intervals.length} interval(s), Tc units:`];
+  intervals.forEach((v, i) => {
+    const hit = buckets.find(([c]) => Math.abs(v - c) <= 8);
+    lines.push(`    [${String(i).padStart(2," ")}]  ${String(v).padStart(3," ")}  ${hit ? hit[1] : "?"}`);
+  });
+  return lines;
+});
 
 /* ================= lf interactive ================= */
 // Port of cli_lf_interactive.py -- debug tools for the interactive LF engine

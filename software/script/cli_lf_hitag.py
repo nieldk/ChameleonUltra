@@ -181,3 +181,36 @@ class LFHitag2CryptoRead(ReaderRequiredUnit):
         for i, page in enumerate(pages):
             label = PAGE_NAMES.get(i, "User")
             print(f"    {i}  {page.hex(' ').upper()}  {CG}{label}{C0}")
+
+
+@lf_hitag2.command("raw")
+class LFHitag2RawCapture(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        p = ArgumentParserNoExit()
+        p.description = (
+            "Debug: send START_AUTH and print the raw GPIOTE edge intervals "
+            "the device captured, in Tc units (1 Tc = 8us), instead of "
+            "running them through the RF/32 Manchester classifier. Use this "
+            "to see what the comparator actually produces on real hardware "
+            "when `read`/`cread` report no answer -- the classifier "
+            "thresholds (1T=32, 1.5T=48, 2T=64 Tc, +-8 jitter) are a "
+            "first-cut dimensional scaling from the EM4x05 classifier, not "
+            "yet verified against this hardware."
+        )
+        return p
+
+    def on_exec(self, args: argparse.Namespace):
+        intervals = self.cmd.hitag2_raw_capture()
+        if not intervals:
+            print(f" {CR}No edges captured at all -- comparator saw nothing "
+                  f"(check the tag is actually in the field).{C0}")
+            return
+        print(f" Captured {len(intervals)} interval(s), Tc units:")
+        buckets = ((32, "1T "), (48, "1.5T"), (64, "2T "))
+        for i, v in enumerate(intervals):
+            tag = "?"
+            for center, name in buckets:
+                if abs(v - center) <= 8:
+                    tag = name
+                    break
+            print(f"    [{i:2}]  {v:3}  {tag}")

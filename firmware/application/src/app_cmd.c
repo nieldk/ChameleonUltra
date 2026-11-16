@@ -3032,6 +3032,15 @@ static data_frame_tx_t *cmd_processor_lf_hitag2_crypto_read(uint16_t cmd, uint16
     return data_frame_make(cmd, STATUS_LF_TAG_OK, sizeof(pages), (uint8_t *)pages);
 }
 
+#define LF_HITAG2_RAW_CAPTURE_MAX (48u)
+static data_frame_tx_t *cmd_processor_lf_hitag2_raw_capture(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    static uint8_t out[1 + LF_HITAG2_RAW_CAPTURE_MAX];
+    uint8_t n = 0;
+    hitag2_reader_raw_capture(out + 1, LF_HITAG2_RAW_CAPTURE_MAX, &n, 500);
+    out[0] = n;
+    return data_frame_make(cmd, STATUS_LF_TAG_OK, 1 + n, out);
+}
+
 // In: the index of the first record (u16, big-endian, optional). Out: the count written since the clear (u32), the
 // record size (u16), the number of records here (u8), the number of first records kept (u8), the current boot (u16),
 // then the records. 6 per call, not upstream's 14 -- this fork's RAM budget is tighter; the host pages with "first".
@@ -5258,6 +5267,7 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_EM4X05_SCAN,                  before_reader_run,           cmd_processor_em4x05_scan,                   NULL                   },
     {    DATA_CMD_LF_HITAG2_READ,               before_reader_run,           cmd_processor_lf_hitag2_read,                NULL                   },
     {    DATA_CMD_LF_HITAG2_CRYPTO_READ,        before_reader_run,           cmd_processor_lf_hitag2_crypto_read,         NULL                   },
+    {    DATA_CMD_LF_HITAG2_RAW_CAPTURE,        before_reader_run,           cmd_processor_lf_hitag2_raw_capture,         NULL                   },
     {    DATA_CMD_LF_IA_TRACE_READ,             NULL,                        cmd_processor_lf_ia_trace_read,              NULL                   },
     {    DATA_CMD_LF_IA_TRACE_CLEAR,            NULL,                        cmd_processor_lf_ia_trace_clear,             NULL                   },
     {    DATA_CMD_LF_IA_ENV_ARM,                NULL,                        cmd_processor_lf_ia_env_arm,                 NULL                   },

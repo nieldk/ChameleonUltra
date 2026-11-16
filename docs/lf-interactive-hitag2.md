@@ -88,8 +88,8 @@ password mode) no WRITE_PAGE.
   `hitag2_reader_crypto_read(key[6], pages[8][4], timeout_ms)`): sends
   Nr=0 (freshness only matters to an attacker, not a legitimate known-key
   read) and the matching Ar, then reads the remaining pages encrypted.
-  Not yet wired to a CLI command -- `lf hitag2 read` is still password
-  mode only.
+  Wired to `lf hitag2 cread -k <key>`; `lf hitag2 read -k <pwd>` is the
+  separate password-mode command.
 
 The 48-bit key is split across two pages, same layout proxmark3 uses: page
 1's 4 bytes are key bytes 2-5, and page 2's bytes 2-3 are key bytes 0-1
@@ -115,6 +115,32 @@ record and the envelope ring is a token size -- both commands still work,
 just with ~no history. Build with `LF_IA_DEBUG=1` for the full ring (32
 records, 10.24 ms of envelope) when actually debugging a new protocol or a
 new board's RX circuit; see `firmware/application/Makefile`.
+
+## Reader side (`lf hitag2 read`/`cread`)
+
+Separate code path from everything above: `lf_hitag2_data.c`'s
+`hitag2_reader_read()`/`hitag2_reader_crypto_read()` drive the CU's own LF
+field and decode a tag's load-modulated reply with a fixed-threshold RF/32
+Manchester classifier (`hitag2_rf32_period()`), not the interactive engine's
+self-calibrating gap decoder -- closer in shape to this tree's EM4x05/T55xx
+reader code than to `lf_ia_engine.c`.
+
+* **`lf hitag2 raw`**: sends START_AUTH and prints the raw GPIOTE edge
+  intervals captured (Tc units, 1 Tc = 8 µs) instead of running them through
+  the classifier -- the reader-side equivalent of `lf interactive env read`,
+  for when `read`/`cread` report no answer and the question is what the
+  comparator is actually producing.
+* **Field left on across a failed attempt** (found on real hardware): none
+  of the three reader functions ever called `stop_lf_125khz_radio()` --
+  `start_lf_125khz_radio()` ran once per session and was never matched, so a
+  failed attempt left the field running into the next one, denying the tag
+  the fresh power-up its next `START_AUTH` needs. Fixed to stop the field on
+  every exit, matching `lf_em4x05_data.c`'s own reader functions.
+* **The RF/32 classifier itself is still a first-cut.** `HITAG2_T1`/`T15`/
+  `T2` (32/48/64 Tc) are dimensionally scaled from the EM4x05 classifier, not
+  derived from a real Hitag2 capture -- unlike the TX timing and the
+  `T_WAIT_*` constants, which are upstream proxmark3's own verified values.
+  `lf hitag2 raw` exists to get a real capture before adjusting these.
 
 ## Lessons from bringing Hitag2 up on real hardware
 

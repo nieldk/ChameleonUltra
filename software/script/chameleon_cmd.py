@@ -1167,6 +1167,22 @@ class ChameleonCMD:
             resp.parsed = (resp.status, None)
         return resp
 
+    @expect_response([Status.LF_TAG_OK])
+    def hitag2_raw_capture(self):
+        """
+        Debug: send START_AUTH and return the raw GPIOTE edge intervals the
+        device captured (Tc units, i.e. units of 8us), instead of running
+        them through the RF/32 Manchester classifier. For determining real
+        classifier thresholds from hardware capture.
+
+        :return: parsed list of ints (possibly empty, if no edges at all
+            were seen -- that is itself informative)
+        """
+        resp = self.device.send_cmd_sync(Command.LF_HITAG2_RAW_CAPTURE, b'')
+        n = resp.data[0] if len(resp.data) > 0 else 0
+        resp.parsed = list(resp.data[1:1 + n])
+        return resp
+
     @expect_response(Status.SUCCESS)
     def lf_ia_trace_read(self, first: int = 0):
         """

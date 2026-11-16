@@ -316,6 +316,7 @@
 #define DATA_CMD_LF_SEARCH                      (3033)  // PM3-style: sweep all LF decoders, first hit
 #define DATA_CMD_LF_HITAG2_READ                 (3034)  // in: 4-byte password; out: 8 pages * 4 bytes (password mode only)
 #define DATA_CMD_LF_HITAG2_CRYPTO_READ          (3045)  // in: 6-byte key; out: 8 pages * 4 bytes (known-key crypto mode)
+#define DATA_CMD_LF_HITAG2_RAW_CAPTURE          (3046)  // in: none; out: n(1) raw_intervals(n), Tc units -- RX classifier debug
 
 #define DATA_CMD_LF_IA_TRACE_READ               (3180)  // in: u16 first index; out: trace records from there
 #define DATA_CMD_LF_IA_TRACE_CLEAR              (3181)

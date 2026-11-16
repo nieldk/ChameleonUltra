@@ -75,6 +75,12 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
                                 uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
                                 uint32_t timeout_ms);
 
+/* Debug: send START_AUTH and return up to max_n raw GPIOTE edge intervals
+ * (Tc units, clipped to 0xff) instead of decoding them -- for determining
+ * real Manchester classifier thresholds from hardware capture, since the
+ * current ones are a first-cut dimensional scaling, not hardware-verified. */
+bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out, uint32_t timeout_ms);
+
 #ifdef __cplusplus
 }
 #endif
