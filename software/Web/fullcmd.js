@@ -66,6 +66,9 @@ const CU = {
   FDXB_SCAN:3021, FDXB_WRITE_TO_T55XX:3022, EM4X05_SCAN:3030, LF_SNIFF:3031, LF_SEARCH:3033,
   LOGIC_ARM:3037, LOGIC_READ:3038, LOGIC_STOP:3039, LOGIC_SPI_READ:3040,
   INDALA_SCAN:3035, INDALA_WRITE_TO_T55XX:3036,
+  LF_HITAG2_READ:3034,
+  LF_IA_TRACE_READ:3180, LF_IA_TRACE_CLEAR:3181, LF_IA_ENV_ARM:3182,
+  LF_IA_ENV_READ:3183, LF_IA_TUNING:3184,
   // 3032 EM4X05_READSNIFF is a #define in firmware's data_cmd.c with no
   // app_cmd.c dispatch case and no chameleon_cmd.py wrapper -- not actually
   // implemented in this firmware, so no UI control for it (checked, not guessed).
@@ -98,6 +101,7 @@ const CU = {
   IOPROX_SET_EMU_ID:5008, IOPROX_GET_EMU_ID:5009, JABLOTRON_SET_EMU_ID:5010, JABLOTRON_GET_EMU_ID:5011,
   IDTECK_SET_EMU_ID:5012, IDTECK_GET_EMU_ID:5013, INDALA_SET_EMU_ID:5014, INDALA_GET_EMU_ID:5015,
   FDXB_SET_EMU_ID:5016, FDXB_GET_EMU_ID:5017,
+  HITAG2_SET_EMU_ID:5018, HITAG2_GET_EMU_ID:5019,
 
   STANDALONE_GET_MODE:7000, STANDALONE_SET_MODE:7001, STANDALONE_GET_CONFIG:7002,
   STANDALONE_SET_CONFIG:7003, STANDALONE_GET_RESULT:7004, STANDALONE_CLEAR_RESULT:7005,
@@ -117,7 +121,7 @@ const TAG_TYPE_NAMES = {
   1:"EM410X (old)",2:"MIFARE Mini (old)",3:"MIFARE 1K (old)",4:"MIFARE 2K (old)",
   5:"MIFARE 4K (old)",6:"NTAG213 (old)",7:"NTAG215 (old)",8:"NTAG216 (old)",
   100:"EM410X",101:"EM410X-16",102:"EM410X-32",103:"EM410X-64",104:"EM410X Electra",
-  105:"FDX-B",150:"PAC/Stanley",170:"Viking",180:"Jablotron",
+  105:"FDX-B",150:"PAC/Stanley",170:"Viking",180:"Jablotron",400:"HITAG2",
   200:"HID Prox",201:"ioProx",310:"IDTECK",311:"Indala",
   1000:"MIFARE Mini",1001:"MIFARE 1K",1002:"MIFARE 2K",1003:"MIFARE 4K",
   1004:"MIFARE Plus S2K (SL1)",1005:"MIFARE Plus S4K (SL1)",
@@ -539,6 +543,7 @@ function u32le(b,o){ return ((b[o] | b[o+1]<<8 | b[o+2]<<16 | b[o+3]<<24) >>> 0)
 // job. A same-named `function` here would be a SyntaxError (duplicate
 // declaration), not a silent shadow, and kills the whole script's load.
 function rdU16le(b,o){ return (b[o] | b[o+1]<<8); }
+function rdI16le(b,o){ const v = rdU16le(b,o); return v & 0x8000 ? v - 0x10000 : v; }
 const BL_FEAT_NAMES = [[1,"UF2"],[2,"CDC-DFU"],[4,"RAW_APP"]];
 wire("d_blinfo", $("d_fdsResult"), async () => {
   const f = okOrThrow(await request(CU.BL_INFO));

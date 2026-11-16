@@ -35,7 +35,7 @@
 const TAG_TYPE_BY_NAME = {
   EM410X:100, EM410X_16:101, EM410X_32:102, EM410X_64:103, EM410X_ELECTRA:104,
   FDXB:105, PAC:150, Viking:170, Jablotron:180, HIDProx:200, ioProx:201,
-  IDTECK:310, Indala:311,
+  IDTECK:310, Indala:311, HITAG2:400,
   MIFARE_Mini:1000, MIFARE_1024:1001, MIFARE_2048:1002, MIFARE_4096:1003,
   MIFARE_PLUS_S2K:1004, MIFARE_PLUS_S4K:1005, MIFARE_PLUS_S2K_SL3:1006, MIFARE_PLUS_S4K_SL3:1007,
   NTAG_213:1100, NTAG_215:1101, NTAG_216:1102, MF0ICU1:1103, MF0ICU2:1104,
@@ -2397,6 +2397,229 @@ lfHidProx.command("econfig", "Set/get the emulated hidprox card id (in the activ
   if(oem>0) lines.push(" OEM: "+oem);
   lines.push(" CN: "+cn);
   return lines;
+});
+
+/* ================= lf hitag2 ================= */
+// Port of cli_lf_hitag.py. --page N HEX8 (repeatable, sets an arbitrary
+// page) isn't ported -- this parser has no repeatable-option support; use
+// --uid/--pwd/--config/--tag-pwd, which cover every page econfig needs for
+// password mode.
+const HT2_PAGE_NAMES = {0:"UID", 1:"Password (reader's)", 2:"Key, high bytes (crypto mode only)", 3:"Config + tag password"};
+function ht2ParseHex4(s, label){
+  s = (s||"").trim();
+  if(!/^[0-9a-fA-F]{8}$/.test(s)) throw new ArgError(label+" must be 8 hex digits (4 bytes)");
+  return hexBytes(s);
+}
+function ht2PageLines(pages){
+  return pages.map((p,i) => "    "+i+"  "+Array.from(p).map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join(" ")+"  "+(HT2_PAGE_NAMES[i]||"User"));
+}
+const lfHitag2 = lf.subgroup("hitag2", "Hitag2 password-mode commands (125 kHz)");
+lfHitag2.command("econfig", "Set/get the emulated Hitag2 tag (8 pages, in the active slot). With no options, shows the slot's current pages", [
+  {names:["--uid"], takesValue:true, dest:"uid"},
+  {names:["--pwd"], takesValue:true, dest:"pwd"},
+  {names:["--config"], takesValue:true, dest:"config"},
+  {names:["--tag-pwd"], takesValue:true, dest:"tagpwd"},
+], async (a) => {
+  need();
+  const anySet = a.uid!==undefined || a.pwd!==undefined || a.config!==undefined || a.tagpwd!==undefined;
+  const info = okOrThrow(await request(CU.GET_SLOT_INFO));
+  const active = await currentSlot1();
+  const off = (active-1)*4;
+  const lfType = (info.data[off+2]<<8)|info.data[off+3];
+  const isHitag2 = lfType === TAG_TYPE_BY_NAME.HITAG2;
+
+  if(!anySet){
+    if(!isHitag2) return ["Slot type is not Hitag2 -- nothing to show."];
+    const f = okOrThrow(await request(CU.HITAG2_GET_EMU_ID));
+    const pages = [0,1,2,3,4,5,6,7].map(i => f.data.slice(i*4, i*4+4));
+    return ht2PageLines(pages);
+  }
+
+  const lines = [];
+  let pages;
+  if(!isHitag2){
+    lines.push("WARNING: Slot type not set to Hitag2.");
+    pages = [0,1,2,3,4,5,6,7].map(() => [0,0,0,0]);
+  } else {
+    const f = okOrThrow(await request(CU.HITAG2_GET_EMU_ID));
+    pages = [0,1,2,3,4,5,6,7].map(i => Array.from(f.data.slice(i*4, i*4+4)));
+  }
+  if(a.uid!==undefined) pages[0] = ht2ParseHex4(a.uid, "--uid");
+  if(a.pwd!==undefined) pages[1] = ht2ParseHex4(a.pwd, "--pwd");
+  if(a.config!==undefined || a.tagpwd!==undefined){
+    const configByte = a.config!==undefined ? (hexBytes(a.config)[0]||0) : pages[3][0];
+    const tagPwd = a.tagpwd!==undefined ? hexBytes(a.tagpwd) : pages[3].slice(1,4);
+    if(tagPwd.length!==3) throw new ArgError("--tag-pwd must be 6 hex digits (3 bytes)");
+    pages[3] = [configByte, ...tagPwd];
+  }
+  okOrThrow(await request(CU.HITAG2_SET_EMU_ID, [].concat(...pages)));
+  lines.push(" - Set Hitag2 emulated tag data success.", ...ht2PageLines(pages));
+  return lines;
+});
+lfHitag2.command("read", "Read a Hitag2 tag in password mode: START_AUTH, UID, send -k as the reader password, read the rest on acceptance", [
+  {names:["-k","--pwd"], takesValue:true, dest:"pwd", required:true},
+], async (a) => {
+  await needReader();
+  const pwd = ht2ParseHex4(a.pwd, "--pwd");
+  const f = await request(CU.LF_HITAG2_READ, pwd);
+  if(!OK_STATUSES.has(f.status)) return ["No answer, or password rejected (wrong key, or tag is in crypto mode)."];
+  const pages = [0,1,2,3,4,5,6,7].map(i => f.data.slice(i*4, i*4+4));
+  return ht2PageLines(pages);
+});
+
+/* ================= lf interactive ================= */
+// Port of cli_lf_interactive.py -- debug tools for the interactive LF engine
+// (lf_ia_engine.c) behind Hitag2 tag emulation: exchange trace, raw field
+// envelope capture, and live tuning.
+const LF_IA_TRACE_GAPS = 48;
+const LF_IA_VERDICTS = {0:"ignored", 1:"answered", 2:"ended the exchange"};
+const LF_IA_DECODES = {0:"ok", 1:"one interval class", 2:"too few gaps", 3:"too many gaps"};
+function lfIaBits(raw, n){
+  n = Math.min(n, 8*raw.length);
+  let s = "";
+  for(let i=0;i<n;i++) s += (raw[i>>3] >> (7-(i%8))) & 1;
+  return s;
+}
+// Record layout: struct.Struct("<BBBBIIIIIIHHHHIHH16s16s96HHHI") -- 276 bytes,
+// `<` so no alignment padding -- every field packed tight at these offsets:
+//   0 kind,verdict,decode,flags (B×4) | 4 t_us,t_detect,t_ready,t_due,t_tx,
+//   t_tx_end (I×6) | 28 n_gaps,n_bits,n_tx_bits (H×3) | 34 reserved (H) |
+//   36 split (I) | 40 level,n_noise (H×2) | 44 bits (16s) | 60 tx_bits (16s) |
+//   76 gaps, 96×H (48 start/width pairs) | 268 rec_boot,session (H×2) | 272 t_session (I)
+function lfIaParseRecord(raw){
+  const gaps = [];
+  for(let i=0;i<2*LF_IA_TRACE_GAPS;i++) gaps.push(rdU16le(raw, 76+2*i));
+  return {
+    kind: raw[0], verdict: raw[1], decode: raw[2], flags: raw[3],
+    t_us: u32le(raw,4), t_detect: u32le(raw,8), t_ready: u32le(raw,12),
+    t_due: u32le(raw,16), t_tx: u32le(raw,20), t_tx_end: u32le(raw,24),
+    n_gaps: rdU16le(raw,28), n_bits: rdU16le(raw,30), n_tx_bits: rdU16le(raw,32),
+    split: u32le(raw,36), level: rdU16le(raw,40), n_noise: rdU16le(raw,42),
+    bits: raw.slice(44,60), tx_bits: raw.slice(60,76), gaps,
+    rec_boot: rdU16le(raw,268), session: rdU16le(raw,270), t_session: u32le(raw,272),
+  };
+}
+const lfInteractive = lf.subgroup("interactive", "Interactive LF emulation commands");
+lfInteractive.command("trace", "Show the exchange trace of an interactive LF emulation (such as Hitag2): each reader command, what the slot answered and when", [], async () => {
+  need();
+  let recs = [], total = 0, size = 0, keep = 0, boot = 0;
+  while(true){
+    const f = okOrThrow(await request(CU.LF_IA_TRACE_READ, u16be(recs.length)));
+    total = u32le(f.data,0); size = rdU16le(f.data,4);
+    const n = f.data[6]; keep = f.data[7]; boot = rdU16le(f.data,8);
+    if(n===0) break;
+    for(let i=0;i<n;i++) recs.push(f.data.slice(10+i*size, 10+(i+1)*size));
+  }
+  const tn = okOrThrow(await request(CU.LF_IA_TUNING));
+  const c = {sessions:u32le(tn.data,14), commands:u32le(tn.data,18), responses:u32le(tn.data,22), late:u32le(tn.data,26)};
+  const lines = [" - "+c.sessions+" field sessions, "+c.commands+" commands, "+c.responses+" answered, "+c.late+" late, since the clear. This is boot "+boot+" since the clear."];
+  const lost = total - recs.length;
+  lines.push(lost>0 ? " - "+total+" records: the first "+keep+" and the latest "+(recs.length-keep)+" are kept" : " - "+total+" records");
+  let lastSession = null;
+  recs.forEach((raw, i) => {
+    if(lost>0 && i===keep){ lines.push("   ... "+lost+" records overwritten ..."); lastSession = null; }
+    const r = lfIaParseRecord(raw);
+    const sessKey = r.rec_boot+"/"+r.session;
+    if(sessKey !== lastSession){
+      lastSession = sessKey;
+      lines.push("   boot "+r.rec_boot+", field session "+r.session+", field on at "+(r.t_session/1e6).toFixed(6)+" s");
+    }
+    if(r.kind===2){
+      lines.push("   "+(r.t_us/1e6).toFixed(6)+" s  field off"+((r.flags&8)?"  (came back)":""));
+    } else if(r.kind===3){
+      let line = "   "+(r.t_us/1e6).toFixed(6)+" s  command, "+r.n_gaps+" gaps";
+      line += r.decode===0 ? (", "+r.n_bits+" bits "+lfIaBits(r.bits, r.n_bits)) : (", decode: "+(LF_IA_DECODES[r.decode]||r.decode));
+      lines.push(line+", "+(LF_IA_VERDICTS[r.verdict]||r.verdict));
+      if(r.decode!==0){
+        const n = Math.min(r.n_gaps, LF_IA_TRACE_GAPS);
+        const starts = []; const widths = [];
+        for(let i=0;i<n;i++){ starts.push(r.gaps[2*i]); widths.push(r.gaps[2*i+1]); }
+        const intervals = []; for(let i=0;i<n-1;i++) intervals.push(starts[i+1]-starts[i]);
+        lines.push("                  field level "+r.level+", "+r.n_noise+" noise dips skipped, split "+r.split+" us");
+        lines.push("                  gap widths (us): ["+widths.join(", ")+"]");
+        lines.push("                  intervals (us):  ["+intervals.join(", ")+"]");
+      }
+      if(r.verdict===1){
+        const late = (r.flags&1) ? " LATE" : "";
+        lines.push("                  answer "+r.n_tx_bits+" bits "+lfIaBits(r.tx_bits, r.n_tx_bits)+", ready "+(r.t_ready-r.t_us)+" us after the command, sent at "+(r.t_tx-r.t_us)+" us (due "+(r.t_due-r.t_us)+")"+late);
+      }
+    }
+  });
+  return lines;
+});
+lfInteractive.command("clear", "Clear the interactive LF emulation's exchange trace and its counters", [], async () => {
+  need();
+  okOrThrow(await request(CU.LF_IA_TRACE_CLEAR));
+  return [" - Trace and counters cleared"];
+});
+const lfInteractiveEnv = lfInteractive.subgroup("env", "Raw field envelope capture, for bench debugging");
+lfInteractiveEnv.command("arm", "Arm the raw field envelope ring (smoothed ADC samples, 10 us apart). Freezes on the next command; with none, run 'env read' promptly", [], async () => {
+  need();
+  okOrThrow(await request(CU.LF_IA_ENV_ARM));
+  return [" - Envelope ring armed -- run the reader test now, then 'lf interactive env read'"];
+});
+lfInteractiveEnv.command("read", "Read back the raw field envelope ring armed by 'env arm'", [], async () => {
+  need();
+  let samples = [], lastUs = 0, frozen = 0;
+  while(true){
+    const f = okOrThrow(await request(CU.LF_IA_ENV_READ, u16be(samples.length)));
+    frozen = f.data[0]; lastUs = u32le(f.data,1);
+    const n = rdU16le(f.data,5);
+    if(n===0) break;
+    for(let i=0;i<n;i++) samples.push(rdI16le(f.data, 7+2*i));
+  }
+  if(!samples.length) return [" - No samples (arm it first with 'lf interactive env arm')"];
+  const spanUs = samples.length*10;
+  const lines = [
+    " - "+samples.length+" samples, "+(spanUs/1e3).toFixed(2)+" ms, newest at "+(lastUs/1e6).toFixed(6)+" s, "+(frozen?"frozen on a command":"still live (not frozen)"),
+    " - range "+Math.min(...samples)+" .. "+Math.max(...samples)+" ADC counts",
+  ];
+  for(let i=0;i<samples.length;i+=16){
+    const t0Us = lastUs - (samples.length-i)*10;
+    const row = samples.slice(i,i+16).map(s => String(s).padStart(5," ")).join(" ");
+    lines.push("   "+(t0Us/1e3).toFixed(2)+" ms  "+row);
+  }
+  return lines;
+});
+const LF_IA_TUNING_FIELDS = ["settle_us","lost_us","min_gap_us","thr_pct","quiet_after_cmd","tx_lead_us","eof_us","rsp_delay_us"];
+function lfIaTuningParse(d){
+  // struct.Struct("<HHHBBhHH") -- settle_us,lost_us,min_gap_us u16, thr_pct,quiet_after_cmd u8, tx_lead_us i16, eof_us,rsp_delay_us u16.
+  return {
+    settle_us: rdU16le(d,0), lost_us: rdU16le(d,2), min_gap_us: rdU16le(d,4),
+    thr_pct: d[6], quiet_after_cmd: d[7], tx_lead_us: rdI16le(d,8),
+    eof_us: rdU16le(d,10), rsp_delay_us: rdU16le(d,12),
+  };
+}
+function lfIaTuningPack(t){
+  const out = new Array(14).fill(0);
+  const wU16 = (o,v) => { out[o]=v&0xFF; out[o+1]=(v>>8)&0xFF; };
+  wU16(0,t.settle_us); wU16(2,t.lost_us); wU16(4,t.min_gap_us);
+  out[6]=t.thr_pct&0xFF; out[7]=t.quiet_after_cmd&0xFF;
+  wU16(8, t.tx_lead_us<0 ? t.tx_lead_us+0x10000 : t.tx_lead_us);
+  wU16(10,t.eof_us); wU16(12,t.rsp_delay_us);
+  return out;
+}
+lfInteractive.command("tuning", "Read or change the interactive LF engine's live tuning. A change takes effect immediately, lost on reset", [
+  {names:["--settle-us"], takesValue:true, dest:"settle_us"},
+  {names:["--lost-us"], takesValue:true, dest:"lost_us"},
+  {names:["--min-gap-us"], takesValue:true, dest:"min_gap_us"},
+  {names:["--thr-pct"], takesValue:true, dest:"thr_pct"},
+  {names:["--quiet-after-cmd"], takesValue:true, dest:"quiet_after_cmd", choices:["0","1"]},
+  {names:["--tx-lead-us"], takesValue:true, dest:"tx_lead_us"},
+  {names:["--eof-us"], takesValue:true, dest:"eof_us"},
+  {names:["--rsp-delay-us"], takesValue:true, dest:"rsp_delay_us"},
+], async (a) => {
+  need();
+  const f0 = okOrThrow(await request(CU.LF_IA_TUNING));
+  let tuning = lfIaTuningParse(f0.data);
+  const overrides = {};
+  for(const k of LF_IA_TUNING_FIELDS) if(a[k]!==undefined) overrides[k] = Number(a[k]);
+  if(Object.keys(overrides).length){
+    tuning = {...tuning, ...overrides};
+    const f1 = okOrThrow(await request(CU.LF_IA_TUNING, lfIaTuningPack(tuning)));
+    tuning = lfIaTuningParse(f1.data);
+  }
+  return LF_IA_TUNING_FIELDS.map(k => " - "+k+": "+tuning[k]);
 });
 
 // lf fdxb / lf generic / lf idteck / lf t55xx aren't ported -- not
