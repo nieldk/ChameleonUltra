@@ -6,6 +6,7 @@
 #include "bsp_delay.h"
 #include "bsp_time.h"
 #include "circular_buffer.h"
+#include "hitag2_crypto.h"
 #include "lf_125khz_radio.h"
 #include "lf_reader_data.h"
 #include "timeslot.h"
@@ -92,6 +93,20 @@ static void hitag2_send_bits(uint32_t value, uint8_t nbits) {
     for (int8_t i = (int8_t)(nbits - 1); i >= 0; i--) {
         hitag2_send_bit((value >> i) & 1);
     }
+}
+
+/* Sends `nbits` bits from a byte array, MSB first -- same framing as
+ * hitag2_send_bits, just for frames wider than 32 bits (the 64-bit Nr/Ar
+ * crypto-mode challenge). Bit i is bit (7 - i%8) of byte i/8, matching how
+ * hitag2_receive_frame packs a received frame. */
+static void hitag2_send_bits_bytes(const uint8_t *bytes, uint8_t nbits) {
+    for (uint8_t i = 0; i < nbits; i++) {
+        hitag2_send_bit((bytes[i / 8] >> (7 - (i % 8))) & 1);
+    }
+}
+
+static uint32_t le32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 /* 10-bit READ_PAGE/WRITE_PAGE/READ_PAGE_INVERTED frame.
@@ -211,6 +226,37 @@ static bool hitag2_tx_rx(uint32_t tx_value, uint8_t tx_nbits,
     return hitag2_receive_frame(rx_out, rx_nbits, timeout_ms);
 }
 
+/* Byte-buffer send path, additive alongside hitag2_tx_rx above: only the
+ * 64-bit Nr/Ar crypto challenge needs more than 32 bits, and the existing
+ * uint32-based path (hardware-verified for password mode) is left alone. */
+static uint8_t g_send8_buf[8];
+static uint8_t g_send8_nbits;
+
+static void hitag2_send8_timeslot_cb(void) {
+    hitag2_send_bits_bytes(g_send8_buf, g_send8_nbits);
+    g_timeslot_done = true;
+}
+
+static bool hitag2_tx_rx_bytes(const uint8_t *tx_bytes, uint8_t tx_nbits,
+                                uint8_t *rx_out, uint8_t rx_nbits,
+                                uint32_t powerup_wait_us, uint32_t timeout_ms) {
+    memcpy(g_send8_buf, tx_bytes, (size_t)(tx_nbits + 7) / 8);
+    g_send8_nbits   = tx_nbits;
+    g_timeslot_done = false;
+
+    uint32_t slot_us = powerup_wait_us + ((uint32_t)tx_nbits * HITAG2_T_1_TC * 8) + 2000;
+    request_timeslot(slot_us, hitag2_send8_timeslot_cb);
+
+    autotimer *p_wait = bsp_obtain_timer(0);
+    while (!g_timeslot_done && NO_TIMEOUT_1MS(p_wait, 20)) {}
+    bsp_return_timer(p_wait);
+
+    if (!g_timeslot_done) {
+        return false;
+    }
+    return hitag2_receive_frame(rx_out, rx_nbits, timeout_ms);
+}
+
 bool hitag2_reader_get_uid(uint8_t uid[HITAG2_PAGE_SIZE], uint32_t timeout_ms) {
     /* START_AUTH is 5 bits, top-aligned in the frame: value 0x18 (binary
      * 11000) sent as the low 5 bits -- see HITAG2_START_AUTH's own comment
@@ -250,6 +296,56 @@ bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
         if (!hitag2_tx_rx(frame, 10, out, 32, 0, timeout_ms)) {
             return false;
         }
+        memcpy(pages[page], out, 4);
+    }
+    return true;
+}
+
+bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
+                                uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
+                                uint32_t timeout_ms) {
+    memset(pages, 0, HITAG2_NUM_PAGES * HITAG2_PAGE_SIZE);
+
+    if (!hitag2_reader_get_uid(pages[HITAG2_PAGE_UID], timeout_ms)) {
+        return false;
+    }
+
+    /* Key and UID are plain little-endian decodes of the raw bytes, then bit-reversed per byte (hitag2_rev64/32) --
+     * matches RfidResearchGroup/proxmark3's hitag2_crypto() reader function exactly. IV fixed to 0: Nr freshness
+     * only matters to an attacker, not to this legitimate known-key read. */
+    uint64_t key_raw = (uint64_t)key[0] | ((uint64_t)key[1] << 8) | ((uint64_t)key[2] << 16) |
+                        ((uint64_t)key[3] << 24) | ((uint64_t)key[4] << 32) | ((uint64_t)key[5] << 40);
+    uint64_t cs = hitag2_crypto_init(hitag2_rev64(key_raw), hitag2_rev32(le32(pages[HITAG2_PAGE_UID])), 0);
+
+    uint8_t nrar[8];
+    memset(nrar, 0x00, 4);           /* Nr */
+    memset(nrar + 4, 0xFF, 4);
+    hitag2_crypto_build_auth(&cs, nrar + 4);  /* Ar = inverted keystream, consumes 32 bits */
+
+    uint8_t reply[4];
+    if (!hitag2_tx_rx_bytes(nrar, 64, reply, 32, 0, timeout_ms)) {
+        /* No answer: wrong key, or the tag is actually in password mode. */
+        return false;
+    }
+    hitag2_crypto_transcrypt(&cs, reply, 4, 0);
+    memcpy(pages[HITAG2_PAGE_CONFIG], reply, 4);  /* already have page 3 -- skip re-reading it below */
+
+    static const uint8_t remaining_pages[] = {1, 2, 4, 5, 6, 7};
+    for (size_t i = 0; i < sizeof(remaining_pages); i++) {
+        uint8_t page = remaining_pages[i];
+        uint16_t frame = hitag2_page_frame(HITAG2_READ_PAGE, page);
+        /* Every frame is encrypted once crypto mode is active, the command as much as the reply: pack the 10-bit
+         * frame into bytes the same way a received frame would be, XOR it with the next keystream bits (1 byte +
+         * 2 bits, matching the frame's own 10/8 split), then send the result. */
+        uint8_t fb[2] = { (uint8_t)(frame >> 2), (uint8_t)((frame & 0x3u) << 6) };
+        hitag2_crypto_transcrypt(&cs, fb, 1, 2);
+        uint32_t enc_value = ((uint32_t)fb[0] << 2) | (fb[1] >> 6);
+
+        uint8_t out[4];
+        if (!hitag2_tx_rx(enc_value, 10, out, 32, 0, timeout_ms)) {
+            return false;
+        }
+        hitag2_crypto_transcrypt(&cs, out, 4, 0);
         memcpy(pages[page], out, 4);
     }
     return true;

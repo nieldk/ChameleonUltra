@@ -82,6 +82,7 @@ SRC_FILES += \
   $(PROJ_DIR)/rfid/crc_utils.c \
   $(PROJ_DIR)/rfid/hex_utils.c \
   $(PROJ_DIR)/rfid/crypto/ulc_3des.c \
+  $(PROJ_DIR)/rfid/crypto/hitag2_crypto.c \
   $(PROJ_DIR)/rfid/mf1_crapto1.c \
   $(PROJ_DIR)/rfid/mf1_crypto1.c \
   $(PROJ_DIR)/rfid/parity.c \

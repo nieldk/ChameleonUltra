@@ -8,7 +8,8 @@ extern "C" {
 #endif
 
 /* -----------------------------------------------------------------------
- * Hitag2 (NXP/Philips PCF7936, password mode only -- no crypto mode).
+ * Hitag2 (NXP/Philips PCF7936): password mode, and crypto mode with a
+ * known key (no key recovery).
  *
  * Protocol constants below are taken from RfidResearchGroup/proxmark3's
  * armsrc/hitag2.c + include/protocols.h (the working reference
@@ -22,6 +23,7 @@ extern "C" {
 
 #define HITAG2_NUM_PAGES   8
 #define HITAG2_PAGE_SIZE   4   /* bytes per page */
+#define HITAG2_KEY_SIZE    6   /* bytes in the 48-bit crypto-mode key */
 
 #define HITAG2_PAGE_UID     0  /* page 0: UID (read-only) */
 #define HITAG2_PAGE_PWD     1  /* page 1: reader's password (password mode) */
@@ -58,6 +60,20 @@ bool hitag2_reader_get_uid(uint8_t uid[HITAG2_PAGE_SIZE], uint32_t timeout_ms);
 bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
                          uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
                          uint32_t timeout_ms);
+
+/* Crypto-mode session with a known 48-bit key: START_AUTH, read UID, send a
+ * Nr/Ar challenge built from that key (Nr fixed to 0 -- freshness only
+ * matters to an attacker, not to a legitimate known-key read) and read
+ * every other page, encrypted, under the resulting keystream.
+ *
+ * pages[HITAG2_PAGE_CONFIG] is filled from the auth reply itself (no
+ * separate re-read); pages[HITAG2_PAGE_UID] from the START_AUTH reply.
+ *
+ * Returns false if the tag never answers, or rejects the challenge (wrong
+ * key, or the tag is actually in password mode). */
+bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
+                                uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
+                                uint32_t timeout_ms);
 
 #ifdef __cplusplus
 }
