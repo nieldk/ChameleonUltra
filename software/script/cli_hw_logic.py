@@ -247,11 +247,15 @@ def _decode(burst_gap_us=100):
     us = 1e6 / hz
     end = max([t for t, _, _ in ev] + [e["ts"] for e in spi] + [1])
     lv = _levels(n, init, ev)
-    cs, field = [], []
+    cs, field, lf_oa_us = [], [], []
     if "hf_cs" in names:
         cs = [(a * us, b * us) for a, b, _ in _intervals(lv[names.index("hf_cs")], end)]
     if "field_led" in names:
         field = [(a * us, b * us, o) for a, b, o in _intervals(lv[names.index("field_led")], end)]
+    if "lf_oa" in names:
+        # lv[i] is [(0, init_level), (t1, 1), (t2, 1), ...] -- every entry
+        # after the synthetic t=0 one is a rising edge (LF_OA_OUT is LOTOHI-only).
+        lf_oa_us = [t * us for t, _ in lv[names.index("lf_oa")][1:]]
 
     def field_at(t):
         return any(a <= t <= b for a, b, _ in field)
@@ -295,6 +299,20 @@ def _decode(burst_gap_us=100):
         print(f" - field on {sum(b - a for a, b, _ in field) / 1000:.3f} ms")
     if spi:
         print(f" - {len(spi)} SPI entries, {sum(e['rep'] + 1 for e in spi)} register accesses")
+    if lf_oa_us:
+        # Tc = one 125kHz carrier period = 8us. Same buckets as 'lf hitag2 raw'
+        # so the two can be compared directly -- this spans the whole armed
+        # session (every command run while armed), that command only one call.
+        print(f" - {len(lf_oa_us)} LF_OA_OUT edge(s), gaps between them in Tc units (1 Tc = 8us):")
+        buckets = ((32, "1T "), (48, "1.5T"), (64, "2T "))
+        for i in range(1, len(lf_oa_us)):
+            v = round((lf_oa_us[i] - lf_oa_us[i - 1]) / 8)
+            tag = "?"
+            for center, name in buckets:
+                if abs(v - center) <= 8:
+                    tag = name
+                    break
+            print(f"    [{i - 1:2}]  {v:3}  {tag}")
 
 
 def _plot_ascii(n, hz, init, ev, width=100):
