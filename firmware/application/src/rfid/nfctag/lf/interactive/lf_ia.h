@@ -14,9 +14,12 @@
 #include "lf_ia_codec.h"
 
 #define LF_IA_US_PER_FC         (8u)    // one carrier period at 125 kHz
-#define LF_IA_MAX_GAPS          (128u)  // gaps kept per command
+// Upstream sizes these for any future module; this fork only runs Hitag2 password mode, whose longest handled
+// command is the 32-bit password (5/10/32-bit frames; a 64-bit crypto-mode frame just falls through to LF_IA_IGNORE,
+// truncated gaps and all) and whose longest answer is 5+32=37 bits. Cut to fit this board's RAM, with headroom.
+#define LF_IA_MAX_GAPS          (48u)   // gaps kept per command
 #define LF_IA_MAX_BITS          (LF_IA_MAX_GAPS)
-#define LF_IA_MAX_RESPONSE_BITS (256u)
+#define LF_IA_MAX_RESPONSE_BITS (64u)
 
 // One field gap: when the field dropped, and for how long.
 typedef struct {
