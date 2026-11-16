@@ -90,12 +90,16 @@ intended 238 µs bit period (118 µs half-bit).
 
 A reusable framework for LF tag types that must decode a reader's command and
 answer it in time, not just transmit (`lf/interactive/`: `lf_ia_engine.c`,
-`lf_ia_codec.[ch]`, `lf_ia_trace.[ch]`, `lf_ia_debug.h`). Hitag2 password
-mode (`lf_ia_hitag2.[ch]`, `TAG_TYPE_HITAG2`) is the first protocol on it,
-reader and emulation both (`lf hitag2 read` / `lf hitag2 econfig`). A
-retained exchange trace, live tuning and a raw envelope capture
-(`lf interactive trace` / `tuning` / `env`) debug a new reader or board
-without a reflash. See [lf-interactive-hitag2.md](lf-interactive-hitag2.md).
+`lf_ia_codec.[ch]`, `lf_ia_trace.[ch]`, `lf_ia_debug.h`). Hitag2
+(`lf_ia_hitag2.[ch]`, `TAG_TYPE_HITAG2`) is the first protocol on it, reader
+and emulation both, password mode and known-key crypto mode (the latter's
+cipher core is `rfid/crypto/hitag2_crypto.[ch]`, shared by both sides).
+`lf hitag2 econfig` configures either mode for emulation; `lf hitag2 read`
+is password mode only so far -- crypto mode's reader function
+(`hitag2_reader_crypto_read`) has no CLI command yet. A retained exchange
+trace, live tuning and a raw envelope capture (`lf interactive trace` /
+`tuning` / `env`) debug a new reader or board without a reflash. See
+[lf-interactive-hitag2.md](lf-interactive-hitag2.md).
 
 ## DESFire EV3 slot types
 

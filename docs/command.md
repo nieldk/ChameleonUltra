@@ -1477,16 +1477,16 @@ Write hidprox card data to t55xx
 
 ### `lf hitag2`
 
-Hitag2 password-mode commands (125 kHz)
+Hitag2 commands (125 kHz) -- password mode, and known-key crypto mode for emulation
 
 #### `lf hitag2 econfig`
 
-Set or show the Hitag2 tag emulated by a slot (password mode only). With no options, shows the slot's current 8 pages. Any option given overlays onto the slot's current pages (read first) and writes the result back -- so setting --pwd alone, for instance, does not erase the UID or other pages already configured.
+Set or show the Hitag2 tag emulated by a slot: password mode, or known-key crypto mode (page 3 byte 0 bit 3 set -- no key recovery, and no writes in either mode). With no options, shows the slot's current 8 pages. Any option given overlays onto the slot's current pages (read first) and writes the result back -- so setting --pwd alone, for instance, does not erase the UID or other pages already configured.
 
 - `-s`, `--slot` — Slot Index: [1, 2, 3, 4, 5, 6, 7, 8] Default: active slot (choices: 1, 2, 3, 4, 5, 6, 7, 8)
 - `--uid` — page 0: UID, 4 bytes
-- `--pwd` — page 1: reader's password, 4 bytes
-- `--config` — page 3 byte 0: config (bit 3 set = crypto mode, unsupported for emulation)
+- `--pwd` — page 1: reader's password (password mode) or key's low 4 bytes (crypto mode)
+- `--config` — page 3 byte 0: config (bit 3 set = crypto mode)
 - `--tag-pwd` — page 3 bytes 1-3: tag's own password, 3 bytes
 - `--page` — set page N (0-7) to raw 4-byte hex; repeatable
 

@@ -1,15 +1,20 @@
 """cli_lf_hitag - Hitag2 password-mode read (lf hitag2 ...).
 
 Reads an NXP/Philips Hitag2 tag in password mode: START_AUTH, UID, send a
-reader password, and if the tag accepts it, dump every other page. Crypto
-mode is not implemented -- a crypto-mode tag will not answer the plaintext
-password frame and this will report no tag found, same as a password
-mismatch.
+reader password, and if the tag accepts it, dump every other page.
 
-Protocol constants (command codes, frame layout, password-mode sequence)
-come from RfidResearchGroup/proxmark3's armsrc/hitag2.c and
-include/protocols.h -- the working reference implementation PM3's "Aurora"
-release ported from RFIDler -- not from a datasheet guess.
+Crypto mode (known key only, no key recovery) is implemented in firmware
+for both tag emulation (configurable via `econfig`, see below) and the
+reader side (hitag2_reader_crypto_read() in lf_hitag2_data.c), but the
+reader side has no CLI command yet -- `read` here is password mode only.
+Against a crypto-mode tag, `read` gets no answer to the plaintext password
+frame, same as a password mismatch.
+
+Protocol constants (command codes, frame layout, password-mode and
+crypto-mode sequence) come from RfidResearchGroup/proxmark3's
+armsrc/hitag2.c, common/hitag2/hitag2_crypto.c and include/protocols.h --
+the working reference implementation PM3's "Aurora" release ported from
+RFIDler -- not from a datasheet guess.
 """
 
 import argparse
@@ -20,12 +25,12 @@ from cli_core import (
 )
 from chameleon_enum import SlotNumber, TagSpecificType
 
-lf_hitag2 = lf.subgroup("hitag2", "Hitag2 password-mode commands (125 kHz)")
+lf_hitag2 = lf.subgroup("hitag2", "Hitag2 commands (125 kHz) -- password mode, and known-key crypto mode for emulation")
 
 PAGE_NAMES = {
     0: "UID",
-    1: "Password (reader's)",
-    2: "Key, high bytes (crypto mode only)",
+    1: "Password (password mode) / key bytes 2-5 (crypto mode)",
+    2: "Key bytes 0-1 in bytes 2-3, rest reserved (crypto mode only)",
     3: "Config + tag password",
 }
 
@@ -42,16 +47,19 @@ class LFHitag2Econfig(SlotIndexArgsAndGoUnit):
     def args_parser(self) -> ArgumentParserNoExit:
         p = ArgumentParserNoExit()
         p.description = (
-            "Set or show the Hitag2 tag emulated by a slot (password mode only). "
-            "With no options, shows the slot's current 8 pages. Any option given "
-            "overlays onto the slot's current pages (read first) and writes the "
-            "result back -- so setting --pwd alone, for instance, does not erase "
-            "the UID or other pages already configured."
+            "Set or show the Hitag2 tag emulated by a slot: password mode, or "
+            "known-key crypto mode (page 3 byte 0 bit 3 set -- no key recovery, "
+            "and no writes in either mode). With no options, shows the slot's "
+            "current 8 pages. Any option given overlays onto the slot's current "
+            "pages (read first) and writes the result back -- so setting --pwd "
+            "alone, for instance, does not erase the UID or other pages already "
+            "configured."
         )
         self.add_slot_args(p)
         p.add_argument("--uid", metavar="HEX8", help="page 0: UID, 4 bytes")
-        p.add_argument("--pwd", metavar="HEX8", help="page 1: reader's password, 4 bytes")
-        p.add_argument("--config", metavar="HEX2", help="page 3 byte 0: config (bit 3 set = crypto mode, unsupported for emulation)")
+        p.add_argument("--pwd", metavar="HEX8",
+                       help="page 1: reader's password (password mode) or key bytes 2-5 (crypto mode)")
+        p.add_argument("--config", metavar="HEX2", help="page 3 byte 0: config (bit 3 set = crypto mode)")
         p.add_argument("--tag-pwd", metavar="HEX6", help="page 3 bytes 1-3: tag's own password, 3 bytes")
         p.add_argument("--page", nargs=2, action="append", metavar=("N", "HEX8"),
                        help="set page N (0-7) to raw 4-byte hex; repeatable")

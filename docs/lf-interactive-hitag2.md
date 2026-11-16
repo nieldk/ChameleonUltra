@@ -1,16 +1,27 @@
 # Interactive LF engine & Hitag2 emulation (`lf interactive`, `lf hitag2`)
 
 A general-purpose framework for emulating a reader-interrogated LF tag (one
-that must decode a reader's command and answer it in time), plus Hitag2
-password mode as its first protocol. Earlier LF emulation types (FDX-B,
-EM410x, ...) only ever transmit; Hitag2 is the first that has to listen and
-respond, which this engine exists for.
+that must decode a reader's command and answer it in time), plus Hitag2 --
+password mode and known-key crypto mode -- as its first protocol. Earlier LF
+emulation types (FDX-B, EM410x, ...) only ever transmit; Hitag2 is the first
+that has to listen and respond, which this engine exists for.
 
 ## Use
 
 ```
 lf hitag2 econfig --uid 11223344 --pwd AABBCCDD      # set a slot's Hitag2 pages
 lf hitag2 econfig                                     # show them
+```
+
+For crypto mode, set the config byte's bit 3 and load the 48-bit key across
+pages 1 and 2 -- page 1's 4 bytes hold key bytes 2-5, page 2's bytes 2-3 hold
+key bytes 0-1 (page 2 bytes 0-1 are reserved), same split
+RfidResearchGroup/proxmark3 uses. The example below is the "MIKRON" test key
+from proxmark3's own self-test (`lf hitag test` there; key `4F 4E 4D 49 4B
+52`, serial `49 43 57 69`):
+
+```
+lf hitag2 econfig --uid 49435769 --config 0E --page 1 4D494B52 --page 2 00004F4E
 ```
 
 Put the slot in emulation mode and present it to a reader. If it never
@@ -34,7 +45,7 @@ field-on level and calls a gap whenever the smoothed signal dips below
 `thr_pct` percent of it. `lf_ia_codec.c`'s `lf_ia_decode_intervals()` turns
 the gap-to-gap timings of one command into bits by splitting them into a
 short and a long class; `lf_ia_hitag2.c` is the Hitag2 module on top --
-5/10/32-bit reader commands, Manchester answers at RF/32.
+5/10/32/64-bit reader commands, Manchester answers at RF/32.
 
 Protocol files (`firmware/application/src/rfid/nfctag/lf/interactive/`):
 `lf_ia.h` (module interface), `lf_ia_codec.[ch]` (interval decode/encode, run
@@ -42,6 +53,48 @@ encode/decode -- no hardware state, also used by a host test), `lf_ia_engine.c`
 (SAADC/TIMER/PWM, the state machine), `lf_ia_hitag2.[ch]` (the protocol),
 `lf_ia_trace.[ch]` (retained exchange trace), `lf_ia_debug.h` (tuning,
 counters, envelope ring).
+
+## Crypto mode (known key only)
+
+Hitag2's crypto mode replaces the plaintext password with a Nr/Ar
+challenge-response, after which every frame in both directions is XORed
+with a continuing keystream from a 48-bit LFSR. This fork implements the
+keystream generator and both sides of the handshake, assuming the key is
+already known -- there is no rollback/key-recovery machinery, and (as in
+password mode) no WRITE_PAGE.
+
+* **Cipher core** (`firmware/application/src/rfid/crypto/hitag2_crypto.c/.h`):
+  `hitag2_crypto_init`/`_bit`/`_byte` (the LFSR + filter function),
+  `hitag2_crypto_check_auth`/`_build_auth` (the Nr/Ar authenticator, the
+  inverted next 4 keystream bytes), `hitag2_crypto_transcrypt` (XOR in
+  place -- the same call encrypts or decrypts). Ported from
+  RfidResearchGroup/proxmark3's `common/hitag2/hitag2_crypto.c` and
+  verified against its self-test vector
+  (`hitag2_verify_crypto_test_round` in `client/src/cmdlfhitag.c`) via a
+  standalone compiled C program, byte for byte.
+* **`hitag2_rev32`/`hitag2_rev64`**: reverse the bits *within* each byte,
+  byte positions unchanged -- matching proxmark3's own `REV32`/`REV64`
+  macros (`common/commonutil.h`) exactly. This is easy to get wrong: a
+  literal reading of the macro name suggests a full word reversal
+  (byte-swap included), which it is not, and an earlier draft of this
+  port got exactly that wrong before the self-test caught it.
+* **Emulation** (`lf_ia_hitag2.c`): on a 64-bit command, if the loaded tag
+  is configured for crypto mode, resets the cipher from the stored key/UID
+  and the reader's Nr and checks Ar; on success, every later READ PAGE is
+  decrypted before dispatch and the reply encrypted after being built. A
+  32-bit plaintext password is ignored on a crypto-mode tag, same as a
+  real one staying silent to it.
+* **Reader** (`lf_hitag2_data.c`,
+  `hitag2_reader_crypto_read(key[6], pages[8][4], timeout_ms)`): sends
+  Nr=0 (freshness only matters to an attacker, not a legitimate known-key
+  read) and the matching Ar, then reads the remaining pages encrypted.
+  Not yet wired to a CLI command -- `lf hitag2 read` is still password
+  mode only.
+
+The 48-bit key is split across two pages, same layout proxmark3 uses: page
+1's 4 bytes are key bytes 2-5, and page 2's bytes 2-3 are key bytes 0-1
+(page 2 bytes 0-1 are reserved). `key[0]` is the byte `hitag2_reader_crypto_read`
+takes as its least significant.
 
 ### Debugging tools
 
