@@ -1181,16 +1181,24 @@ class ChameleonCMD:
         timeslot's SD radio session fully closes) that gap competes
         directly with Hitag2's own ~1.6-1.65ms reply window.
 
-        :return: parsed tuple (rx_arm_gap_us, intervals) where intervals is
-            a list of ints (possibly empty, if no edges at all were seen --
-            that is itself informative)
+        Also returns hfclk_running: whether the crystal, not the RC
+        oscillator, was the HFCLK source while the TX burst ran. The radio
+        timeslot this TX uses only asks for NRF_RADIO_HFCLK_CFG_NO_GUARANTEE,
+        so the SoftDevice is allowed to leave HFCLK on the RC oscillator
+        for it; False here means the bit timing just sent ran at whatever
+        the RC oscillator's tolerance is, not nominal 16 MHz.
+
+        :return: parsed tuple (rx_arm_gap_us, hfclk_running, intervals)
+            where intervals is a list of ints (possibly empty, if no edges
+            at all were seen -- that is itself informative)
         """
         resp = self.device.send_cmd_sync(Command.LF_HITAG2_RAW_CAPTURE, b'')
         gap_ticks = int.from_bytes(resp.data[0:4], "little") if len(resp.data) >= 4 else 0
-        n = resp.data[4] if len(resp.data) > 4 else 0
-        intervals = list(resp.data[5:5 + n])
+        hfclk_running = bool(resp.data[4]) if len(resp.data) > 4 else False
+        n = resp.data[5] if len(resp.data) > 5 else 0
+        intervals = list(resp.data[6:6 + n])
         rx_arm_gap_us = round(gap_ticks * 1000000 / 16384)
-        resp.parsed = (rx_arm_gap_us, intervals)
+        resp.parsed = (rx_arm_gap_us, hfclk_running, intervals)
         return resp
 
     @expect_response(Status.SUCCESS)

@@ -82,9 +82,14 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
  *
  * rx_arm_gap_ticks_out: app_timer (RTC1, ~61us/tick) gap between the last TX
  * edge and RX actually arming -- see the .c file's comment on why this gap
- * matters specifically for Hitag2's tight reply window. */
+ * matters specifically for Hitag2's tight reply window.
+ *
+ * hfclk_running_out: true if the crystal, not the RC oscillator, was the
+ * HFCLK source when the TX burst ran (request_timeslot() only asks for
+ * NRF_RADIO_HFCLK_CFG_NO_GUARANTEE, see the .c file). */
 bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out,
-                                uint32_t *rx_arm_gap_ticks_out, uint32_t timeout_ms);
+                                uint32_t *rx_arm_gap_ticks_out, bool *hfclk_running_out,
+                                uint32_t timeout_ms);
 
 #ifdef __cplusplus
 }

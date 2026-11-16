@@ -10,6 +10,7 @@
 #include "hitag2_crypto.h"
 #include "lf_125khz_radio.h"
 #include "lf_reader_data.h"
+#include "nrf_soc.h"
 #include "timeslot.h"
 
 #include "utils/manchester.h"
@@ -205,7 +206,18 @@ static volatile bool g_timeslot_done = false;
  * when RX actually arms -- see hitag2_reader_raw_capture(). */
 static volatile uint32_t g_tx_done_tick;
 
+/* request_timeslot()'s configure_next_event_earliest() (timeslot.c) asks for
+ * NRF_RADIO_HFCLK_CFG_NO_GUARANTEE, so the SoftDevice may still be on the RC
+ * oscillator when the callback runs -- it only promises the crystal for
+ * NRF_RADIO_HFCLK_CFG_XTAL_GUARANTEED. Latched right before the PWM bit-bang
+ * so hitag2_reader_raw_capture() can report whether the crystal was actually
+ * up for this particular TX burst. */
+static volatile bool g_hfclk_running_at_tx;
+
 static void hitag2_send_timeslot_cb(void) {
+    uint32_t hfclk_running = 0;
+    sd_clock_hfclk_is_running(&hfclk_running);
+    g_hfclk_running_at_tx = (hfclk_running != 0);
     hitag2_send_bits(g_send_value, g_send_nbits);
     g_tx_done_tick = app_timer_cnt_get();
     g_timeslot_done = true;
@@ -277,11 +289,19 @@ static bool hitag2_tx_rx_bytes(const uint8_t *tx_bytes, uint8_t tx_nbits,
  * (~1.6-1.65ms) after the reader's last edge -- unlike EM4x05/T55xx, whose
  * much longer windows this TX-then-arm structure was proven against -- so if
  * that teardown alone is in the same ballpark, RX would arm after the tag
- * has already answered and nothing would ever be seen. */
+ * has already answered and nothing would ever be seen.
+ *
+ * Also reports hfclk_running_out: whether the crystal (not the RC
+ * oscillator) was the HFCLK source at the instant the TX burst ran, per
+ * NRF_RADIO_HFCLK_CFG_NO_GUARANTEE above -- a false here means the bit
+ * timing just sent was off nominal 16 MHz by whatever the RC oscillator's
+ * tolerance is, not the values the classifier and the tag both expect. */
 bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out,
-                                uint32_t *rx_arm_gap_ticks_out, uint32_t timeout_ms) {
+                                uint32_t *rx_arm_gap_ticks_out, bool *hfclk_running_out,
+                                uint32_t timeout_ms) {
     *n_out = 0;
     *rx_arm_gap_ticks_out = 0;
+    *hfclk_running_out = false;
     start_lf_125khz_radio();
     bsp_delay_us(HITAG2_T_WAIT_POWERUP_TC * 8);
 
@@ -300,6 +320,7 @@ bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out
         return false;
     }
 
+    *hfclk_running_out = g_hfclk_running_at_tx;
     uint32_t rx_arm_tick_pre = app_timer_cnt_get();
     cb_init(&g_cb, HITAG2_CB_SIZE, sizeof(uint16_t));
     register_rio_callback(hitag2_edge_cb);

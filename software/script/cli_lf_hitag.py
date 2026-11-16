@@ -200,9 +200,14 @@ class LFHitag2RawCapture(ReaderRequiredUnit):
         return p
 
     def on_exec(self, args: argparse.Namespace):
-        rx_arm_gap_us, intervals = self.cmd.hitag2_raw_capture()
+        rx_arm_gap_us, hfclk_running, intervals = self.cmd.hitag2_raw_capture()
         print(f" RX armed {rx_arm_gap_us} us after the last TX edge "
               f"(Hitag2's reply window is ~1600-1650 us after that edge).")
+        if not hfclk_running:
+            print(f" {CR}HFCLK was on the RC oscillator, not the crystal, "
+                  f"during this TX burst -- bit timing was off nominal "
+                  f"16 MHz (request_timeslot() does not guarantee the "
+                  f"crystal).{C0}")
         if not intervals:
             print(f" {CR}No edges captured at all -- comparator saw nothing "
                   f"(check the tag is actually in the field).{C0}")

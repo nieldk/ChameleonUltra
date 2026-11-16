@@ -2487,9 +2487,11 @@ lfHitag2.command("raw", "Debug: send START_AUTH and print the raw GPIOTE edge in
   const f = okOrThrow(await request(CU.LF_HITAG2_RAW_CAPTURE));
   const gapTicks = f.data.length >= 4 ? (f.data[0] | (f.data[1]<<8) | (f.data[2]<<16) | (f.data[3]<<24)) >>> 0 : 0;
   const gapUs = Math.round(gapTicks * 1000000 / 16384);
-  const n = f.data.length > 4 ? f.data[4] : 0;
-  const intervals = Array.from(f.data.slice(5, 5 + n));
+  const hfclkRunning = f.data.length > 4 ? !!f.data[4] : false;
+  const n = f.data.length > 5 ? f.data[5] : 0;
+  const intervals = Array.from(f.data.slice(6, 6 + n));
   const lines = [`RX armed ${gapUs} us after the last TX edge (Hitag2's reply window is ~1600-1650 us after that edge).`];
+  if(!hfclkRunning){ lines.push("HFCLK was on the RC oscillator, not the crystal, during this TX burst -- bit timing was off nominal 16 MHz (request_timeslot() does not guarantee the crystal)."); }
   if(!intervals.length){ lines.push("No edges captured at all -- comparator saw nothing (check the tag is actually in the field)."); return lines; }
   const buckets = [[32,"1T "],[48,"1.5T"],[64,"2T "]];
   lines.push(`Captured ${intervals.length} interval(s), Tc units:`);
