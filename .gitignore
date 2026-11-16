@@ -714,3 +714,4 @@ firmware/compile_commands.json
 firmware/application/compile_commands.json
 software/src/target_arch_detect.c
 firmware/standalone_modes.mk
+firmware/.bootloader_hash
