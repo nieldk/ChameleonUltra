@@ -485,6 +485,11 @@ INC_FOLDERS += \
   $(SDK_ROOT)/components/libraries/crypto/backend/nrf_hw \
   $(SDK_ROOT)/components/libraries/crypto/backend/cifra \
 
+# lf_tag_em.c (nfctag/lf, built for every device type) includes lf_hitag2_data.h
+# for its page-layout constants; that file only lives under rfid/reader/lf,
+# which is otherwise an Ultra-only include path below. Lite builds need it too.
+INC_FOLDERS += ${PROJ_DIR}/rfid/reader/lf
+
 # Libraries common to all targets
 LIB_FILES += \
   $(SDK_ROOT)/external/nrf_cc310/lib/cortex-m4/hard-float/libnrf_cc310_0.9.13.a \
