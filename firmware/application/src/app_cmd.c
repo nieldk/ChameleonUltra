@@ -29,6 +29,8 @@
 #include "bsp_wdt.h"
 #include "lf_reader_generic.h"
 #include "lf_em4x05_data.h"
+#include "lf_ia_debug.h"
+#include "lf_ia_trace.h"
 #include "lf_hitag2_data.h"
 #include "protocols/fdxb.h"
 #include "rc522.h"
@@ -3018,6 +3020,43 @@ static data_frame_tx_t *cmd_processor_lf_hitag2_read(uint16_t cmd, uint16_t stat
     return data_frame_make(cmd, STATUS_LF_TAG_OK, sizeof(pages), (uint8_t *)pages);
 }
 
+// In: the index of the first record (u16, big-endian, optional). Out: the count written since the clear (u32), the
+// record size (u16), the number of records here (u8), the number of first records kept (u8), the current boot (u16),
+// then the records. 6 per call, not upstream's 14 -- this fork's RAM budget is tighter; the host pages with "first".
+#define LF_IA_TRACE_READ_BATCH (6u)
+static data_frame_tx_t *cmd_processor_lf_ia_trace_read(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    static uint8_t out[10 + LF_IA_TRACE_READ_BATCH * sizeof(lf_ia_trace_rec_t)];
+    const size_t first = length >= 2 ? ((size_t)data[0] << 8 | data[1]) : 0;
+    uint32_t total;
+    uint16_t boot;
+    const size_t n = lf_ia_trace_read(first, (lf_ia_trace_rec_t *)(out + 10), LF_IA_TRACE_READ_BATCH, &total, &boot);
+    const uint16_t size = sizeof(lf_ia_trace_rec_t);
+    memcpy(out, &total, 4);
+    memcpy(out + 4, &size, 2);
+    out[6] = (uint8_t)n;
+    out[7] = LF_IA_TRACE_KEEP;
+    memcpy(out + 8, &boot, 2);
+    return data_frame_make(cmd, STATUS_SUCCESS, (uint16_t)(10 + n * size), out);
+}
+
+static data_frame_tx_t *cmd_processor_lf_ia_trace_clear(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    lf_ia_trace_clear();
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
+// In: nothing to read, or a whole lf_ia_tuning_t to set. Out: the tuning, then the counters.
+static data_frame_tx_t *cmd_processor_lf_ia_tuning(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    static uint8_t out[sizeof(lf_ia_tuning_t) + sizeof(lf_ia_stats_t)];
+    if (length == sizeof(lf_ia_tuning_t)) {
+        memcpy(lf_ia_tuning(), data, sizeof(lf_ia_tuning_t));
+    } else if (length != 0) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    memcpy(out, lf_ia_tuning(), sizeof(lf_ia_tuning_t));
+    memcpy(out + sizeof(lf_ia_tuning_t), lf_ia_stats(), sizeof(lf_ia_stats_t));
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(out), out);
+}
+
 static data_frame_tx_t *cmd_processor_lf_sniff(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     /* Optional 2-byte big-endian timeout in ms from host (default 2000ms),
      * followed by an optional 1-byte "passive" flag (0=field-managed, the
@@ -5182,6 +5221,9 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_IOPROX_COMPOSE_ID,            NULL,                        cmd_processor_ioprox_compose_id,             NULL                   },
     {    DATA_CMD_EM4X05_SCAN,                  before_reader_run,           cmd_processor_em4x05_scan,                   NULL                   },
     {    DATA_CMD_LF_HITAG2_READ,               before_reader_run,           cmd_processor_lf_hitag2_read,                NULL                   },
+    {    DATA_CMD_LF_IA_TRACE_READ,             NULL,                        cmd_processor_lf_ia_trace_read,              NULL                   },
+    {    DATA_CMD_LF_IA_TRACE_CLEAR,            NULL,                        cmd_processor_lf_ia_trace_clear,             NULL                   },
+    {    DATA_CMD_LF_IA_TUNING,                 NULL,                        cmd_processor_lf_ia_tuning,                  NULL                   },
     {    DATA_CMD_LF_SNIFF,                     before_reader_run,           cmd_processor_lf_sniff,                      NULL                   },
     {    DATA_CMD_LOGIC_ARM,                    NULL,                        cmd_processor_logic_arm,                     NULL                   },
     {    DATA_CMD_LOGIC_READ,                   NULL,                        cmd_processor_logic_read,                    NULL                   },

@@ -110,7 +110,10 @@ SRC_FILES += \
   $(PROJ_DIR)/rfid/nfctag/lf/protocols/wiegand.c \
   $(PROJ_DIR)/rfid/nfctag/lf/protocols/idteck.c \
   $(PROJ_DIR)/rfid/nfctag/lf/protocols/pyramid.c \
-  $(PROJ_DIR)/rfid/nfctag/lf/protocols/hitag2_tag.c \
+  $(PROJ_DIR)/rfid/nfctag/lf/interactive/lf_ia_codec.c \
+  $(PROJ_DIR)/rfid/nfctag/lf/interactive/lf_ia_engine.c \
+  $(PROJ_DIR)/rfid/nfctag/lf/interactive/lf_ia_trace.c \
+  $(PROJ_DIR)/rfid/nfctag/lf/interactive/lf_ia_hitag2.c \
   $(PROJ_DIR)/utils/dataframe.c \
   $(PROJ_DIR)/utils/battery_health.c \
   $(PROJ_DIR)/utils/delayed_reset.c \
@@ -334,6 +337,7 @@ INC_FOLDERS += \
   ${PROJ_DIR}/rfid/nfctag/hf \
   ${PROJ_DIR}/rfid/nfctag/lf \
   ${PROJ_DIR}/rfid/nfctag/lf/utils \
+  ${PROJ_DIR}/rfid/nfctag/lf/interactive \
   $(SDK_ROOT)/components/nfc/ndef/generic/message \
   $(SDK_ROOT)/components/nfc/t2t_lib \
   $(SDK_ROOT)/components/nfc/t4t_parser/hl_detection_procedure \

@@ -1145,6 +1145,56 @@ class ChameleonCMD:
             resp.parsed = (resp.status, None)
         return resp
 
+    @expect_response(Status.SUCCESS)
+    def lf_ia_trace_read(self, first: int = 0):
+        """
+        Read records of the interactive LF exchange trace, from index first (oldest kept is 0).
+
+        :return: (records written since the clear, record size, list of raw records, first records kept, current boot)
+        """
+        resp = self.device.send_cmd_sync(
+            Command.LF_IA_TRACE_READ, struct.pack(">H", first)
+        )
+        if resp.status == Status.SUCCESS:
+            total, size, n, keep, boot = struct.unpack_from("<IHBBH", resp.data)
+            resp.parsed = (
+                total,
+                size,
+                [resp.data[10 + i * size: 10 + (i + 1) * size] for i in range(n)],
+                keep,
+                boot,
+            )
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def lf_ia_counters(self):
+        """
+        Read the interactive LF engine's counters, which survive sleep until the trace is cleared.
+
+        :return: dict of sessions, commands, responses, late, buffers, buffer_slips, max_handler_us
+        """
+        resp = self.device.send_cmd_sync(Command.LF_IA_TUNING)
+        if resp.status == Status.SUCCESS:
+            names = (
+                "sessions",
+                "commands",
+                "responses",
+                "late",
+                "buffers",
+                "buffer_slips",
+                "max_handler_us",
+            )
+            # The reply is the engine's 14-byte tuning, then the counters.
+            resp.parsed = dict(zip(names, struct.unpack_from("<7I", resp.data, 14)))
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def lf_ia_trace_clear(self):
+        """
+        Clear the interactive LF exchange trace and its counters.
+        """
+        return self.device.send_cmd_sync(Command.LF_IA_TRACE_CLEAR)
+
     @expect_response(Status.LF_TAG_OK)
     def viking_scan(self):
         """

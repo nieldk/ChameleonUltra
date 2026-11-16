@@ -316,4 +316,10 @@
 #define DATA_CMD_LF_SEARCH                      (3033)  // PM3-style: sweep all LF decoders, first hit
 #define DATA_CMD_LF_HITAG2_READ                 (3034)  // in: 4-byte password; out: 8 pages * 4 bytes (password mode only)
 
+#define DATA_CMD_LF_IA_TRACE_READ               (3180)  // in: u16 first index; out: trace records from there
+#define DATA_CMD_LF_IA_TRACE_CLEAR              (3181)
+// 3182/3183 (ENV_ARM/ENV_READ in upstream) skipped: bench-only ring, not wired to this fork's CLI, and its static
+// buffers don't fit this fork's tighter RAM budget.
+#define DATA_CMD_LF_IA_TUNING                   (3184)  // in: optional lf_ia_tuning_t to set; out: tuning + stats
+
 #endif

@@ -4,6 +4,9 @@
 
 #include "bsp_delay.h"
 #include "fds_util.h"
+#include "interactive/lf_ia.h"
+#include "interactive/lf_ia_hitag2.h"
+#include "lf_hitag2_data.h"
 #include "nrf_gpio.h"
 #include "nrf_soc.h"
 #include "nrfx_lpcomp.h"
@@ -15,7 +18,6 @@
 #include "protocols/idteck.h"
 #include "protocols/ioprox.h"
 #include "protocols/jablotron.h"
-#include "protocols/hitag2_tag.h"
 #include "protocols/pac.h"
 #include "protocols/pyramid.h"
 #include "protocols/viking.h"
@@ -39,6 +41,9 @@ extern bool g_usb_led_marquee_enable;
 static volatile bool m_is_lf_emulating = false;
 // Cache tag type
 static tag_specific_type_t m_tag_type = TAG_TYPE_UNDEFINED;
+
+// The interactive engine, instead of the broadcast, owns the PWM while sense is enabled.
+static bool m_ia_active = false;
 
 // The pwm to broadcast modulated card id
 const nrfx_pwm_t m_broadcast = NRFX_PWM_INSTANCE(0);
@@ -74,13 +79,13 @@ static void lf_field_lost(void) {
     NRF_LOG_INFO("LF FIELD LOST");
 }
 
-// hitag2_tag.c has no PWM/EVT_STOPPED hook, so its own field-loss path
-// can't reach lf_field_lost() directly (static, and m_is_lf_emulating is
-// file-local). Without this, m_is_lf_emulating stayed stuck true past the
-// end of a Hitag2 session, so lpcomp_event_handler() short-circuited on
-// every later LPCOMP UP event and the tag never responded to a second
-// reader approach in the same boot.
-void lf_tag_em_hitag2_field_lost(void) {
+// The interactive engine (lf_ia_engine.c) has no PWM/EVT_STOPPED hook, so
+// its own field-loss path can't reach lf_field_lost() directly (static,
+// and m_is_lf_emulating is file-local). Without this, m_is_lf_emulating
+// stayed stuck true past the end of an interactive session, so
+// lpcomp_event_handler() short-circuited on every later LPCOMP UP event
+// and the tag never responded to a second reader approach in the same boot.
+void lf_tag_em_ia_field_lost(void) {
     lf_field_lost();
 }
 
@@ -124,12 +129,9 @@ static void lpcomp_event_handler(nrf_lpcomp_event_t event) {
     set_slot_light_color(RGB_BLUE);
     TAG_FIELD_LED_ON()
 
-    if (m_tag_type == TAG_TYPE_HITAG2) {
-        // Just arms the session flag -- the actual interactive work (and
-        // its own field-loss check) runs from hitag2_tag_tick(), called
-        // every main-loop iteration (app_main.c), never from this ISR.
-        hitag2_tag_session_start();
-        NRF_LOG_INFO("LF FIELD DETECTED (hitag2)");
+    if (m_ia_active) {
+        lf_ia_field_detected();
+        NRF_LOG_INFO("LF FIELD DETECTED, interactive");
         return;
     }
 
@@ -219,14 +221,24 @@ static void lf_sense_enable(void) {
     }
 
     lpcomp_init();
-    pwm_init();  // use precise hardware pwm to broadcast card id
+    m_ia_active = lf_ia_get_module() != NULL;
+    if (m_ia_active) {
+        lf_ia_sense_enable();
+    } else {
+        pwm_init();  // use precise hardware pwm to broadcast card id
+    }
     if (is_lf_field_exists()) {
         lpcomp_event_handler(NRF_LPCOMP_EVENT_UP);
     }
 }
 
 static void lf_sense_disable(void) {
-    nrfx_pwm_uninit(&m_broadcast);
+    if (m_ia_active) {
+        lf_ia_sense_disable();
+        m_ia_active = false;
+    } else {
+        nrfx_pwm_uninit(&m_broadcast);
+    }
     nrfx_lpcomp_uninit();
     m_pwm_seq = NULL;
     m_is_lf_emulating = false;
@@ -332,6 +344,16 @@ static void lf_wave_form_apply_trim(const nrf_pwm_sequence_t *seq) {
  * @param buffer   Data buffer
  */
 int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
+    // The interactive types replace the module in one step: the engine may be using the old one from an interrupt, so
+    // it must never see NULL between the two.
+    if (type == TAG_TYPE_HITAG2 && buffer->length >= LF_HITAG2_TAG_ID_SIZE) {
+        m_tag_type = type;
+        lf_ia_set_module(lf_ia_hitag2_load(buffer->buffer));
+        NRF_LOG_INFO("load lf hitag2 data finish.");
+        return LF_HITAG2_TAG_ID_SIZE;
+    }
+    lf_ia_set_module(NULL);
+
     // ensure buffer size is large enough for specific tag type,
     // so that tag data (e.g., card numbers) can be converted to corresponding pwm sequence here.
     if ((type == TAG_TYPE_EM410X || type == TAG_TYPE_EM410X_ELECTRA) && buffer->length >= lf_em410x_id_size(type)) {
@@ -433,17 +455,6 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         pyramid.free(codec);
         NRF_LOG_INFO("load lf pyramid data finish.");
         return LF_PYRAMID_TAG_ID_SIZE;
-    }
-
-    if (type == TAG_TYPE_HITAG2 && buffer->length >= LF_HITAG2_TAG_ID_SIZE) {
-        // Interactive, not a looping broadcast -- no m_pwm_seq here.
-        // lpcomp_event_handler() branches on m_tag_type and calls
-        // hitag2_tag_session_start() instead; hitag2_tag_tick() (called
-        // from app_main.c's main loop) does the actual session work.
-        m_tag_type = type;
-        hitag2_tag_load((const uint8_t (*)[HITAG2_PAGE_SIZE])buffer->buffer);
-        NRF_LOG_INFO("load lf hitag2 data finish.");
-        return LF_HITAG2_TAG_ID_SIZE;
     }
 
     NRF_LOG_ERROR("no valid data exists in buffer for tag type: %d.", type);
@@ -651,6 +662,11 @@ bool lf_tag_pyramid_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
         0x01, 0x01, 0x01, 0x4A, 0xE3, 0x5E, 0x7F, 0x4F,
     };
     return lf_tag_data_factory(slot, tag_type, tag_id, sizeof(tag_id));
+}
+
+/** @brief Hitag2 data save callback. */
+int lf_tag_hitag2_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
+    return m_tag_type == TAG_TYPE_HITAG2 ? LF_HITAG2_TAG_ID_SIZE : 0;
 }
 
 /** @brief Hitag2 default frame: UID DE AD BE EF, password mode, no crypto. */
