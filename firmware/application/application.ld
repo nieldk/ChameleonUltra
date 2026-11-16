@@ -6,7 +6,8 @@ GROUP(-lgcc -lc -lnosys)
 MEMORY
 {
   FLASH (rx) : ORIGIN = 0x27000, LENGTH = 0x89000
-  RAM (rwx) :  ORIGIN = 0x20002ae8, LENGTH = 0x35518
+  /* LENGTH grown by 0x2800, taken from the NOINIT region's unused slack (see noinit.ld). */
+  RAM (rwx) :  ORIGIN = 0x20002ae8, LENGTH = 0x37d18
 }
 
 SECTIONS

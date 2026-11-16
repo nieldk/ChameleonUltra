@@ -27,10 +27,20 @@ typedef struct __attribute__((packed)) {
     uint32_t max_handler_us;  // the longest ADC buffer handling, including any command handling it did
 } lf_ia_stats_t;
 
+#ifndef LF_IA_DEBUG
+#define LF_IA_DEBUG (0)
+#endif
+
+#if LF_IA_DEBUG
 // 1024 samples at 10 us apart = 10.24 ms of history. Upstream uses 4096; cut for this board's RAM budget. Read
 // promptly after the test -- with no command to freeze it (see below), the ring keeps recording and this is all
 // the lookback there is.
 #define LF_IA_ENV_SAMPLES (1024u)
+#else
+// Bench-only RAM (2KB for the full ring). A production build keeps a token-sized ring so lf_ia_env_arm/read still
+// work if called, just with no useful history. Build with LF_IA_DEBUG=1 for real envelope capture.
+#define LF_IA_ENV_SAMPLES (32u)
+#endif
 
 lf_ia_tuning_t *lf_ia_tuning(void);
 const lf_ia_stats_t *lf_ia_stats(void);

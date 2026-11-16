@@ -13,8 +13,19 @@
 #include "lf_ia.h"
 #include "lf_ia_debug.h"
 
+#ifndef LF_IA_DEBUG
+#define LF_IA_DEBUG (0)
+#endif
+
+#if LF_IA_DEBUG
 #define LF_IA_TRACE_RECORDS (32u)
 #define LF_IA_TRACE_KEEP    (8u)   // the first records since a clear, never overwritten
+#else
+// The full ring is bench-only RAM (32 * ~280 bytes); a production build keeps just the latest command, since the
+// summary counters (lf_ia_trace_stats) are what a field check actually reads. Build with LF_IA_DEBUG=1 for the ring.
+#define LF_IA_TRACE_RECORDS (2u)
+#define LF_IA_TRACE_KEEP    (1u)
+#endif
 #define LF_IA_TRACE_GAPS    (48u)
 
 enum {

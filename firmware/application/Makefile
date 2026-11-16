@@ -35,6 +35,7 @@ STANDALONE_ZIGBEE          ?= 0   # disabled by default (passive 802.15.4 receiv
 STANDALONE_SPECTRUM        ?= 0   # disabled by default (one-shot 2.4 GHz ISM energy-detect sweep in SoftDevice timeslots)
 STANDALONE_ESB             ?= 0   # disabled by default (passive ESB-framed RX, known address, in SoftDevice timeslots)
 STANDALONE_ESB_PROMISC     ?= 0   # disabled by default (brute-force partial-address ESB sniff, unknown address -- experimental)
+LF_IA_DEBUG                ?= 0   # disabled by default (interactive LF engine's trace ring + envelope capture, ~10KB RAM; bring-up only)
 
 CFLAGS += -DCONFIG_STANDALONE_AUTHTRACE=$(STANDALONE_AUTHTRACE)
 CFLAGS += -DCONFIG_STANDALONE_SLOT_CYCLE=$(STANDALONE_SLOT_CYCLE)
@@ -54,6 +55,7 @@ CFLAGS += -DCONFIG_STANDALONE_ESB=$(STANDALONE_ESB)
 CFLAGS += -DCONFIG_STANDALONE_ESB_PROMISC=$(STANDALONE_ESB_PROMISC)
 CFLAGS += -DCONFIG_GDB_GATEWAY_EXEC=$(GDB_GATEWAY_EXEC)
 CFLAGS += -DCONFIG_GDB_GATEWAY_PKT=$(GDB_GATEWAY_PKT)
+CFLAGS += -DLF_IA_DEBUG=$(LF_IA_DEBUG)
 
 # Source files common to all targets
 SRC_FILES += \
