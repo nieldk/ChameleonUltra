@@ -46,11 +46,15 @@ bool lf_125khz_radio_last_edge_was_rising(void) {
  * LF reading card decrease along the trigger collection event
  */
 static void lf_125khz_gpio_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action) {
-    // Under enable(false) (every protocol except Hitag2's new run decode)
-    // this is LOTOHI-only, so action is always a rising edge here, same as
-    // before this was tracked at all.
-    m_last_edge_was_rising = (action == NRF_GPIOTE_POLARITY_LOTOHI);
-    logic_hook(LOGIC_SRC_LF_OA, m_last_edge_was_rising ? 1 : 0);
+    // action is useless here, not just under enable(false): confirmed in
+    // nrfx_gpiote.c's IRQ handler, it comes from nrf_gpiote_event_polarity_get(),
+    // which reads the channel's *configured* POLARITY register, not this
+    // edge's direction. For a TOGGLE channel that register reads back
+    // "Toggle" on every single event, never LOTOHI/HITOLO. The pin's actual
+    // level, read synchronously in this same edge ISR, is the real signal.
+    bool now_high = nrf_gpio_pin_read(pin) != 0;
+    m_last_edge_was_rising = now_high;
+    logic_hook(LOGIC_SRC_LF_OA, now_high ? 1 : 0);
     // Directly transfer to the event
     gpio_int0_irq_handler();
 }

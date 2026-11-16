@@ -34,10 +34,11 @@ void lf_125khz_radio_saadc_enable(lf_adc_callback_t cb);
 void lf_125khz_radio_gpiote_enable(bool both_edges);
 void lf_125khz_radio_saadc_disable(void);
 
-/* The direction of the edge that triggered the GPIOTE callback currently
- * running (true = rising/LOTOHI, false = falling/HITOLO). Only meaningful
- * when read synchronously from within that callback -- enable(true) is what
- * makes this carry real information; under enable(false) it is always true. */
+/* Whether LF_OA_OUT's level, read synchronously inside the GPIOTE callback
+ * currently running, is high right after that edge (true) or low (false).
+ * Only meaningful read from within that callback -- enable(true) is what
+ * makes this carry real information; under enable(false) it is always true
+ * (every event there is a rising edge by construction). */
 bool lf_125khz_radio_last_edge_was_rising(void);
 
 /* 166.67 kHz TIMER3-triggered sampling, for PSK1 fc/2 (real Indala) read. */
