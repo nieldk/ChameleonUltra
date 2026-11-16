@@ -320,10 +320,16 @@ static bool hitag2_tx_rx_bytes(const uint8_t *tx_bytes, uint8_t tx_nbits,
     return hitag2_receive_frame(rx_out, rx_nbits, timeout_ms);
 }
 
-/* Debug aid: send START_AUTH and dump the raw rising-to-rising GPIOTE edge
- * intervals on LF_OA_OUT (Tc units, truncated to 0xff) in place of decoding
- * them -- for seeing what the comparator actually produces on real silicon,
- * separately from hitag2_receive_frame()'s own (both-edge) capture.
+/* Debug aid: send START_AUTH and dump the raw GPIOTE edge intervals on
+ * LF_OA_OUT in place of decoding them -- for seeing what the comparator
+ * actually produces on real silicon.
+ *
+ * both_edges selects the same capture hitag2_receive_frame() uses (every
+ * run, with its load level packed into bit 7 and its length, clamped to
+ * 0x7F Tc, in bits 6..0) instead of the original rising-only dump (bit 7
+ * always 0, length truncated mod 256) -- so hitag2_receive_frame()'s own
+ * decode input can be inspected directly instead of guessed at from a
+ * rising-only proxy.
  *
  * Also reports rx_arm_gap_ticks: the app_timer (RTC1, ~61us/tick) gap
  * between the last TX edge finishing (timestamped inside the timeslot
@@ -341,7 +347,7 @@ static bool hitag2_tx_rx_bytes(const uint8_t *tx_bytes, uint8_t tx_nbits,
  * tolerance is, not the values the classifier and the tag both expect. */
 bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out,
                                 uint32_t *rx_arm_gap_ticks_out, bool *hfclk_running_out,
-                                uint32_t timeout_ms) {
+                                bool both_edges, uint32_t timeout_ms) {
     *n_out = 0;
     *rx_arm_gap_ticks_out = 0;
     *hfclk_running_out = false;
@@ -369,7 +375,7 @@ bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out
     uint32_t rx_arm_tick_pre = app_timer_cnt_get();
     cb_init(&g_cb, HITAG2_CB_SIZE, sizeof(uint16_t));
     register_rio_callback(hitag2_edge_cb);
-    lf_125khz_radio_gpiote_enable(false);  /* rising-only: unchanged raw dump, not the run decode */
+    lf_125khz_radio_gpiote_enable(both_edges);
     clear_lf_counter_value();
     *rx_arm_gap_ticks_out = (rx_arm_tick_pre - g_tx_done_tick) & 0xFFFFFFu;
 
@@ -380,11 +386,17 @@ bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out
         if (!cb_pop_front(&g_cb, &run)) {
             continue;
         }
-        /* Rising-only capture: hitag2_edge_cb()'s level bit is always 0
-         * here, so this is the same rising-to-rising interval as before,
-         * just truncated instead of clamped above 255 (unchanged in
-         * practice -- real runs never get near that). */
-        intervals[n++] = (uint8_t)run;
+        if (both_edges) {
+            uint16_t len = LF_IA_RUN_LEN(run);
+            intervals[n++] = (uint8_t)((LF_IA_RUN_IS_LOAD(run) ? 0x80 : 0) |
+                                        (len > 0x7F ? 0x7F : len));
+        } else {
+            /* Rising-only: hitag2_edge_cb()'s level bit is always 0 here,
+             * so this is the plain rising-to-rising interval, truncated mod
+             * 256 instead of clamped (unchanged in practice -- real runs
+             * never get near that). */
+            intervals[n++] = (uint8_t)run;
+        }
     }
     bsp_return_timer(p_at);
     lf_125khz_radio_gpiote_disable();

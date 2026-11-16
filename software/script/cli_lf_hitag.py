@@ -190,17 +190,18 @@ class LFHitag2RawCapture(ReaderRequiredUnit):
         p.description = (
             "Debug: send START_AUTH and print the raw GPIOTE edge intervals "
             "the device captured, in Tc units (1 Tc = 8us), instead of "
-            "running them through the RF/32 Manchester classifier. Use this "
-            "to see what the comparator actually produces on real hardware "
-            "when `read`/`cread` report no answer -- the classifier "
-            "thresholds (1T=32, 1.5T=48, 2T=64 Tc, +-8 jitter) are a "
-            "first-cut dimensional scaling from the EM4x05 classifier, not "
-            "yet verified against this hardware."
+            "decoding them. Use this to see what the comparator actually "
+            "produces on real hardware when `read`/`cread` report no "
+            "answer."
         )
+        p.add_argument("-b", "--both-edges", action="store_true",
+                        help="dump the same both-edge, leveled runs read/cread's own "
+                             "decode consumes, instead of the original rising-only "
+                             "dump -- use this to see the actual decode input")
         return p
 
     def on_exec(self, args: argparse.Namespace):
-        rx_arm_gap_us, hfclk_running, intervals = self.cmd.hitag2_raw_capture()
+        rx_arm_gap_us, hfclk_running, intervals = self.cmd.hitag2_raw_capture(args.both_edges)
         print(f" RX armed {rx_arm_gap_us} us after the last TX edge "
               f"(Hitag2's reply window is ~1600-1650 us after that edge).")
         if not hfclk_running:
@@ -213,11 +214,27 @@ class LFHitag2RawCapture(ReaderRequiredUnit):
                   f"(check the tag is actually in the field).{C0}")
             return
         print(f" Captured {len(intervals)} interval(s), Tc units:")
-        buckets = ((32, "1T "), (48, "1.5T"), (64, "2T "))
-        for i, v in enumerate(intervals):
-            tag = "?"
-            for center, name in buckets:
-                if abs(v - center) <= 8:
-                    tag = name
-                    break
-            print(f"    [{i:2}]  {v:3}  {tag}")
+        if args.both_edges:
+            # Each byte: bit 7 = load level, bits 6..0 = length (clamped to
+            # 0x7F) -- see hitag2_reader_raw_capture()'s both_edges doc.
+            # Half-bit buckets (16/24/32 Tc), half of the rising-only ones,
+            # since every run here is at most one bit wide.
+            buckets = ((16, "0.5T "), (24, "0.75T"), (32, "1T   "))
+            for i, b in enumerate(intervals):
+                level = "H" if (b & 0x80) else "L"
+                length = b & 0x7F
+                tag = "?"
+                for center, name in buckets:
+                    if abs(length - center) <= 4:
+                        tag = name
+                        break
+                print(f"    [{i:2}]  {level}  {length:3}  {tag}")
+        else:
+            buckets = ((32, "1T "), (48, "1.5T"), (64, "2T "))
+            for i, v in enumerate(intervals):
+                tag = "?"
+                for center, name in buckets:
+                    if abs(v - center) <= 8:
+                        tag = name
+                        break
+                print(f"    [{i:2}]  {v:3}  {tag}")

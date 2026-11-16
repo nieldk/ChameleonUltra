@@ -3034,12 +3034,14 @@ static data_frame_tx_t *cmd_processor_lf_hitag2_crypto_read(uint16_t cmd, uint16
 
 #define LF_HITAG2_RAW_CAPTURE_MAX (48u)
 static data_frame_tx_t *cmd_processor_lf_hitag2_raw_capture(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    // out: rx_arm_gap_ticks(4, native order) hfclk_running(1) n(1) intervals(n)
+    // In: both_edges(1, optional, defaults to 0/false for an older client).
+    // Out: rx_arm_gap_ticks(4, native order) hfclk_running(1) n(1) intervals(n)
     static uint8_t out[4 + 1 + 1 + LF_HITAG2_RAW_CAPTURE_MAX];
+    bool both_edges = (length >= 1) && (data[0] != 0);
     uint8_t n = 0;
     uint32_t gap_ticks = 0;
     bool hfclk_running = false;
-    hitag2_reader_raw_capture(out + 6, LF_HITAG2_RAW_CAPTURE_MAX, &n, &gap_ticks, &hfclk_running, 500);
+    hitag2_reader_raw_capture(out + 6, LF_HITAG2_RAW_CAPTURE_MAX, &n, &gap_ticks, &hfclk_running, both_edges, 500);
     memcpy(out, &gap_ticks, 4);
     out[4] = hfclk_running ? 1 : 0;
     out[5] = n;

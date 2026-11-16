@@ -1168,12 +1168,18 @@ class ChameleonCMD:
         return resp
 
     @expect_response([Status.LF_TAG_OK])
-    def hitag2_raw_capture(self):
+    def hitag2_raw_capture(self, both_edges: bool = False):
         """
         Debug: send START_AUTH and return the raw GPIOTE edge intervals the
-        device captured (Tc units, i.e. units of 8us), instead of running
-        them through the RF/32 Manchester classifier. For determining real
-        classifier thresholds from hardware capture.
+        device captured, instead of decoding them.
+
+        both_edges=False (default): rising-to-rising intervals (Tc units,
+        truncated mod 256) -- the original dump.
+        both_edges=True: the same both-edge, leveled runs the reader's own
+        decode (lf_ia_decode_runs(), Manchester) consumes -- each byte packs
+        the run's load level in bit 7 and its length (Tc units, clamped to
+        0x7F) in bits 6..0. Use this one to see the actual decode input when
+        `read`/`cread` fail, not a rising-only proxy for it.
 
         Also returns the RTC1 app_timer tick gap (~61us/tick) between the
         last TX edge and RX actually arming, since on this device's
@@ -1192,7 +1198,7 @@ class ChameleonCMD:
             where intervals is a list of ints (possibly empty, if no edges
             at all were seen -- that is itself informative)
         """
-        resp = self.device.send_cmd_sync(Command.LF_HITAG2_RAW_CAPTURE, b'')
+        resp = self.device.send_cmd_sync(Command.LF_HITAG2_RAW_CAPTURE, bytes([1 if both_edges else 0]))
         gap_ticks = int.from_bytes(resp.data[0:4], "little") if len(resp.data) >= 4 else 0
         hfclk_running = bool(resp.data[4]) if len(resp.data) > 4 else False
         n = resp.data[5] if len(resp.data) > 5 else 0

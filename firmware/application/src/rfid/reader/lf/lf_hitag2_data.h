@@ -77,9 +77,14 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
                                 uint32_t timeout_ms);
 
 /* Debug: send START_AUTH and return up to max_n raw GPIOTE edge intervals
- * (Tc units, clipped to 0xff) instead of decoding them -- for determining
- * real Manchester classifier thresholds from hardware capture, since the
- * current ones are a first-cut dimensional scaling, not hardware-verified.
+ * instead of decoding them -- for seeing what the comparator actually
+ * produces on real hardware.
+ *
+ * both_edges: false dumps rising-to-rising intervals (Tc units, truncated
+ * mod 256) -- the original dump. true dumps the same both-edge, leveled
+ * runs hitag2_receive_frame() decodes (load level in bit 7, length clamped
+ * to 0x7F Tc in bits 6..0) -- use this one when `read`/`cread` fail, to see
+ * the actual decode input rather than a rising-only proxy for it.
  *
  * rx_arm_gap_ticks_out: app_timer (RTC1, ~61us/tick) gap between the last TX
  * edge and RX actually arming -- see the .c file's comment on why this gap
@@ -90,7 +95,7 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
  * NRF_RADIO_HFCLK_CFG_NO_GUARANTEE, see the .c file). */
 bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out,
                                 uint32_t *rx_arm_gap_ticks_out, bool *hfclk_running_out,
-                                uint32_t timeout_ms);
+                                bool both_edges, uint32_t timeout_ms);
 
 #ifdef __cplusplus
 }
