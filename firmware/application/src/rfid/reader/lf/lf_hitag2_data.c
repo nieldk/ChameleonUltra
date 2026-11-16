@@ -33,6 +33,7 @@ NRF_LOG_MODULE_REGISTER();
 #define HITAG2_T_LOW_TC    6    /* field-off pulse per bit, 4..10 Tc range */
 #define HITAG2_T_0_TC      20   /* total bit-0 duration, 18..22 Tc range */
 #define HITAG2_T_1_TC      30   /* total bit-1 duration, 26..32 Tc range */
+#define HITAG2_T_STOP_TC   36   /* EOF stop condition after the last bit, T_EOF should be > 36 Tc */
 
 #define HITAG2_T_WAIT_POWERUP_TC        313  /* tag internal powerup, 312.5 Tc */
 #define HITAG2_T_WAIT_START_AUTH_MAX_TC 232  /* tag gives up waiting for START_AUTH after this */
@@ -113,21 +114,42 @@ static void hitag2_send_bit(bool bit) {
     }
 }
 
-/* Sends the low `nbits` bits of `value`, MSB first. */
+/* EOF: one more T_LOW drop, then hold the field through T_STOP. Same shape
+ * as hitag2_send_bit(), just with a fixed stop-condition hold instead of a
+ * data-dependent one -- matches armsrc/hitag2.c's hitag2_reader_send_frame()
+ * exactly, which every frame sender there appends after its bit loop.
+ *
+ * Without this, a gap-interval receiver (this codebase's own tag-emulation
+ * engine, lf_ia_engine.c) has no edge to measure the last bit's duration
+ * against and silently drops it -- confirmed on real hardware: a 5-bit
+ * START_AUTH decoded as 4 bits by CU's own emulator reading CU's own
+ * reader. A receiver with a fixed decode window (a real tag's analog
+ * front end) may equally rely on this EOF to recognize the command is
+ * complete rather than still waiting for more bits. */
+static void hitag2_send_eof(void) {
+    stop_lf_125khz_radio();
+    bsp_delay_us(HITAG2_T_LOW_TC * 8);
+    start_lf_125khz_radio();
+    bsp_delay_us(HITAG2_T_STOP_TC * 8);
+}
+
+/* Sends the low `nbits` bits of `value`, MSB first, followed by the EOF. */
 static void hitag2_send_bits(uint32_t value, uint8_t nbits) {
     for (int8_t i = (int8_t)(nbits - 1); i >= 0; i--) {
         hitag2_send_bit((value >> i) & 1);
     }
+    hitag2_send_eof();
 }
 
-/* Sends `nbits` bits from a byte array, MSB first -- same framing as
- * hitag2_send_bits, just for frames wider than 32 bits (the 64-bit Nr/Ar
- * crypto-mode challenge). Bit i is bit (7 - i%8) of byte i/8, matching how
- * hitag2_receive_frame packs a received frame. */
+/* Sends `nbits` bits from a byte array, MSB first, followed by the EOF --
+ * same framing as hitag2_send_bits, just for frames wider than 32 bits (the
+ * 64-bit Nr/Ar crypto-mode challenge). Bit i is bit (7 - i%8) of byte i/8,
+ * matching how hitag2_receive_frame packs a received frame. */
 static void hitag2_send_bits_bytes(const uint8_t *bytes, uint8_t nbits) {
     for (uint8_t i = 0; i < nbits; i++) {
         hitag2_send_bit((bytes[i / 8] >> (7 - (i % 8))) & 1);
     }
+    hitag2_send_eof();
 }
 
 static uint32_t le32(const uint8_t *p) {
