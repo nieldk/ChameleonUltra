@@ -133,13 +133,36 @@ PY
     zip -j ${device_type}-binaries.zip $tmp_dir/*.hex
     rm -rf $tmp_dir
 
+    # Catches whether anything that actually feeds the bootloader build has changed since the last build here, so
+    # the message below can say whether this build needs the SD+BL stage or just the app. This fingerprints the
+    # bootloader's source inputs (bootloader/, common/, nrf52_sdk/, Makefile.defs), not bootloader.hex itself --
+    # the bootloader bakes GIT_VERSION (Makefile.defs' `git describe`) into its image for the version command, so
+    # the hex changes on every commit regardless of whether anything bootloader-relevant actually changed, which
+    # made a hex-hash check always say "changed". Compares against this machine's last build, not what's actually
+    # flashed on the device -- there's no way to query that from here.
+    bl_hash_file="../.bootloader_hash"
+    bl_hash=$( (cd .. && find bootloader common nrf52_sdk Makefile.defs -type f 2>/dev/null | sort | xargs sha256sum) | sha256sum | cut -d' ' -f1)
+    bl_changed=1
+    if [[ -f "$bl_hash_file" ]] && [[ "$(cat "$bl_hash_file")" == "$bl_hash" ]]; then
+        bl_changed=0
+    fi
+    echo "$bl_hash" > "$bl_hash_file"
+
     set +x
     echo
     echo "=========================================================="
     echo "Build complete."
-    echo "  SD+BL      : objects/${device_type}-dfu-bl.zip"
-    echo "  App        : objects/${device_type}-dfu-app.zip"
-    echo "  Full image : objects/${device_type}-fullimage.uf2"
-    echo "Use flash-dfu-sdbl.sh to install both stages."
+    if [[ $bl_changed -eq 1 ]]; then
+        echo "  Bootloader changed since your last build here -- flash both stages:"
+        echo "  SD+BL      : objects/${device_type}-dfu-bl.zip"
+        echo "  App        : objects/${device_type}-dfu-app.zip"
+        echo "  Full image : objects/${device_type}-fullimage.uf2"
+        echo "  Use flash-dfu-sdbl.sh to install both stages."
+    else
+        echo "  Bootloader unchanged since your last build here -- app-only reflash is enough:"
+        echo "  App        : objects/${device_type}-dfu-app.zip"
+        echo "  (SD+BL zip and full image are still at objects/${device_type}-dfu-bl.zip and"
+        echo "  objects/${device_type}-fullimage.uf2, if you ever need them.)"
+    fi
     echo "=========================================================="
 )

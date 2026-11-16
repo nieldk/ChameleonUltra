@@ -62,6 +62,9 @@ class Command(enum.IntEnum):
     GET_SLEEP_TIMEOUT = 1039
     SET_SLEEP_TIMEOUT = 1040
 
+    GET_LF_XTAL_TRIM = 1064
+    SET_LF_XTAL_TRIM = 1065
+
     GET_DFU_APP_VERSION = 1046
 
     # 1041/1042 reserved -- see firmware data_cmd.h (collided with RRG's
@@ -143,6 +146,9 @@ class Command(enum.IntEnum):
     LOGIC_READ = 3038
     LOGIC_STOP = 3039
     LOGIC_SPI_READ = 3040
+    LF_XTAL_START = 3042
+    LF_XTAL_READ = 3043
+    LF_XTAL_STOP = 3044
 
     MF1_WRITE_EMU_BLOCK_DATA = 4000
     HF14A_SET_ANTI_COLL_DATA = 4001
@@ -258,10 +264,18 @@ class Command(enum.IntEnum):
     INDALA_GET_EMU_ID = 5015
     FDXB_SET_EMU_ID = 5016
     FDXB_GET_EMU_ID = 5017
+    HITAG2_SET_EMU_ID = 5018
+    HITAG2_GET_EMU_ID = 5019
     EM4X05_SCAN = 3030
     EM4X05_READSNIFF = 3032
     LF_SNIFF = 3031
     LF_SEARCH = 3033
+    LF_HITAG2_READ = 3034
+    LF_IA_TRACE_READ = 3180
+    LF_IA_TRACE_CLEAR = 3181
+    LF_IA_ENV_ARM = 3182
+    LF_IA_ENV_READ = 3183
+    LF_IA_TUNING = 3184
 
 
 @enum.unique
@@ -420,7 +434,8 @@ class TagSpecificType(enum.IntEnum):
     # T5577
     # EM4x05/4x69
     # EM4x50/4x70
-    # Hitag series
+    # Hitag2: password mode only, no crypto mode
+    HITAG2 = 400
 
     TAG_TYPES_LF_END = 999
 
@@ -527,6 +542,8 @@ class TagSpecificType(enum.IntEnum):
             return "IDTECK"
         elif self == TagSpecificType.Indala:
             return "Indala"
+        elif self == TagSpecificType.HITAG2:
+            return "Hitag2"
         elif self == TagSpecificType.MIFARE_Mini:
             return "Mifare Mini"
         elif self == TagSpecificType.MIFARE_1024:

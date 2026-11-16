@@ -16,6 +16,8 @@
 #include "app_util_platform.h"
 #include "nrfx_ppi.h"
 #include "logic_analyzer.h"
+#include "timer1_lock.h"
+#include "lf_xtal_counter.h"
 #include "settings.h"
 #include "delayed_reset.h"
 #include "logflash.h"
@@ -27,6 +29,9 @@
 #include "bsp_wdt.h"
 #include "lf_reader_generic.h"
 #include "lf_em4x05_data.h"
+#include "lf_ia_debug.h"
+#include "lf_ia_trace.h"
+#include "lf_hitag2_data.h"
 #include "protocols/fdxb.h"
 #include "rc522.h"
 #include "hw_connect.h"
@@ -569,6 +574,21 @@ static data_frame_tx_t *cmd_processor_set_sleep_timeout(uint16_t cmd, uint16_t s
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
     }
     settings_set_sleep_timeout(data[0]);
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
+static data_frame_tx_t *cmd_processor_get_lf_xtal_trim(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    int16_t trim_x10 = settings_get_lf_xtal_trim_ppm_x10();
+    uint16_t out = U16HTONS((uint16_t)trim_x10);
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(out), (uint8_t *)&out);
+}
+
+static data_frame_tx_t *cmd_processor_set_lf_xtal_trim(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length != 2) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    int16_t trim_x10 = (int16_t)(((uint16_t)data[0] << 8) | data[1]);
+    settings_set_lf_xtal_trim_ppm_x10(trim_x10);
     return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
 }
 
@@ -2180,6 +2200,26 @@ static data_frame_tx_t *cmd_processor_pac_get_emu_id(uint16_t cmd, uint16_t stat
     return data_frame_make(cmd, STATUS_SUCCESS, LF_PAC_TAG_ID_SIZE, buffer->buffer);
 }
 
+static data_frame_tx_t *cmd_processor_hitag2_set_emu_id(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length != LF_HITAG2_TAG_ID_SIZE) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    tag_data_buffer_t *buffer = get_buffer_by_tag_type(TAG_TYPE_HITAG2);
+    memcpy(buffer->buffer, data, LF_HITAG2_TAG_ID_SIZE);
+    tag_emulation_load_by_buffer(TAG_TYPE_HITAG2, false);
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
+static data_frame_tx_t *cmd_processor_hitag2_get_emu_id(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    tag_slot_specific_type_t tag_types;
+    tag_emulation_get_specific_types_by_slot(tag_emulation_get_slot(), &tag_types);
+    if (tag_types.tag_lf != TAG_TYPE_HITAG2) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, data);
+    }
+    tag_data_buffer_t *buffer = get_buffer_by_tag_type(TAG_TYPE_HITAG2);
+    return data_frame_make(cmd, STATUS_SUCCESS, LF_HITAG2_TAG_ID_SIZE, buffer->buffer);
+}
+
 static data_frame_tx_t *cmd_processor_jablotron_set_emu_id(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     if (length != LF_JABLOTRON_TAG_ID_SIZE) {
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
@@ -2968,6 +3008,79 @@ static data_frame_tx_t *cmd_processor_em4x05_scan(uint16_t cmd, uint16_t status,
     return data_frame_make(cmd, STATUS_LF_TAG_OK, sizeof(payload), (uint8_t *)&payload);
 }
 
+static data_frame_tx_t *cmd_processor_lf_hitag2_read(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length < 4) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE];
+    bool ok = hitag2_reader_read(data, pages, 500);
+    if (!ok) {
+        return data_frame_make(cmd, STATUS_LF_TAG_NO_FOUND, 0, NULL);
+    }
+    return data_frame_make(cmd, STATUS_LF_TAG_OK, sizeof(pages), (uint8_t *)pages);
+}
+
+// In: the index of the first record (u16, big-endian, optional). Out: the count written since the clear (u32), the
+// record size (u16), the number of records here (u8), the number of first records kept (u8), the current boot (u16),
+// then the records. 6 per call, not upstream's 14 -- this fork's RAM budget is tighter; the host pages with "first".
+#define LF_IA_TRACE_READ_BATCH (6u)
+static data_frame_tx_t *cmd_processor_lf_ia_trace_read(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    static uint8_t out[10 + LF_IA_TRACE_READ_BATCH * sizeof(lf_ia_trace_rec_t)];
+    const size_t first = length >= 2 ? ((size_t)data[0] << 8 | data[1]) : 0;
+    uint32_t total;
+    uint16_t boot;
+    const size_t n = lf_ia_trace_read(first, (lf_ia_trace_rec_t *)(out + 10), LF_IA_TRACE_READ_BATCH, &total, &boot);
+    const uint16_t size = sizeof(lf_ia_trace_rec_t);
+    memcpy(out, &total, 4);
+    memcpy(out + 4, &size, 2);
+    out[6] = (uint8_t)n;
+    out[7] = LF_IA_TRACE_KEEP;
+    memcpy(out + 8, &boot, 2);
+    return data_frame_make(cmd, STATUS_SUCCESS, (uint16_t)(10 + n * size), out);
+}
+
+static data_frame_tx_t *cmd_processor_lf_ia_trace_clear(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    lf_ia_trace_clear();
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
+static data_frame_tx_t *cmd_processor_lf_ia_env_arm(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    lf_ia_env_arm();
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
+// In: the offset (u16, big-endian). Out: frozen (u8), the newest sample's time (u32), the number of samples here
+// (u16), then the samples (i16), oldest first. 256 per call, not upstream's 2000 -- this fork's RAM budget is
+// tighter; the host pages with offset, same as trace_read.
+#define LF_IA_ENV_READ_BATCH (256u)
+static data_frame_tx_t *cmd_processor_lf_ia_env_read(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    static uint8_t out[7 + LF_IA_ENV_READ_BATCH * 2];
+    if (length < 2) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    const size_t offset = (size_t)data[0] << 8 | data[1];
+    uint32_t last_us;
+    uint8_t frozen;
+    const uint16_t n = (uint16_t)lf_ia_env_read(offset, (int16_t *)(out + 7), LF_IA_ENV_READ_BATCH, &last_us, &frozen);
+    out[0] = frozen;
+    memcpy(out + 1, &last_us, 4);
+    memcpy(out + 5, &n, 2);
+    return data_frame_make(cmd, STATUS_SUCCESS, (uint16_t)(7 + n * 2u), out);
+}
+
+// In: nothing to read, or a whole lf_ia_tuning_t to set. Out: the tuning, then the counters.
+static data_frame_tx_t *cmd_processor_lf_ia_tuning(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    static uint8_t out[sizeof(lf_ia_tuning_t) + sizeof(lf_ia_stats_t)];
+    if (length == sizeof(lf_ia_tuning_t)) {
+        memcpy(lf_ia_tuning(), data, sizeof(lf_ia_tuning_t));
+    } else if (length != 0) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    memcpy(out, lf_ia_tuning(), sizeof(lf_ia_tuning_t));
+    memcpy(out + sizeof(lf_ia_tuning_t), lf_ia_stats(), sizeof(lf_ia_stats_t));
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(out), out);
+}
+
 static data_frame_tx_t *cmd_processor_lf_sniff(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     /* Optional 2-byte big-endian timeout in ms from host (default 2000ms),
      * followed by an optional 1-byte "passive" flag (0=field-managed, the
@@ -3085,6 +3198,44 @@ static data_frame_tx_t *cmd_processor_logic_stop(uint16_t cmd, uint16_t status, 
         out.cc[i] = U32HTONL(info.cc[i]);
     }
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(out), (uint8_t *)&out);
+}
+
+static data_frame_tx_t *lf_xtal_status_response(uint16_t cmd, lf_xtal_status_t rc, const lf_xtal_sample_t *s) {
+    if (rc == LF_XTAL_BUSY) {
+        return data_frame_make(cmd, STATUS_DEVICE_MODE_ERROR, 0, NULL);
+    }
+    if (rc == LF_XTAL_NOT_RUNNING) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    struct {
+        uint32_t raw_ticks;
+        uint8_t  hfclk_lapsed;
+        uint8_t  running;
+    } PACKED out;
+    out.raw_ticks     = U32HTONL(s->raw_ticks);
+    out.hfclk_lapsed  = s->hfclk_lapsed ? 1 : 0;
+    out.running       = s->running ? 1 : 0;
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(out), (uint8_t *)&out);
+}
+
+static data_frame_tx_t *cmd_processor_lf_xtal_start(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    lf_xtal_status_t rc = lf_xtal_counter_start();
+    if (rc != LF_XTAL_OK) {
+        return data_frame_make(cmd, STATUS_DEVICE_MODE_ERROR, 0, NULL);
+    }
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
+static data_frame_tx_t *cmd_processor_lf_xtal_read(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    lf_xtal_sample_t s;
+    lf_xtal_status_t rc = lf_xtal_counter_read(&s);
+    return lf_xtal_status_response(cmd, rc, &s);
+}
+
+static data_frame_tx_t *cmd_processor_lf_xtal_stop(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    lf_xtal_sample_t s;
+    lf_xtal_status_t rc = lf_xtal_counter_stop(&s);
+    return lf_xtal_status_response(cmd, rc, &s);
 }
 
 /* ========================================================================
@@ -3544,6 +3695,12 @@ static void hf14a_sniff_tx_frame_cb(const uint8_t *data, uint16_t szBits) {
  *
  * PROJECT_CHAMELEON_ULTRA only — needs the RC522 reader front-end. */
 uint16_t hf14a_sniff_tap_run(uint32_t timeout_ms, uint16_t *out_cb_count) {
+    /* TIMER1 is on loan below; refuse if lf_xtal_counter.c already holds it
+     * for a crystal measurement run, rather than fight it for the register. */
+    if (!timer1_lock_try_acquire()) {
+        if (out_cb_count) *out_cb_count = 0;
+        return 0;
+    }
     if (timeout_ms == 0 || timeout_ms > 30000) timeout_ms = 5000;
 
     /* Reload active slot data before sniffing — see cmd_processor_hf14a_sniff
@@ -3675,6 +3832,7 @@ uint16_t hf14a_sniff_tap_run(uint32_t timeout_ms, uint16_t *out_cb_count) {
     if (ppi_end_ok)   { nrfx_ppi_channel_disable(ppi_end);   nrfx_ppi_channel_free(ppi_end);   }
     if (ppi_start_ok) { nrfx_ppi_channel_disable(ppi_start); nrfx_ppi_channel_free(ppi_start); }
     NRF_TIMER1->TASKS_STOP = 1;            /* release the us timebase         */
+    timer1_lock_release();
     nfc_tag_14a_set_sniff_passive(false);  /* re-enable normal TX responses  */
     nrf_gpio_pin_set(HF_ANT_SEL);          /* leave coil on NFCT (emulation) */
     pcd_14a_reader_antenna_off();
@@ -5002,6 +5160,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_SET_BLE_PAIRING_ENABLE,       NULL,                        cmd_processor_set_ble_pairing_enable,        NULL                   },
     {    DATA_CMD_GET_SLEEP_TIMEOUT,            NULL,                        cmd_processor_get_sleep_timeout,             NULL                   },
     {    DATA_CMD_SET_SLEEP_TIMEOUT,            NULL,                        cmd_processor_set_sleep_timeout,             NULL                   },
+    {    DATA_CMD_GET_LF_XTAL_TRIM,             NULL,                        cmd_processor_get_lf_xtal_trim,              NULL                   },
+    {    DATA_CMD_SET_LF_XTAL_TRIM,             NULL,                        cmd_processor_set_lf_xtal_trim,              NULL                   },
     {    DATA_CMD_GET_ALL_SLOT_NICKS,           NULL,                        cmd_processor_get_all_slot_nicks,            NULL                   },
     {    DATA_CMD_GET_BOOTLOADER_VERSION,       NULL,                        cmd_processor_get_bootloader_version,        NULL                   },
     {    DATA_CMD_GET_DFU_APP_VERSION,          NULL,                        cmd_processor_get_dfu_app_version,           NULL                   },
@@ -5084,11 +5244,20 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_IOPROX_DECODE_RAW,            NULL,                        cmd_processor_ioprox_decode_raw,             NULL                   },
     {    DATA_CMD_IOPROX_COMPOSE_ID,            NULL,                        cmd_processor_ioprox_compose_id,             NULL                   },
     {    DATA_CMD_EM4X05_SCAN,                  before_reader_run,           cmd_processor_em4x05_scan,                   NULL                   },
+    {    DATA_CMD_LF_HITAG2_READ,               before_reader_run,           cmd_processor_lf_hitag2_read,                NULL                   },
+    {    DATA_CMD_LF_IA_TRACE_READ,             NULL,                        cmd_processor_lf_ia_trace_read,              NULL                   },
+    {    DATA_CMD_LF_IA_TRACE_CLEAR,            NULL,                        cmd_processor_lf_ia_trace_clear,             NULL                   },
+    {    DATA_CMD_LF_IA_ENV_ARM,                NULL,                        cmd_processor_lf_ia_env_arm,                 NULL                   },
+    {    DATA_CMD_LF_IA_ENV_READ,               NULL,                        cmd_processor_lf_ia_env_read,                NULL                   },
+    {    DATA_CMD_LF_IA_TUNING,                 NULL,                        cmd_processor_lf_ia_tuning,                  NULL                   },
     {    DATA_CMD_LF_SNIFF,                     before_reader_run,           cmd_processor_lf_sniff,                      NULL                   },
     {    DATA_CMD_LOGIC_ARM,                    NULL,                        cmd_processor_logic_arm,                     NULL                   },
     {    DATA_CMD_LOGIC_READ,                   NULL,                        cmd_processor_logic_read,                    NULL                   },
     {    DATA_CMD_LOGIC_STOP,                   NULL,                        cmd_processor_logic_stop,                    NULL                   },
     {    DATA_CMD_LOGIC_SPI_READ,               NULL,                        cmd_processor_logic_spi_read,                NULL                   },
+    {    DATA_CMD_LF_XTAL_START,                NULL,                        cmd_processor_lf_xtal_start,                  NULL                   },
+    {    DATA_CMD_LF_XTAL_READ,                 NULL,                        cmd_processor_lf_xtal_read,                   NULL                   },
+    {    DATA_CMD_LF_XTAL_STOP,                 NULL,                        cmd_processor_lf_xtal_stop,                   NULL                   },
     {    DATA_CMD_HF14A_SNIFF,                  NULL,                        cmd_processor_hf14a_sniff,                   NULL                   },
     {    DATA_CMD_HF14A_AUTH_TRACE,             before_hf_reader_run,        cmd_processor_hf14a_auth_trace,              after_hf_reader_run    },
     {    DATA_CMD_HF14A_PASSIVE_RECV,           before_reader_run,           cmd_processor_hf14a_passive_recv,            NULL                   },
@@ -5156,6 +5325,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_INDALA_GET_EMU_ID,              NULL,                      cmd_processor_indala_get_emu_id,             NULL                   },
     {    DATA_CMD_FDXB_SET_EMU_ID,                NULL,                      cmd_processor_fdxb_set_emu_id,               NULL                   },
     {    DATA_CMD_FDXB_GET_EMU_ID,                NULL,                      cmd_processor_fdxb_get_emu_id,               NULL                   },
+    {    DATA_CMD_HITAG2_SET_EMU_ID,              NULL,                      cmd_processor_hitag2_set_emu_id,             NULL                   },
+    {    DATA_CMD_HITAG2_GET_EMU_ID,              NULL,                      cmd_processor_hitag2_get_emu_id,             NULL                   },
 
     {    DATA_CMD_SEOS_READ_EMU_DATA,             NULL,                      cmd_processor_seos_read_emu_data,            NULL                   },
     {    DATA_CMD_SEOS_WRITE_EMU_DATA,            NULL,                      cmd_processor_seos_write_emu_data,           NULL                   },

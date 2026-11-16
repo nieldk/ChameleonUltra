@@ -1043,6 +1043,66 @@ class ChameleonCMD:
             resp.parsed = (bool(overflow), total, calls, cc)
         return resp
 
+    @expect_response([Status.SUCCESS, Status.DEVICE_MODE_ERROR])
+    def lf_xtal_start(self):
+        """
+        Hold HFXO on and start a free-running 16 MHz tick count on TIMER1,
+        for measuring this device's own crystal ppm offset against an
+        external time reference. parsed = busy (True if TIMER1 is on loan
+        to something else, e.g. an in-progress `hf 14a sniff --tap`).
+        """
+        resp = self.device.send_cmd_sync(Command.LF_XTAL_START)
+        resp.parsed = (resp.status == Status.DEVICE_MODE_ERROR)
+        return resp
+
+    @expect_response([Status.SUCCESS, Status.PAR_ERR])
+    def lf_xtal_read(self):
+        """
+        Sample the running tick counter. parsed = (not_running, raw_ticks,
+        hfclk_lapsed, running). raw_ticks is a raw 32-bit register that
+        wraps roughly every 268 s -- the caller is responsible for polling
+        more often than that and accumulating across wraps.
+        """
+        resp = self.device.send_cmd_sync(Command.LF_XTAL_READ)
+        if resp.status == Status.PAR_ERR:
+            resp.parsed = (True, 0, False, False)
+        else:
+            raw_ticks, hfclk_lapsed, running = struct.unpack('!IBB', resp.data[:6])
+            resp.parsed = (False, raw_ticks, bool(hfclk_lapsed), bool(running))
+        return resp
+
+    @expect_response([Status.SUCCESS, Status.PAR_ERR])
+    def lf_xtal_stop(self):
+        """
+        Final sample (taken before teardown), then release HFXO and TIMER1.
+        parsed = (not_running, raw_ticks, hfclk_lapsed).
+        """
+        resp = self.device.send_cmd_sync(Command.LF_XTAL_STOP)
+        if resp.status == Status.PAR_ERR:
+            resp.parsed = (True, 0, False)
+        else:
+            raw_ticks, hfclk_lapsed, _running = struct.unpack('!IBB', resp.data[:6])
+            resp.parsed = (False, raw_ticks, bool(hfclk_lapsed))
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def get_lf_xtal_trim(self):
+        """parsed = signed trim value in tenths of a ppm (0 = no correction)"""
+        resp = self.device.send_cmd_sync(Command.GET_LF_XTAL_TRIM)
+        resp.parsed = struct.unpack('!h', resp.data[:2])[0]
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def set_lf_xtal_trim(self, trim_ppm_x10: int):
+        """
+        :param trim_ppm_x10: signed tenths-of-a-ppm correction applied to
+            every LF tag-emulation PWM step's duration. Positive lengthens
+            (slows) the emulated bit timing, negative shortens (speeds) it.
+        """
+        trim_ppm_x10 = max(-32768, min(32767, int(trim_ppm_x10)))
+        payload = struct.pack('!h', trim_ppm_x10)
+        return self.device.send_cmd_sync(Command.SET_LF_XTAL_TRIM, payload)
+
     @expect_response(Status.LF_TAG_OK)
     def em4x05_scan(self, pwd: int = 0):
         """
@@ -1062,6 +1122,136 @@ class ChameleonCMD:
         resp = self.device.send_cmd_sync(Command.EM4X05_SCAN, pwd_bytes)
         if resp.status == Status.LF_TAG_OK:
             resp.parsed = struct.unpack('!IIIBB', resp.data[:14])
+        return resp
+
+    @expect_response([Status.LF_TAG_OK, Status.LF_TAG_NO_FOUND])
+    def hitag2_read(self, password: bytes):
+        """
+        Password-mode Hitag2 session: START_AUTH, read UID, send `password`,
+        and if the tag accepts it, read every other page (crypto mode is
+        not supported).
+
+        :param password: 4-byte reader password (this device's own page-1
+            value, i.e. what a real reader would be configured with)
+        :return: parsed tuple (status, pages) where pages is a list of 8
+            bytes objects (4 bytes each), or None if the tag never answered
+            or rejected the password
+        """
+        resp = self.device.send_cmd_sync(Command.LF_HITAG2_READ, bytes(password))
+        if resp.status == Status.LF_TAG_OK:
+            pages = [resp.data[i * 4:(i + 1) * 4] for i in range(8)]
+            resp.parsed = (resp.status, pages)
+        else:
+            resp.parsed = (resp.status, None)
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def lf_ia_trace_read(self, first: int = 0):
+        """
+        Read records of the interactive LF exchange trace, from index first (oldest kept is 0).
+
+        :return: (records written since the clear, record size, list of raw records, first records kept, current boot)
+        """
+        resp = self.device.send_cmd_sync(
+            Command.LF_IA_TRACE_READ, struct.pack(">H", first)
+        )
+        if resp.status == Status.SUCCESS:
+            total, size, n, keep, boot = struct.unpack_from("<IHBBH", resp.data)
+            resp.parsed = (
+                total,
+                size,
+                [resp.data[10 + i * size: 10 + (i + 1) * size] for i in range(n)],
+                keep,
+                boot,
+            )
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def lf_ia_counters(self):
+        """
+        Read the interactive LF engine's counters, which survive sleep until the trace is cleared.
+
+        :return: dict of sessions, commands, responses, late, buffers, buffer_slips, max_handler_us
+        """
+        resp = self.device.send_cmd_sync(Command.LF_IA_TUNING)
+        if resp.status == Status.SUCCESS:
+            names = (
+                "sessions",
+                "commands",
+                "responses",
+                "late",
+                "buffers",
+                "buffer_slips",
+                "max_handler_us",
+            )
+            # The reply is the engine's 14-byte tuning, then the counters.
+            resp.parsed = dict(zip(names, struct.unpack_from("<7I", resp.data, 14)))
+        return resp
+
+    LF_IA_TUNING_FIELDS = (
+        "settle_us", "lost_us", "min_gap_us", "thr_pct", "quiet_after_cmd", "tx_lead_us", "eof_us", "rsp_delay_us",
+    )
+    LF_IA_TUNING_FMT = struct.Struct("<HHHBBhHH")
+
+    @expect_response(Status.SUCCESS)
+    def lf_ia_tuning_get(self):
+        """
+        Read the interactive LF engine's live tuning (settle_us, lost_us, min_gap_us, thr_pct, quiet_after_cmd,
+        tx_lead_us, eof_us, rsp_delay_us). 0 for eof_us/rsp_delay_us means the module's own default applies.
+
+        :return: dict of the tuning fields
+        """
+        resp = self.device.send_cmd_sync(Command.LF_IA_TUNING)
+        if resp.status == Status.SUCCESS:
+            resp.parsed = dict(zip(self.LF_IA_TUNING_FIELDS, self.LF_IA_TUNING_FMT.unpack_from(resp.data)))
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def lf_ia_tuning_set(self, tuning: dict):
+        """
+        Set the interactive LF engine's live tuning. Takes effect immediately, lost on reset -- re-apply after
+        every power cycle if it isn't just a one-off test.
+
+        :param tuning: dict with all of LF_IA_TUNING_FIELDS
+        :return: dict of the tuning fields as the device now has them
+        """
+        packed = self.LF_IA_TUNING_FMT.pack(*(tuning[f] for f in self.LF_IA_TUNING_FIELDS))
+        resp = self.device.send_cmd_sync(Command.LF_IA_TUNING, packed)
+        if resp.status == Status.SUCCESS:
+            resp.parsed = dict(zip(self.LF_IA_TUNING_FIELDS, self.LF_IA_TUNING_FMT.unpack_from(resp.data)))
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def lf_ia_trace_clear(self):
+        """
+        Clear the interactive LF exchange trace and its counters.
+        """
+        return self.device.send_cmd_sync(Command.LF_IA_TRACE_CLEAR)
+
+    @expect_response(Status.SUCCESS)
+    def lf_ia_env_arm(self):
+        """
+        Arm the interactive LF engine's raw envelope ring. It keeps recording until a command ends the listening
+        session, or is overwritten by newer samples -- read it promptly.
+        """
+        return self.device.send_cmd_sync(Command.LF_IA_ENV_ARM)
+
+    @expect_response(Status.SUCCESS)
+    def lf_ia_env_read(self, offset: int = 0):
+        """
+        Read samples from the envelope ring, from index offset (oldest kept is 0).
+
+        :return: (frozen, newest sample's time in us, list of raw i16 samples)
+        """
+        resp = self.device.send_cmd_sync(
+            Command.LF_IA_ENV_READ, struct.pack(">H", offset)
+        )
+        if resp.status == Status.SUCCESS:
+            frozen = resp.data[0]
+            last_us = struct.unpack_from("<I", resp.data, 1)[0]
+            n = struct.unpack_from("<H", resp.data, 5)[0]
+            samples = list(struct.unpack_from(f"<{n}h", resp.data, 7))
+            resp.parsed = (frozen, last_us, samples)
         return resp
 
     @expect_response(Status.LF_TAG_OK)
@@ -1530,6 +1720,28 @@ class ChameleonCMD:
         """
         resp = self.device.send_cmd_sync(Command.FDXB_GET_EMU_ID)
         resp.parsed = resp.data[:13]
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def hitag2_set_emu_id(self, pages: bytes):
+        """
+        Set the 8 Hitag2 pages (32 bytes) emulated by the active slot:
+        page0 UID, page1 reader's password, page2 key-high (crypto mode
+        only, unused here), page3 config+tag password, pages4-7 user data.
+
+        :param pages: 32 bytes (8 pages * 4 bytes)
+        """
+        if len(pages) != 32:
+            raise ValueError("The pages bytes length must equal 32")
+        return self.device.send_cmd_sync(Command.HITAG2_SET_EMU_ID, pages)
+
+    @expect_response(Status.SUCCESS)
+    def hitag2_get_emu_id(self):
+        """
+        Get the emulated Hitag2 pages (32 bytes, 8 pages * 4 bytes).
+        """
+        resp = self.device.send_cmd_sync(Command.HITAG2_GET_EMU_ID)
+        resp.parsed = [resp.data[i * 4:(i + 1) * 4] for i in range(8)]
         return resp
 
     @expect_response(Status.SUCCESS)

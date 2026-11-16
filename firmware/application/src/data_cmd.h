@@ -78,6 +78,8 @@
 #define DATA_CMD_GET_BOOTLOADER_VERSION         (1061)
 #define DATA_CMD_GET_FREE_MEMORY                (1062)
 #define DATA_CMD_GET_BATTERY_INFO_EX            (1063)  /* RRG uses 1043 here, taken by GET_BLE_NAME in this fork */
+#define DATA_CMD_GET_LF_XTAL_TRIM               (1064)  /* -> i16 tenths-of-ppm, see settings.h lf_xtal_trim_ppm_x10 */
+#define DATA_CMD_SET_LF_XTAL_TRIM               (1065)  /* i16 tenths-of-ppm */
 
 //
 // ******************************************************************
@@ -168,6 +170,9 @@
 #define DATA_CMD_LOGIC_SPI_READ                 (3040)  // in: offset(2) count(2)
 #endif
 #define DATA_CMD_PYRAMID_SCAN                   (3041)  /* RRG uses 3021, taken by FDXB_SCAN in this fork */
+#define DATA_CMD_LF_XTAL_START                  (3042)  // hold HFXO, start free-running 16MHz tick count on TIMER1
+#define DATA_CMD_LF_XTAL_READ                   (3043)  // out: raw_ticks(4) hfclk_lapsed(1) running(1)
+#define DATA_CMD_LF_XTAL_STOP                   (3044)  // out: same as READ (final sample, before teardown)
 
 //
 // ******************************************************************
@@ -302,10 +307,19 @@
 #define DATA_CMD_INDALA_GET_EMU_ID              (5015)
 #define DATA_CMD_FDXB_SET_EMU_ID                (5016)
 #define DATA_CMD_FDXB_GET_EMU_ID                (5017)
+#define DATA_CMD_HITAG2_SET_EMU_ID              (5018)  // in: 32 bytes, 8 pages
+#define DATA_CMD_HITAG2_GET_EMU_ID              (5019)  // out: 32 bytes, 8 pages
 
 #define DATA_CMD_EM4X05_SCAN                    (3030)
 #define DATA_CMD_EM4X05_READSNIFF               (3032)
 #define DATA_CMD_LF_SNIFF                       (3031)
 #define DATA_CMD_LF_SEARCH                      (3033)  // PM3-style: sweep all LF decoders, first hit
+#define DATA_CMD_LF_HITAG2_READ                 (3034)  // in: 4-byte password; out: 8 pages * 4 bytes (password mode only)
+
+#define DATA_CMD_LF_IA_TRACE_READ               (3180)  // in: u16 first index; out: trace records from there
+#define DATA_CMD_LF_IA_TRACE_CLEAR              (3181)
+#define DATA_CMD_LF_IA_ENV_ARM                  (3182)
+#define DATA_CMD_LF_IA_ENV_READ                 (3183)  // in: u16 offset; out: raw envelope samples from there
+#define DATA_CMD_LF_IA_TUNING                   (3184)  // in: optional lf_ia_tuning_t to set; out: tuning + stats
 
 #endif

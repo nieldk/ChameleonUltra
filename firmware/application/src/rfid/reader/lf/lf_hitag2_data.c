@@ -1,0 +1,256 @@
+#include "lf_hitag2_data.h"
+
+#include <string.h>
+
+#include "app_status.h"
+#include "bsp_delay.h"
+#include "bsp_time.h"
+#include "circular_buffer.h"
+#include "lf_125khz_radio.h"
+#include "lf_reader_data.h"
+#include "timeslot.h"
+
+#include "utils/manchester.h"
+
+#define NRF_LOG_MODULE_NAME lf_hitag2
+#include "nrf_log.h"
+#include "nrf_log_ctrl.h"
+#include "nrf_log_default_backends.h"
+NRF_LOG_MODULE_REGISTER();
+
+/* -----------------------------------------------------------------------
+ * Protocol constants, verified against RfidResearchGroup/proxmark3
+ * (armsrc/hitag2.c, include/protocols.h) -- see header comment.
+ * All *_TC constants are in carrier periods (Tc = 1/125000 s = 8 us).
+ * --------------------------------------------------------------------- */
+
+/* HITAG2_START_AUTH/READ_PAGE/READ_PAGE_INV/WRITE_PAGE moved to
+ * lf_hitag2_data.h -- hitag2_tag.c (tag emulation) needs them too. */
+
+#define HITAG2_T_LOW_TC    6    /* field-off pulse per bit, 4..10 Tc range */
+#define HITAG2_T_0_TC      20   /* total bit-0 duration, 18..22 Tc range */
+#define HITAG2_T_1_TC      30   /* total bit-1 duration, 26..32 Tc range */
+
+#define HITAG2_T_WAIT_POWERUP_TC        313  /* tag internal powerup, 312.5 Tc */
+#define HITAG2_T_WAIT_START_AUTH_MAX_TC 232  /* tag gives up waiting for START_AUTH after this */
+#define HITAG2_T_WAIT_RESP_TC           227  /* measured: tag's first answer edge, from reader's last edge */
+
+/* Receive-side Manchester classifier, RF/32 (4 kbit/s): full period 32 Tc,
+ * half period 16 Tc. Dimensionally scaled from this codebase's own
+ * hardware-proven EM4x05 RF/64 classifier (T1/T15/T2 spacing halved,
+ * jitter window halved to match) -- see lf_em4x05_data.c em4x05_rf64_period.
+ * First-cut: expect this to need the same kind of hardware-capture tuning
+ * EM4x05/T55xx read went through in this tree. */
+#define HITAG2_T1    32u
+#define HITAG2_T15   48u
+#define HITAG2_T2    64u
+#define HITAG2_JIT   8u
+
+#define HITAG2_RESP_TIMEOUT_TC   600   /* generous window to catch the ~227 Tc answer */
+#define HITAG2_CB_SIZE           64
+
+static uint8_t hitag2_rf32_period(uint8_t interval) {
+    if (interval >= (HITAG2_T1  - HITAG2_JIT) && interval <= (HITAG2_T1  + HITAG2_JIT)) return 0;
+    if (interval >= (HITAG2_T15 - HITAG2_JIT) && interval <= (HITAG2_T15 + HITAG2_JIT)) return 1;
+    if (interval >= (HITAG2_T2  - HITAG2_JIT) && interval <= (HITAG2_T2  + HITAG2_JIT)) return 2;
+    return 3;
+}
+
+static circular_buffer g_cb;
+
+static void hitag2_edge_cb(void) {
+    uint32_t cnt = get_lf_counter_value();
+    uint16_t val = (cnt > 0xff) ? 0xff : (uint16_t)(cnt & 0xff);
+    cb_push_back(&g_cb, &val);
+    clear_lf_counter_value();
+}
+
+/* -----------------------------------------------------------------------
+ * Transmit side (reader -> tag), Binary Pulse Length Modulation.
+ *
+ * Per bit: drop the field for T_LOW, restore it, then hold it for the
+ * remainder of the bit period (T_0 or T_1 minus T_LOW). This is the exact
+ * sequence of armsrc/hitag2.c's hitag2_reader_send_bit(), just expressed
+ * with this codebase's stop/start_lf_125khz_radio() primitives (the same
+ * primitives lf_em4x05_data.c's send_em4305_bit() uses for its own gap
+ * encoding).
+ * --------------------------------------------------------------------- */
+
+static void hitag2_send_bit(bool bit) {
+    stop_lf_125khz_radio();
+    bsp_delay_us(HITAG2_T_LOW_TC * 8);
+    start_lf_125khz_radio();
+    if (bit) {
+        bsp_delay_us((HITAG2_T_1_TC - HITAG2_T_LOW_TC) * 8);
+    } else {
+        bsp_delay_us((HITAG2_T_0_TC - HITAG2_T_LOW_TC) * 8);
+    }
+}
+
+/* Sends the low `nbits` bits of `value`, MSB first. */
+static void hitag2_send_bits(uint32_t value, uint8_t nbits) {
+    for (int8_t i = (int8_t)(nbits - 1); i >= 0; i--) {
+        hitag2_send_bit((value >> i) & 1);
+    }
+}
+
+/* 10-bit READ_PAGE/WRITE_PAGE/READ_PAGE_INVERTED frame.
+ *
+ * tx0 = opcode | (page << 3) | (complement >> 2), where complement = page ^ 7
+ * (3 bits); the remaining 2 low bits of complement are the frame's last 2
+ * bits. Derived from -- and verified bit-for-bit self-consistent with --
+ * armsrc/hitag2.c's own sector decode:
+ *   sector = ~(((rx[0]<<2)&0x04) | ((rx[1]>>6)&0x03)) & 0x07
+ * and its own command encode:
+ *   tx[0] = OPCODE | (blocknr << 3) | ((blocknr ^ 7) >> 2)
+ */
+static uint16_t hitag2_page_frame(uint8_t opcode, uint8_t page) {
+    uint8_t page3 = page & 0x7;
+    uint8_t comp  = (page3 ^ 0x7) & 0x7;
+    uint8_t tx0   = opcode | (page3 << 3) | (comp >> 2);
+    return ((uint16_t)tx0 << 2) | (comp & 0x3);
+}
+
+/* -----------------------------------------------------------------------
+ * Receive side (tag -> reader): plain Manchester, no preamble, no SOF --
+ * the tag's reply is exactly `nbits` data bits starting at its first edge.
+ * Arms the GPIOTE edge counter right after the reader's last transmitted
+ * edge and decodes until `nbits` bits are collected or the window times
+ * out.
+ * --------------------------------------------------------------------- */
+
+static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_ms) {
+    cb_init(&g_cb, HITAG2_CB_SIZE, sizeof(uint16_t));
+    register_rio_callback(hitag2_edge_cb);
+    lf_125khz_radio_gpiote_enable();
+    clear_lf_counter_value();
+
+    manchester modem = {
+        .sync = true,
+        .rp   = hitag2_rf32_period,
+    };
+    uint8_t bits[64] = {0};
+    uint8_t bit_count = 0;
+    bool ok = false;
+
+    autotimer *p_at = bsp_obtain_timer(0);
+    while (!ok && NO_TIMEOUT_1MS(p_at, timeout_ms)) {
+        uint16_t interval = 0;
+        if (!cb_pop_front(&g_cb, &interval)) {
+            continue;
+        }
+        bool mbits[2] = {false, false};
+        int8_t mbitlen = 0;
+        manchester_feed(&modem, (uint8_t)interval, mbits, &mbitlen);
+        if (mbitlen == -1) {
+            /* Only resync before the frame has started; once we've locked
+             * onto real bits a glitch should not silently restart framing
+             * with no indication, but with no fixed preamble to re-anchor
+             * on, a reset-and-retry is the only option available here. */
+            manchester_reset(&modem);
+            bit_count = 0;
+            continue;
+        }
+        for (int8_t i = 0; i < mbitlen && bit_count < nbits; i++) {
+            bits[bit_count++] = mbits[i] ? 1 : 0;
+        }
+        if (bit_count >= nbits) {
+            ok = true;
+        }
+    }
+    bsp_return_timer(p_at);
+    lf_125khz_radio_gpiote_disable();
+    unregister_rio_callback();
+    cb_free(&g_cb);
+
+    if (!ok) {
+        return false;
+    }
+    memset(out, 0, (nbits + 7) / 8);
+    for (uint8_t i = 0; i < nbits; i++) {
+        if (bits[i]) {
+            out[i / 8] |= (uint8_t)(0x80 >> (i % 8));
+        }
+    }
+    return true;
+}
+
+/* -----------------------------------------------------------------------
+ * Command helpers -- each is one request_timeslot() transmit followed by
+ * one receive window, mirroring lf_em4x05_data.c's per-command structure.
+ * --------------------------------------------------------------------- */
+
+static uint32_t g_send_value;
+static uint8_t  g_send_nbits;
+static volatile bool g_timeslot_done = false;
+
+static void hitag2_send_timeslot_cb(void) {
+    hitag2_send_bits(g_send_value, g_send_nbits);
+    g_timeslot_done = true;
+}
+
+static bool hitag2_tx_rx(uint32_t tx_value, uint8_t tx_nbits,
+                          uint8_t *rx_out, uint8_t rx_nbits,
+                          uint32_t powerup_wait_us, uint32_t timeout_ms) {
+    g_send_value    = tx_value;
+    g_send_nbits    = tx_nbits;
+    g_timeslot_done = false;
+
+    /* Timeslot must cover: optional powerup wait + worst-case bit time
+     * (T_1) per bit, with margin. */
+    uint32_t slot_us = powerup_wait_us + ((uint32_t)tx_nbits * HITAG2_T_1_TC * 8) + 2000;
+    request_timeslot(slot_us, hitag2_send_timeslot_cb);
+
+    autotimer *p_wait = bsp_obtain_timer(0);
+    while (!g_timeslot_done && NO_TIMEOUT_1MS(p_wait, 20)) {}
+    bsp_return_timer(p_wait);
+
+    if (!g_timeslot_done) {
+        return false;
+    }
+    return hitag2_receive_frame(rx_out, rx_nbits, timeout_ms);
+}
+
+bool hitag2_reader_get_uid(uint8_t uid[HITAG2_PAGE_SIZE], uint32_t timeout_ms) {
+    /* START_AUTH is 5 bits, top-aligned in the frame: value 0x18 (binary
+     * 11000) sent as the low 5 bits -- see HITAG2_START_AUTH's own comment
+     * in protocols.h ("left 5 bits only"); hitag2_send_bits sends the low
+     * `nbits` bits MSB-first, so passing 0x18/5 here reproduces "11000". */
+    start_lf_125khz_radio();
+    bsp_delay_us(HITAG2_T_WAIT_POWERUP_TC * 8);
+    bool ok = hitag2_tx_rx(0x18, 5, uid, 32, 0, timeout_ms);
+    return ok;
+}
+
+bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
+                         uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
+                         uint32_t timeout_ms) {
+    memset(pages, 0, HITAG2_NUM_PAGES * HITAG2_PAGE_SIZE);
+
+    if (!hitag2_reader_get_uid(pages[HITAG2_PAGE_UID], timeout_ms)) {
+        return false;
+    }
+
+    uint32_t pwd_val = ((uint32_t)password[0] << 24) | ((uint32_t)password[1] << 16) |
+                        ((uint32_t)password[2] << 8)  | (uint32_t)password[3];
+    uint8_t reply[4];
+    if (!hitag2_tx_rx(pwd_val, 32, reply, 32, 0, timeout_ms)) {
+        /* Tag may have ignored this (wrong password, or crypto mode) --
+         * either way there is nothing more we can read without the key. */
+        return false;
+    }
+    memcpy(pages[HITAG2_PAGE_CONFIG], reply, 4);
+    memcpy(pages[HITAG2_PAGE_PWD], password, 4);
+
+    static const uint8_t remaining_pages[] = {2, 4, 5, 6, 7};
+    for (size_t i = 0; i < sizeof(remaining_pages); i++) {
+        uint8_t page = remaining_pages[i];
+        uint16_t frame = hitag2_page_frame(HITAG2_READ_PAGE, page);
+        uint8_t out[4];
+        if (!hitag2_tx_rx(frame, 10, out, 32, 0, timeout_ms)) {
+            return false;
+        }
+        memcpy(pages[page], out, 4);
+    }
+    return true;
+}

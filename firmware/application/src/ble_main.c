@@ -94,6 +94,7 @@ BLE_ADVERTISING_DEF(m_advertising);                                             
 uint16_t          batt_lvl_in_milli_volts = 0;
 uint8_t           percentage_batt_lvl = 0;
 static nrf_saadc_value_t adc_buf[ADC_BUF_COUNT][ADC_BUF_SIZE];
+static size_t     m_lf_adc_rearm_len     = ADC_BUF_SIZE;
 static uint16_t   m_conn_handle          = BLE_CONN_HANDLE_INVALID;                 /**< Handle of the current connection. */
 static uint16_t   m_ble_nus_max_data_len = BLE_GATT_ATT_MTU_DEFAULT - 3;            /**< Maximum length of data (in bytes) that can be transmitted to the peer by the Nordic UART service module. */
 lf_adc_callback_t m_lf_adc_callback      = NULL;
@@ -849,7 +850,7 @@ static void peer_manager_init(void) {
 void saadc_event_handler(nrfx_saadc_evt_t const *p_event) {
     if (p_event->type == NRFX_SAADC_EVT_DONE && m_lf_adc_callback != NULL) {
         ret_code_t err_code;
-        err_code = nrfx_saadc_buffer_convert(&adc_buf[next_free_buf_index()][0], ADC_BUF_SIZE);
+        err_code = nrfx_saadc_buffer_convert(&adc_buf[next_free_buf_index()][0], m_lf_adc_rearm_len);
         APP_ERROR_CHECK(err_code);
 
         m_lf_adc_callback(p_event->data.done.p_buffer, p_event->data.done.size);
@@ -968,6 +969,26 @@ void register_lf_adc_callback(lf_adc_callback_t cb) {
 
 void unregister_lf_adc_callback(void) {
     nrfx_saadc_uninit();
+    adc_configure();
+    m_lf_adc_callback = NULL;
+}
+
+static void lf_adc_claimed(nrf_saadc_value_t *samples, size_t n) {
+    (void)samples;
+    (void)n;
+}
+
+// Keeps the battery timer off the SAADC while the caller (the interactive
+// LF engine, lf_ia_engine.c) drives it directly with its own init/channel
+// config. lf_adc_release() hands it back.
+void lf_adc_claim(void) {
+    m_lf_adc_callback = lf_adc_claimed;
+    nrfx_saadc_uninit();
+}
+
+// Hands the SAADC back to the battery timer after a claim. The caller has
+// left the nrfx driver uninitialised.
+void lf_adc_release(void) {
     adc_configure();
     m_lf_adc_callback = NULL;
 }

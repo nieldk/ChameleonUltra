@@ -23,6 +23,13 @@ void ble_update_device_name(void);
 void register_lf_adc_callback(lf_adc_callback_t cb);
 void unregister_lf_adc_callback(void);
 
+/* Keeps the battery timer off the SAADC while a caller drives it directly
+ * with its own init/channel config (the interactive LF engine,
+ * lf_ia_engine.c). The caller leaves the nrfx driver uninitialised on
+ * release; lf_adc_release() reconfigures it for the battery timer. */
+void lf_adc_claim(void);
+void lf_adc_release(void);
+
 /* Relay mode: temporarily take over advertising with raw relay data.
  * Call ble_main_relay_adv_restore() when relay stops. */
 void ble_main_relay_adv_set(const uint8_t *raw_adv, uint8_t len);

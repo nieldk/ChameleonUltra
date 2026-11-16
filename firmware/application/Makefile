@@ -35,6 +35,7 @@ STANDALONE_ZIGBEE          ?= 0   # disabled by default (passive 802.15.4 receiv
 STANDALONE_SPECTRUM        ?= 0   # disabled by default (one-shot 2.4 GHz ISM energy-detect sweep in SoftDevice timeslots)
 STANDALONE_ESB             ?= 0   # disabled by default (passive ESB-framed RX, known address, in SoftDevice timeslots)
 STANDALONE_ESB_PROMISC     ?= 0   # disabled by default (brute-force partial-address ESB sniff, unknown address -- experimental)
+LF_IA_DEBUG                ?= 0   # disabled by default (interactive LF engine's trace ring + envelope capture, ~10KB RAM; bring-up only)
 
 CFLAGS += -DCONFIG_STANDALONE_AUTHTRACE=$(STANDALONE_AUTHTRACE)
 CFLAGS += -DCONFIG_STANDALONE_SLOT_CYCLE=$(STANDALONE_SLOT_CYCLE)
@@ -54,6 +55,7 @@ CFLAGS += -DCONFIG_STANDALONE_ESB=$(STANDALONE_ESB)
 CFLAGS += -DCONFIG_STANDALONE_ESB_PROMISC=$(STANDALONE_ESB_PROMISC)
 CFLAGS += -DCONFIG_GDB_GATEWAY_EXEC=$(GDB_GATEWAY_EXEC)
 CFLAGS += -DCONFIG_GDB_GATEWAY_PKT=$(GDB_GATEWAY_PKT)
+CFLAGS += -DLF_IA_DEBUG=$(LF_IA_DEBUG)
 
 # Source files common to all targets
 SRC_FILES += \
@@ -66,6 +68,8 @@ SRC_FILES += \
   $(PROJ_DIR)/ble_main.c \
   $(PROJ_DIR)/rfid_main.c \
   $(PROJ_DIR)/settings.c \
+  $(PROJ_DIR)/timer1_lock.c \
+  $(PROJ_DIR)/lf_xtal_counter.c \
   $(PROJ_DIR)/app_standalone.c \
   $(PROJ_DIR)/app_cmd_standalone.c \
   $(PROJ_DIR)/standalone_led.c \
@@ -108,6 +112,10 @@ SRC_FILES += \
   $(PROJ_DIR)/rfid/nfctag/lf/protocols/wiegand.c \
   $(PROJ_DIR)/rfid/nfctag/lf/protocols/idteck.c \
   $(PROJ_DIR)/rfid/nfctag/lf/protocols/pyramid.c \
+  $(PROJ_DIR)/rfid/nfctag/lf/interactive/lf_ia_codec.c \
+  $(PROJ_DIR)/rfid/nfctag/lf/interactive/lf_ia_engine.c \
+  $(PROJ_DIR)/rfid/nfctag/lf/interactive/lf_ia_trace.c \
+  $(PROJ_DIR)/rfid/nfctag/lf/interactive/lf_ia_hitag2.c \
   $(PROJ_DIR)/utils/dataframe.c \
   $(PROJ_DIR)/utils/battery_health.c \
   $(PROJ_DIR)/utils/delayed_reset.c \
@@ -331,6 +339,7 @@ INC_FOLDERS += \
   ${PROJ_DIR}/rfid/nfctag/hf \
   ${PROJ_DIR}/rfid/nfctag/lf \
   ${PROJ_DIR}/rfid/nfctag/lf/utils \
+  ${PROJ_DIR}/rfid/nfctag/lf/interactive \
   $(SDK_ROOT)/components/nfc/ndef/generic/message \
   $(SDK_ROOT)/components/nfc/t2t_lib \
   $(SDK_ROOT)/components/nfc/t4t_parser/hl_detection_procedure \
@@ -489,6 +498,7 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
     $(PROJ_DIR)/rfid/reader/lf/lf_125khz_radio.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_em410x_data.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_em4x05_data.c \
+    $(PROJ_DIR)/rfid/reader/lf/lf_hitag2_data.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_gap.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_reader_generic.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_reader_data.c \
