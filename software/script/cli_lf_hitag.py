@@ -200,7 +200,9 @@ class LFHitag2RawCapture(ReaderRequiredUnit):
         return p
 
     def on_exec(self, args: argparse.Namespace):
-        intervals = self.cmd.hitag2_raw_capture()
+        rx_arm_gap_us, intervals = self.cmd.hitag2_raw_capture()
+        print(f" RX armed {rx_arm_gap_us} us after the last TX edge "
+              f"(Hitag2's reply window is ~1600-1650 us after that edge).")
         if not intervals:
             print(f" {CR}No edges captured at all -- comparator saw nothing "
                   f"(check the tag is actually in the field).{C0}")

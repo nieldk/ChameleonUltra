@@ -129,7 +129,17 @@ reader code than to `lf_ia_engine.c`.
   intervals captured (Tc units, 1 Tc = 8 µs) instead of running them through
   the classifier -- the reader-side equivalent of `lf interactive env read`,
   for when `read`/`cread` report no answer and the question is what the
-  comparator is actually producing.
+  comparator is actually producing. Also prints the app_timer tick gap
+  between the last TX edge and RX actually arming: TX happens inside a
+  `request_timeslot()` callback, and RX only arms after that call returns,
+  which means after its SD radio session has fully closed. EM4x05/T55xx
+  (whose reply windows are far more forgiving) proved this structure fine,
+  but Hitag2's own reply window is only ~199-206 T0 (~1.6-1.65ms) after the
+  reader's last edge -- if the session-close overhead alone is in that
+  range, RX arms after the tag has already answered and nothing is ever
+  seen. On real hardware this printed zero captured edges on every attempt,
+  which is consistent with that gap, but the gap itself hasn't been read
+  back yet to confirm it.
 * **Field left on across a failed attempt** (found on real hardware): none
   of the three reader functions ever called `stop_lf_125khz_radio()` --
   `start_lf_125khz_radio()` ran once per session and was never matched, so a

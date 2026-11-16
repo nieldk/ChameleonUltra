@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "app_status.h"
+#include "app_timer.h"
 #include "bsp_delay.h"
 #include "bsp_time.h"
 #include "circular_buffer.h"
@@ -199,8 +200,14 @@ static uint32_t g_send_value;
 static uint8_t  g_send_nbits;
 static volatile bool g_timeslot_done = false;
 
+/* app_timer tick (RTC1, APP_TIMER_CONFIG_RTC_FREQUENCY=1 -> 16384 Hz, ~61us/tick)
+ * at the instant the last TX bit's edge finishes, for measuring the gap to
+ * when RX actually arms -- see hitag2_reader_raw_capture(). */
+static volatile uint32_t g_tx_done_tick;
+
 static void hitag2_send_timeslot_cb(void) {
     hitag2_send_bits(g_send_value, g_send_nbits);
+    g_tx_done_tick = app_timer_cnt_get();
     g_timeslot_done = true;
 }
 
@@ -261,9 +268,20 @@ static bool hitag2_tx_rx_bytes(const uint8_t *tx_bytes, uint8_t tx_nbits,
  * units hitag2_edge_cb feeds the Manchester classifier, clipped to 0xff) in
  * place of decoding them. The classifier thresholds (HITAG2_T1/T15/T2) are a
  * first-cut dimensional scaling, not hardware-verified -- this is for seeing
- * what the comparator actually produces on real silicon instead of guessing. */
-bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out, uint32_t timeout_ms) {
+ * what the comparator actually produces on real silicon instead of guessing.
+ *
+ * Also reports rx_arm_gap_ticks: the app_timer (RTC1, ~61us/tick) gap
+ * between the last TX edge finishing (timestamped inside the timeslot
+ * callback) and RX actually arming here, after request_timeslot() has torn
+ * its SD radio session down. Hitag2's reply window is only ~199-206 T0
+ * (~1.6-1.65ms) after the reader's last edge -- unlike EM4x05/T55xx, whose
+ * much longer windows this TX-then-arm structure was proven against -- so if
+ * that teardown alone is in the same ballpark, RX would arm after the tag
+ * has already answered and nothing would ever be seen. */
+bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out,
+                                uint32_t *rx_arm_gap_ticks_out, uint32_t timeout_ms) {
     *n_out = 0;
+    *rx_arm_gap_ticks_out = 0;
     start_lf_125khz_radio();
     bsp_delay_us(HITAG2_T_WAIT_POWERUP_TC * 8);
 
@@ -282,10 +300,12 @@ bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out
         return false;
     }
 
+    uint32_t rx_arm_tick_pre = app_timer_cnt_get();
     cb_init(&g_cb, HITAG2_CB_SIZE, sizeof(uint16_t));
     register_rio_callback(hitag2_edge_cb);
     lf_125khz_radio_gpiote_enable();
     clear_lf_counter_value();
+    *rx_arm_gap_ticks_out = (rx_arm_tick_pre - g_tx_done_tick) & 0xFFFFFFu;
 
     uint8_t n = 0;
     autotimer *p_at = bsp_obtain_timer(0);

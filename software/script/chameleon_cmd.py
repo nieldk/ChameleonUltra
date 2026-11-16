@@ -1175,12 +1175,22 @@ class ChameleonCMD:
         them through the RF/32 Manchester classifier. For determining real
         classifier thresholds from hardware capture.
 
-        :return: parsed list of ints (possibly empty, if no edges at all
-            were seen -- that is itself informative)
+        Also returns the RTC1 app_timer tick gap (~61us/tick) between the
+        last TX edge and RX actually arming, since on this device's
+        architecture (TX via a radio timeslot, RX armed only after that
+        timeslot's SD radio session fully closes) that gap competes
+        directly with Hitag2's own ~1.6-1.65ms reply window.
+
+        :return: parsed tuple (rx_arm_gap_us, intervals) where intervals is
+            a list of ints (possibly empty, if no edges at all were seen --
+            that is itself informative)
         """
         resp = self.device.send_cmd_sync(Command.LF_HITAG2_RAW_CAPTURE, b'')
-        n = resp.data[0] if len(resp.data) > 0 else 0
-        resp.parsed = list(resp.data[1:1 + n])
+        gap_ticks = int.from_bytes(resp.data[0:4], "little") if len(resp.data) >= 4 else 0
+        n = resp.data[4] if len(resp.data) > 4 else 0
+        intervals = list(resp.data[5:5 + n])
+        rx_arm_gap_us = round(gap_ticks * 1000000 / 16384)
+        resp.parsed = (rx_arm_gap_us, intervals)
         return resp
 
     @expect_response(Status.SUCCESS)

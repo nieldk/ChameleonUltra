@@ -2485,11 +2485,14 @@ lfHitag2.command("raw", "Debug: send START_AUTH and print the raw GPIOTE edge in
 ], async (a) => {
   await needReader();
   const f = okOrThrow(await request(CU.LF_HITAG2_RAW_CAPTURE));
-  const n = f.data.length ? f.data[0] : 0;
-  const intervals = Array.from(f.data.slice(1, 1 + n));
-  if(!intervals.length) return ["No edges captured at all -- comparator saw nothing (check the tag is actually in the field)."];
+  const gapTicks = f.data.length >= 4 ? (f.data[0] | (f.data[1]<<8) | (f.data[2]<<16) | (f.data[3]<<24)) >>> 0 : 0;
+  const gapUs = Math.round(gapTicks * 1000000 / 16384);
+  const n = f.data.length > 4 ? f.data[4] : 0;
+  const intervals = Array.from(f.data.slice(5, 5 + n));
+  const lines = [`RX armed ${gapUs} us after the last TX edge (Hitag2's reply window is ~1600-1650 us after that edge).`];
+  if(!intervals.length){ lines.push("No edges captured at all -- comparator saw nothing (check the tag is actually in the field)."); return lines; }
   const buckets = [[32,"1T "],[48,"1.5T"],[64,"2T "]];
-  const lines = [`Captured ${intervals.length} interval(s), Tc units:`];
+  lines.push(`Captured ${intervals.length} interval(s), Tc units:`);
   intervals.forEach((v, i) => {
     const hit = buckets.find(([c]) => Math.abs(v - c) <= 8);
     lines.push(`    [${String(i).padStart(2," ")}]  ${String(v).padStart(3," ")}  ${hit ? hit[1] : "?"}`);
