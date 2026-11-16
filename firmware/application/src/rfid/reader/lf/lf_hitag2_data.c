@@ -181,6 +181,19 @@ static uint16_t hitag2_page_frame(uint8_t opcode, uint8_t page) {
  * out.
  * --------------------------------------------------------------------- */
 
+/* How many leading runs to try dropping before decoding, and in which load
+ * polarity: neither is known at compile time. A leading run can be the
+ * arm-to-first-edge gap (clear_lf_counter_value() firing before the tag's
+ * reply starts) or a short comparator glitch (lf hitag2 raw has shown both,
+ * on real hardware, in the same capture) -- either misaligns every half-bit
+ * after it by one run if not dropped, or if wrongly dropped. Rather than
+ * guess which applies, try a handful of offsets; Manchester's own coding
+ * check (lf_ia_decode_runs() stops at the first bit that breaks it) makes a
+ * wrong offset or polarity fail outright, not decode plausible-looking
+ * garbage, so whichever combination reaches nbits clean bits first is the
+ * real one. */
+#define HITAG2_RX_MAX_SKIP   4
+
 static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_ms) {
     cb_init(&g_cb, HITAG2_CB_SIZE, sizeof(uint16_t));
     register_rio_callback(hitag2_edge_cb);
@@ -189,7 +202,6 @@ static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_m
 
     uint16_t runs[HITAG2_MAX_RUNS];
     size_t n_runs = 0;
-    bool skipped_first = false;  /* first run is arm-to-first-edge, not a bit */
     uint8_t bits_buf[(64 + 7) / 8] = {0};
     bool ok = false;
 
@@ -199,16 +211,17 @@ static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_m
         if (!cb_pop_front(&g_cb, &run)) {
             continue;
         }
-        if (!skipped_first) {
-            skipped_first = true;
-            continue;
-        }
         if (n_runs < HITAG2_MAX_RUNS) {
             runs[n_runs++] = run;
         }
-        if (lf_ia_decode_runs(runs, n_runs, LF_IA_CODING_MANCHESTER, HITAG2_BIT_FC, 0,
-                               bits_buf, nbits) >= nbits) {
-            ok = true;
+        for (uint8_t skip = 0; !ok && skip < HITAG2_RX_MAX_SKIP && skip < n_runs; skip++) {
+            static const uint32_t flags_try[] = {0, LF_IA_INVERT};
+            for (uint8_t f = 0; !ok && f < ARRAY_SIZE(flags_try); f++) {
+                if (lf_ia_decode_runs(runs + skip, n_runs - skip, LF_IA_CODING_MANCHESTER,
+                                       HITAG2_BIT_FC, flags_try[f], bits_buf, nbits) >= nbits) {
+                    ok = true;
+                }
+            }
         }
     }
     bsp_return_timer(p_at);
