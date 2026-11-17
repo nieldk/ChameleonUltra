@@ -55,6 +55,7 @@ NRF_LOG_MODULE_REGISTER();
 
 #define HITAG2_REPLY_WAIT_TC     1000u /* give up if no reply edge by then (8 ms) */
 #define HITAG2_MIN_HIGH_TC       5u
+#define HITAG2_TWO_UNIT_HIGH_TC  17u  /* measured: one unit 8-16 Tc, two units 17-28 */
 #define HITAG2_IDLE_TC           110u /* no edge for this long: frame over */
 #define HITAG2_CB_SIZE           64
 
@@ -206,6 +207,8 @@ static uint16_t hitag2_page_frame(uint8_t opcode, uint8_t page) {
  *   B: 1T -> 1          1.5T -> 0 (M)
  *   M: 1T -> 0          1.5T -> 1,1 (B)        2T -> 1,0
  *      2.5T -> 1,1,1 (B)   3T -> 1,1,0         lost edge: 1.5T + the rest
+ * A lost edge inside a run of equal bits gives the same intervals (2T in
+ * B is 1,1; in M 2T/3T can be 0,0 / 0,0,0); see short_high below.
  * A 1 after a 0 has no rising edge of its own, so in M anything that is
  * not 1T (including the frame simply ending) means the next bit is 1.
  *
@@ -230,6 +233,7 @@ static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_m
     uint32_t first_tc = arm_tc;     /* end of TX -> first rising edge */
     uint32_t acc = 0;               /* Tc since the last accepted rising edge */
     uint32_t rise_acc = 0;          /* acc at a rising edge not yet accepted */
+    uint32_t last_high = 0;         /* high run that followed the last accepted edge */
     int32_t carry = 0;              /* half the last edge's timing error */
     bool started = false;
     bool in_m = false;
@@ -286,6 +290,7 @@ static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_m
                               ? (first_tc + HITAG2_BIT_FC / 2 - HITAG2_REPLY_START_TC) / HITAG2_BIT_FC : 0;
             sof = (missed >= HITAG2_SOF_BITS) ? 0 : (uint8_t)(HITAG2_SOF_BITS - missed);
             started = true;
+            last_high = high;
             HITAG2_EMIT(1);
             continue;
         }
@@ -297,6 +302,11 @@ static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_m
         }
         uint32_t whole = acc;
         acc = high;
+        /* A lost edge leaves the same interval as real data; the high run
+         * before it tells them apart: one unit means the missing pulse was
+         * a plain repeat of the last bit, two units is the pattern above. */
+        bool short_high = last_high < HITAG2_TWO_UNIT_HIGH_TC;
+        last_high = high;
 
         /* Nominal interval in half-bits (2 = 1T ... 6 = 3T), 0 = none. */
         uint8_t hb = (adj < 40) ? 2 : (adj < 56) ? 3 : (adj < 72) ? 4 : (adj < 88) ? 5 : (adj <= 104) ? 6 : 0;
@@ -304,6 +314,16 @@ static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_m
         if (!in_m) {
             if (hb == 2) {
                 HITAG2_EMIT(1);
+            } else if (hb == 4 && n > 1) {
+                HITAG2_EMIT(1);  /* 1,1 with the edge between them lost */
+                HITAG2_EMIT(1);
+            } else if (hb == 5 && n > 1) {
+                /* 1,0 with the 1's edge lost. 0,0 with the first 0's edge
+                 * lost measures the same; that pulse follows a two-unit
+                 * low, and those have not been seen to drop. */
+                HITAG2_EMIT(1);
+                HITAG2_EMIT(0);
+                in_m = true;
             } else if (hb == 3) {
                 HITAG2_EMIT(0);
                 in_m = true;
@@ -314,7 +334,7 @@ static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_m
                                   ? (first_tc + HITAG2_BIT_FC / 2 - HITAG2_REPLY_START_TC) / HITAG2_BIT_FC : 0;
                 sof = (missed >= HITAG2_SOF_BITS) ? 0 : (uint8_t)(HITAG2_SOF_BITS - missed);
                 carry = 0;
-                continue;
+                continue;  /* last_high already holds this edge's high run */
             } else {
                 done = true;
             }
@@ -329,18 +349,18 @@ static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_m
                     in_m = false;
                     break;
                 case 4:
-                    HITAG2_EMIT(1);
+                    HITAG2_EMIT(short_high ? 0 : 1);  /* 0,0 or 1,0 */
                     HITAG2_EMIT(0);
                     break;
                 case 5:
-                    HITAG2_EMIT(1);
+                    HITAG2_EMIT(short_high ? 0 : 1);  /* 0,1,1 or 1,1,1 */
                     HITAG2_EMIT(1);
                     HITAG2_EMIT(1);
                     in_m = false;
                     break;
                 case 6:
-                    HITAG2_EMIT(1);
-                    HITAG2_EMIT(1);
+                    HITAG2_EMIT(short_high ? 0 : 1);  /* 0,0,0 or 1,1,0 */
+                    HITAG2_EMIT(short_high ? 0 : 1);
                     HITAG2_EMIT(0);
                     break;
                 default:
