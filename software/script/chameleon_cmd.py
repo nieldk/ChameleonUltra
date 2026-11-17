@@ -1133,16 +1133,22 @@ class ChameleonCMD:
 
         :param password: 4-byte reader password (this device's own page-1
             value, i.e. what a real reader would be configured with)
-        :return: parsed tuple (status, pages) where pages is a list of 8
-            bytes objects (4 bytes each), or None if the tag never answered
-            or rejected the password
+        :return: parsed tuple (status, pages, fail) where pages is a list
+            of 8 bytes objects (4 bytes each), or None on failure; fail is
+            then (stage, attempts, uid): stage 1 = no answer to START_AUTH,
+            2 = no answer to the password, 3 = a page read failed
         """
         resp = self.device.send_cmd_sync(Command.LF_HITAG2_READ, bytes(password))
         if resp.status == Status.LF_TAG_OK:
             pages = [resp.data[i * 4:(i + 1) * 4] for i in range(8)]
-            resp.parsed = (resp.status, pages)
+            resp.parsed = (resp.status, pages, None)
         else:
-            resp.parsed = (resp.status, None)
+            # fail_stage(1) attempts(1) uid(4): how far the device got.
+            # Older firmware sends nothing.
+            fail = None
+            if len(resp.data) >= 6:
+                fail = (resp.data[0], resp.data[1], bytes(resp.data[2:6]))
+            resp.parsed = (resp.status, None, fail)
         return resp
 
     @expect_response([Status.LF_TAG_OK, Status.LF_TAG_NO_FOUND])
@@ -1155,16 +1161,20 @@ class ChameleonCMD:
 
         :param key: 6-byte crypto-mode key, same byte order as this
             device's own page 1/2 key storage (see `lf hitag2 econfig`)
-        :return: parsed tuple (status, pages) where pages is a list of 8
-            bytes objects (4 bytes each), or None if the tag never answered
-            or rejected the challenge
+        :return: parsed tuple (status, pages, fail), as hitag2_read (stage
+            2 = no answer to the challenge)
         """
         resp = self.device.send_cmd_sync(Command.LF_HITAG2_CRYPTO_READ, bytes(key))
         if resp.status == Status.LF_TAG_OK:
             pages = [resp.data[i * 4:(i + 1) * 4] for i in range(8)]
-            resp.parsed = (resp.status, pages)
+            resp.parsed = (resp.status, pages, None)
         else:
-            resp.parsed = (resp.status, None)
+            # fail_stage(1) attempts(1) uid(4): how far the device got.
+            # Older firmware sends nothing.
+            fail = None
+            if len(resp.data) >= 6:
+                fail = (resp.data[0], resp.data[1], bytes(resp.data[2:6]))
+            resp.parsed = (resp.status, None, fail)
         return resp
 
     @expect_response([Status.LF_TAG_OK])

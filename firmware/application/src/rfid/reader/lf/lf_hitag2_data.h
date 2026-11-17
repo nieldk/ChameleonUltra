@@ -44,6 +44,14 @@ extern "C" {
  * Works regardless of password/crypto mode -- no authentication performed. */
 bool hitag2_reader_get_uid(uint8_t uid[HITAG2_PAGE_SIZE], uint32_t timeout_ms);
 
+/* How far a failed read/cread got (the furthest stage any attempt
+ * reached) and how many attempts were made; valid after either returns. */
+#define HITAG2_FAIL_NONE  0
+#define HITAG2_FAIL_UID   1  /* no usable answer to START_AUTH */
+#define HITAG2_FAIL_AUTH  2  /* UID read, no answer to the password/challenge */
+#define HITAG2_FAIL_PAGE  3  /* authenticated, a page read got no answer */
+void hitag2_reader_last_result(uint8_t *fail_stage, uint8_t *attempts);
+
 /* Full password-mode session: START_AUTH, read UID, send `password`, and if
  * the tag accepts it (replies with its own page 3), read every other page
  * with individual READ_PAGE commands.

@@ -3015,7 +3015,11 @@ static data_frame_tx_t *cmd_processor_lf_hitag2_read(uint16_t cmd, uint16_t stat
     uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE];
     bool ok = hitag2_reader_read(data, pages, 500);
     if (!ok) {
-        return data_frame_make(cmd, STATUS_LF_TAG_NO_FOUND, 0, NULL);
+        // fail_stage(1) attempts(1) uid(4, as last read; zero if never)
+        uint8_t fail[6];
+        hitag2_reader_last_result(&fail[0], &fail[1]);
+        memcpy(fail + 2, pages[HITAG2_PAGE_UID], 4);
+        return data_frame_make(cmd, STATUS_LF_TAG_NO_FOUND, sizeof(fail), fail);
     }
     return data_frame_make(cmd, STATUS_LF_TAG_OK, sizeof(pages), (uint8_t *)pages);
 }
@@ -3027,7 +3031,11 @@ static data_frame_tx_t *cmd_processor_lf_hitag2_crypto_read(uint16_t cmd, uint16
     uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE];
     bool ok = hitag2_reader_crypto_read(data, pages, 500);
     if (!ok) {
-        return data_frame_make(cmd, STATUS_LF_TAG_NO_FOUND, 0, NULL);
+        // fail_stage(1) attempts(1) uid(4, as last read; zero if never)
+        uint8_t fail[6];
+        hitag2_reader_last_result(&fail[0], &fail[1]);
+        memcpy(fail + 2, pages[HITAG2_PAGE_UID], 4);
+        return data_frame_make(cmd, STATUS_LF_TAG_NO_FOUND, sizeof(fail), fail);
     }
     return data_frame_make(cmd, STATUS_LF_TAG_OK, sizeof(pages), (uint8_t *)pages);
 }

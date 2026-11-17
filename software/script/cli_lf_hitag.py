@@ -32,6 +32,18 @@ PAGE_NAMES = {
 }
 
 
+def _fail_text(fail, rejected):
+    """Message for a failed read/cread from the device's (stage, attempts, uid)."""
+    if fail is None:
+        return f"No answer, or {rejected}."
+    stage, attempts, uid = fail
+    if stage <= 1:
+        return f"No usable answer to START_AUTH in {attempts} attempts (no tag, or the reply did not decode)."
+    if stage == 2:
+        return f"UID {uid.hex().upper()} read, then no answer: {rejected}."
+    return f"UID {uid.hex().upper()} read and authenticated, but a page read got no answer."
+
+
 def _parse_hex4(s, label):
     s = s.strip()
     if len(s) != 8:
@@ -141,9 +153,9 @@ class LFHitag2Read(ReaderRequiredUnit):
             print(f" {CR}{e}{C0}")
             return
 
-        status, pages = self.cmd.hitag2_read(pwd)
+        status, pages, fail = self.cmd.hitag2_read(pwd)
         if pages is None:
-            print(f" {CR}No answer, or password rejected (wrong key, or tag is in crypto mode).{C0}")
+            print(f" {CR}{_fail_text(fail, 'password rejected (wrong key, or tag is in crypto mode)')}{C0}")
             return
 
         for i, page in enumerate(pages):
@@ -173,9 +185,9 @@ class LFHitag2CryptoRead(ReaderRequiredUnit):
             print(f" {CR}{e}{C0}")
             return
 
-        status, pages = self.cmd.hitag2_crypto_read(key)
+        status, pages, fail = self.cmd.hitag2_crypto_read(key)
         if pages is None:
-            print(f" {CR}No answer, or challenge rejected (wrong key, or tag is in password mode).{C0}")
+            print(f" {CR}{_fail_text(fail, 'challenge rejected (wrong key, or tag is in password mode)')}{C0}")
             return
 
         for i, page in enumerate(pages):

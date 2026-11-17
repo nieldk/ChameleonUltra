@@ -49,10 +49,11 @@ NRF_LOG_MODULE_REGISTER();
 
 /* Tc from the end of TX (g_tx_done_tick) to the reply's first rising edge,
  * as seen through LF_OA_OUT. Measured on real hardware against CU's own
- * emulator: RX arms ~230-237 Tc after TX and the second SOF edge lands
- * ~10 Tc later. Only has to be right to +-16 Tc (half a bit). */
+ * emulator (second SOF edge ~246 Tc after TX). Only has to be right to
+ * +-16 Tc (half a bit). */
 #define HITAG2_REPLY_START_TC   214u
 
+#define HITAG2_REPLY_WAIT_TC     1000u /* give up if no reply edge by then (8 ms) */
 #define HITAG2_MIN_HIGH_TC       5u
 #define HITAG2_IDLE_TC           110u /* no edge for this long: frame over */
 #define HITAG2_CB_SIZE           64
@@ -208,8 +209,8 @@ static uint16_t hitag2_page_frame(uint8_t opcode, uint8_t page) {
  * A 1 after a 0 has no rising edge of its own, so in M anything that is
  * not 1T (including the frame simply ending) means the next bit is 1.
  *
- * RX arms about a bit into the SOF, so how many SOF bits are left is worked
- * out from when the first edge lands relative to the end of TX.
+ * RX may arm after the reply has begun, so how many SOF bits are left is
+ * worked out from when the first edge lands relative to the end of TX.
  * --------------------------------------------------------------------- */
 
 /* app_timer tick (RTC1, APP_TIMER_CONFIG_RTC_FREQUENCY=1 -> 16384 Hz, ~61us/tick)
@@ -246,6 +247,9 @@ static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_m
     while (!done && NO_TIMEOUT_1MS(p_at, timeout_ms)) {
         uint16_t run = 0;
         if (!cb_pop_front(&g_cb, &run)) {
+            if (!started && (uint16_t)get_lf_counter_value() > HITAG2_REPLY_WAIT_TC) {
+                done = true;  /* nothing came: don't sit out the whole timeout */
+            }
             /* Signed: an edge between the two reads makes this negative. */
             if (started && (int16_t)((uint16_t)get_lf_counter_value() - g_last_cnt) > (int16_t)HITAG2_IDLE_TC) {
                 if (in_m) {
@@ -275,6 +279,9 @@ static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_m
         if (!started) {
             first_tc += acc;
             acc = high;
+            if (first_tc + HITAG2_BIT_FC / 2 < HITAG2_REPLY_START_TC) {
+                continue;  /* too early to be the reply: idle noise */
+            }
             uint32_t missed = (first_tc + HITAG2_BIT_FC / 2 > HITAG2_REPLY_START_TC)
                               ? (first_tc + HITAG2_BIT_FC / 2 - HITAG2_REPLY_START_TC) / HITAG2_BIT_FC : 0;
             sof = (missed >= HITAG2_SOF_BITS) ? 0 : (uint8_t)(HITAG2_SOF_BITS - missed);
@@ -381,6 +388,21 @@ static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_m
  * one receive window, mirroring lf_em4x05_data.c's per-command structure.
  * --------------------------------------------------------------------- */
 
+/* Timeslot length for one TX frame. request_timeslot() only returns once
+ * the slot has run out (sd_radio_session_close() waits for it), and RX
+ * cannot arm before that -- so every microsecond of slot past the end of
+ * TX is reply lost. Sized to worst-case bit time this cost ~1.9 ms after
+ * START_AUTH (one SOF bit gone) and ~4 ms after an all-zero password (ten
+ * bits gone, seen on real hardware); the reply starts ~1.65 ms after TX.
+ * So: the frame's actual length, plus the measured ~7 us/symbol of PWM
+ * stop/start overhead with headroom. Overstaying a slot is fatal, hence
+ * headroom rather than none. */
+static uint32_t hitag2_slot_us(uint8_t nbits, uint32_t ones) {
+    uint32_t tx_tc = ones * HITAG2_T_1_TC + (nbits - ones) * HITAG2_T_0_TC +
+                     HITAG2_T_LOW_TC + HITAG2_T_STOP_TC;
+    return tx_tc * 8u + 700u + 12u * (nbits + 1u);
+}
+
 static uint32_t g_send_value;
 static uint8_t  g_send_nbits;
 static volatile bool g_timeslot_done = false;
@@ -409,10 +431,11 @@ static bool hitag2_tx_rx(uint32_t tx_value, uint8_t tx_nbits,
     g_send_nbits    = tx_nbits;
     g_timeslot_done = false;
 
-    /* Timeslot must cover: optional powerup wait + worst-case bit time
-     * (T_1) per bit, with margin. */
-    uint32_t slot_us = powerup_wait_us + ((uint32_t)tx_nbits * HITAG2_T_1_TC * 8) + 2000;
-    request_timeslot(slot_us, hitag2_send_timeslot_cb);
+    uint32_t ones = 0;
+    for (uint8_t i = 0; i < tx_nbits; i++) {
+        ones += (tx_value >> i) & 1u;
+    }
+    request_timeslot(powerup_wait_us + hitag2_slot_us(tx_nbits, ones), hitag2_send_timeslot_cb);
 
     autotimer *p_wait = bsp_obtain_timer(0);
     while (!g_timeslot_done && NO_TIMEOUT_1MS(p_wait, 20)) {}
@@ -443,8 +466,11 @@ static bool hitag2_tx_rx_bytes(const uint8_t *tx_bytes, uint8_t tx_nbits,
     g_send8_nbits   = tx_nbits;
     g_timeslot_done = false;
 
-    uint32_t slot_us = powerup_wait_us + ((uint32_t)tx_nbits * HITAG2_T_1_TC * 8) + 2000;
-    request_timeslot(slot_us, hitag2_send8_timeslot_cb);
+    uint32_t ones = 0;
+    for (uint8_t i = 0; i < tx_nbits; i++) {
+        ones += (tx_bytes[i / 8] >> (7 - (i % 8))) & 1u;
+    }
+    request_timeslot(powerup_wait_us + hitag2_slot_us(tx_nbits, ones), hitag2_send8_timeslot_cb);
 
     autotimer *p_wait = bsp_obtain_timer(0);
     while (!g_timeslot_done && NO_TIMEOUT_1MS(p_wait, 20)) {}
@@ -494,8 +520,7 @@ bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out
     g_send_value    = 0x18;  /* START_AUTH, 5 bits -- see hitag2_reader_get_uid */
     g_send_nbits    = 5;
     g_timeslot_done = false;
-    uint32_t slot_us = ((uint32_t)5 * HITAG2_T_1_TC * 8) + 2000;
-    request_timeslot(slot_us, hitag2_send_timeslot_cb);
+    request_timeslot(hitag2_slot_us(5, 2), hitag2_send_timeslot_cb);
 
     autotimer *p_wait = bsp_obtain_timer(0);
     while (!g_timeslot_done && NO_TIMEOUT_1MS(p_wait, 20)) {}
@@ -552,7 +577,7 @@ bool hitag2_reader_get_uid(uint8_t uid[HITAG2_PAGE_SIZE], uint32_t timeout_ms) {
     return ok;
 }
 
-bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
+static uint8_t hitag2_read_session(const uint8_t password[HITAG2_PAGE_SIZE],
                          uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
                          uint32_t timeout_ms) {
     memset(pages, 0, HITAG2_NUM_PAGES * HITAG2_PAGE_SIZE);
@@ -565,7 +590,7 @@ bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
     if (!hitag2_reader_get_uid(pages[HITAG2_PAGE_UID], timeout_ms)) {
         stop_lf_125khz_radio();
         hitag2_hfclk_release();
-        return false;
+        return HITAG2_FAIL_UID;
     }
 
     uint32_t pwd_val = ((uint32_t)password[0] << 24) | ((uint32_t)password[1] << 16) |
@@ -576,7 +601,7 @@ bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
          * either way there is nothing more we can read without the key. */
         stop_lf_125khz_radio();
         hitag2_hfclk_release();
-        return false;
+        return HITAG2_FAIL_AUTH;
     }
     memcpy(pages[HITAG2_PAGE_CONFIG], reply, 4);
     memcpy(pages[HITAG2_PAGE_PWD], password, 4);
@@ -589,16 +614,16 @@ bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
         if (!hitag2_tx_rx(frame, 10, out, 32, 0, timeout_ms)) {
             stop_lf_125khz_radio();
             hitag2_hfclk_release();
-            return false;
+            return HITAG2_FAIL_PAGE;
         }
         memcpy(pages[page], out, 4);
     }
     stop_lf_125khz_radio();
     hitag2_hfclk_release();
-    return true;
+    return HITAG2_FAIL_NONE;
 }
 
-bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
+static uint8_t hitag2_crypto_read_session(const uint8_t key[HITAG2_KEY_SIZE],
                                 uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
                                 uint32_t timeout_ms) {
     memset(pages, 0, HITAG2_NUM_PAGES * HITAG2_PAGE_SIZE);
@@ -607,7 +632,7 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
     if (!hitag2_reader_get_uid(pages[HITAG2_PAGE_UID], timeout_ms)) {
         stop_lf_125khz_radio();
         hitag2_hfclk_release();
-        return false;
+        return HITAG2_FAIL_UID;
     }
 
     /* Key and UID are plain little-endian decodes of the raw bytes, then bit-reversed per byte (hitag2_rev64/32) --
@@ -627,7 +652,7 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
         /* No answer: wrong key, or the tag is actually in password mode. */
         stop_lf_125khz_radio();
         hitag2_hfclk_release();
-        return false;
+        return HITAG2_FAIL_AUTH;
     }
     hitag2_crypto_transcrypt(&cs, reply, 4, 0);
     memcpy(pages[HITAG2_PAGE_CONFIG], reply, 4);  /* already have page 3 -- skip re-reading it below */
@@ -647,12 +672,75 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
         if (!hitag2_tx_rx(enc_value, 10, out, 32, 0, timeout_ms)) {
             stop_lf_125khz_radio();
             hitag2_hfclk_release();
-            return false;
+            return HITAG2_FAIL_PAGE;
         }
         hitag2_crypto_transcrypt(&cs, out, 4, 0);
         memcpy(pages[page], out, 4);
     }
     stop_lf_125khz_radio();
     hitag2_hfclk_release();
-    return true;
+    return HITAG2_FAIL_NONE;
+}
+
+/* The link is marginal in both directions on real hardware (the tag does
+ * not always answer START_AUTH, and the comparator can drop more reply
+ * pulses than can be reconstructed), so a session is retried from a fresh
+ * power-up a few times before giving up. */
+#define HITAG2_SESSION_ATTEMPTS  8
+#define HITAG2_FIELD_OFF_MS      10
+
+static uint8_t g_fail_stage;
+static uint8_t g_attempts;
+static uint8_t g_seen_uid[HITAG2_PAGE_SIZE];
+
+/* Bookkeeping after a failed attempt; pages[] keeps the last UID that was
+ * actually read, since the next attempt wipes it. */
+static void hitag2_note_failure(uint8_t stage, uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE]) {
+    if (stage > HITAG2_FAIL_UID) {
+        memcpy(g_seen_uid, pages[HITAG2_PAGE_UID], HITAG2_PAGE_SIZE);
+    }
+    if (stage > g_fail_stage) {
+        g_fail_stage = stage;  /* report the furthest any attempt got */
+    }
+    memcpy(pages[HITAG2_PAGE_UID], g_seen_uid, HITAG2_PAGE_SIZE);
+    bsp_delay_ms(HITAG2_FIELD_OFF_MS);
+}
+
+void hitag2_reader_last_result(uint8_t *fail_stage, uint8_t *attempts) {
+    *fail_stage = g_fail_stage;
+    *attempts = g_attempts;
+}
+
+bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
+                         uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
+                         uint32_t timeout_ms) {
+    g_fail_stage = HITAG2_FAIL_NONE;
+    memset(g_seen_uid, 0, sizeof(g_seen_uid));
+    for (g_attempts = 1; g_attempts <= HITAG2_SESSION_ATTEMPTS; g_attempts++) {
+        uint8_t stage = hitag2_read_session(password, pages, timeout_ms);
+        if (stage == HITAG2_FAIL_NONE) {
+            g_fail_stage = HITAG2_FAIL_NONE;
+            return true;
+        }
+        hitag2_note_failure(stage, pages);
+    }
+    g_attempts = HITAG2_SESSION_ATTEMPTS;
+    return false;
+}
+
+bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
+                                uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
+                                uint32_t timeout_ms) {
+    g_fail_stage = HITAG2_FAIL_NONE;
+    memset(g_seen_uid, 0, sizeof(g_seen_uid));
+    for (g_attempts = 1; g_attempts <= HITAG2_SESSION_ATTEMPTS; g_attempts++) {
+        uint8_t stage = hitag2_crypto_read_session(key, pages, timeout_ms);
+        if (stage == HITAG2_FAIL_NONE) {
+            g_fail_stage = HITAG2_FAIL_NONE;
+            return true;
+        }
+        hitag2_note_failure(stage, pages);
+    }
+    g_attempts = HITAG2_SESSION_ATTEMPTS;
+    return false;
 }
