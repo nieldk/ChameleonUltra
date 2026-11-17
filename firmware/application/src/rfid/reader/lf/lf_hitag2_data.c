@@ -706,10 +706,11 @@ static uint8_t hitag2_crypto_read_session(const uint8_t key[HITAG2_KEY_SIZE],
  * not always answer START_AUTH, and the comparator can drop reply pulses),
  * and Hitag2 replies carry no checksum: a misread bit is otherwise silent
  * (seen: one page off by two bits in an otherwise good crypto read). So a
- * session is repeated from a fresh power-up until two in a row return the
- * same eight pages. */
+ * session is repeated from a fresh power-up until one returns the same
+ * eight pages as any earlier one (the last HITAG2_KEEP are kept). */
 #define HITAG2_SESSION_ATTEMPTS  12
 #define HITAG2_FIELD_OFF_MS      10
+#define HITAG2_KEEP              4
 
 static uint8_t g_fail_stage;
 static uint8_t g_attempts;
@@ -726,20 +727,22 @@ typedef uint8_t (*hitag2_session_t)(const uint8_t *secret,
 static bool hitag2_read_verified(hitag2_session_t session, const uint8_t *secret,
                                  uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
                                  uint32_t timeout_ms) {
-    uint8_t prev[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE];
+    uint8_t prev[HITAG2_KEEP][HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE];
     uint8_t seen_uid[HITAG2_PAGE_SIZE] = {0};
-    bool have_prev = false;
+    uint8_t n_prev = 0;
 
     g_fail_stage = HITAG2_FAIL_NONE;
     for (g_attempts = 1; g_attempts <= HITAG2_SESSION_ATTEMPTS; g_attempts++) {
         uint8_t stage = session(secret, pages, timeout_ms);
         if (stage == HITAG2_FAIL_NONE) {
-            if (have_prev && memcmp(prev, pages, sizeof(prev)) == 0) {
-                g_fail_stage = HITAG2_FAIL_NONE;
-                return true;
+            for (uint8_t i = 0; i < n_prev && i < HITAG2_KEEP; i++) {
+                if (memcmp(prev[i], pages, sizeof(prev[i])) == 0) {
+                    g_fail_stage = HITAG2_FAIL_NONE;
+                    return true;
+                }
             }
-            memcpy(prev, pages, sizeof(prev));
-            have_prev = true;
+            memcpy(prev[n_prev % HITAG2_KEEP], pages, sizeof(prev[0]));
+            n_prev++;
             stage = HITAG2_FAIL_VERIFY;
         }
         if (stage > HITAG2_FAIL_UID) {

@@ -50,7 +50,7 @@ bool hitag2_reader_get_uid(uint8_t uid[HITAG2_PAGE_SIZE], uint32_t timeout_ms);
 #define HITAG2_FAIL_UID   1  /* no usable answer to START_AUTH */
 #define HITAG2_FAIL_AUTH  2  /* UID read, no answer to the password/challenge */
 #define HITAG2_FAIL_PAGE  3  /* authenticated, a page read got no answer */
-#define HITAG2_FAIL_VERIFY 4 /* sessions completed, but no two in a row agreed */
+#define HITAG2_FAIL_VERIFY 4 /* sessions completed, but no two agreed */
 void hitag2_reader_last_result(uint8_t *fail_stage, uint8_t *attempts);
 
 /* Full password-mode session: START_AUTH, read UID, send `password`, and if
