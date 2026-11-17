@@ -593,7 +593,7 @@ bool hitag2_reader_get_uid(uint8_t uid[HITAG2_PAGE_SIZE], uint32_t timeout_ms) {
     hitag2_hfclk_hold();
     start_lf_125khz_radio();
 
-    bsp_delay_ms(2000);   /* <-- field on, hold 2 s before continuing */
+    bsp_delay_ms(200);   /* <-- field on, hold 2 s before continuing */
 
     bsp_delay_us(HITAG2_T_WAIT_POWERUP_TC * 8);
     bool ok = hitag2_tx_rx(0x18, 5, uid, 32, 0, timeout_ms);
