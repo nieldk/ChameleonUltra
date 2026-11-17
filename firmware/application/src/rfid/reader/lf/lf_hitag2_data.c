@@ -703,64 +703,67 @@ static uint8_t hitag2_crypto_read_session(const uint8_t key[HITAG2_KEY_SIZE],
 }
 
 /* The link is marginal in both directions on real hardware (the tag does
- * not always answer START_AUTH, and the comparator can drop more reply
- * pulses than can be reconstructed), so a session is retried from a fresh
- * power-up a few times before giving up. */
-#define HITAG2_SESSION_ATTEMPTS  8
+ * not always answer START_AUTH, and the comparator can drop reply pulses),
+ * and Hitag2 replies carry no checksum: a misread bit is otherwise silent
+ * (seen: one page off by two bits in an otherwise good crypto read). So a
+ * session is repeated from a fresh power-up until two in a row return the
+ * same eight pages. */
+#define HITAG2_SESSION_ATTEMPTS  12
 #define HITAG2_FIELD_OFF_MS      10
 
 static uint8_t g_fail_stage;
 static uint8_t g_attempts;
-static uint8_t g_seen_uid[HITAG2_PAGE_SIZE];
-
-/* Bookkeeping after a failed attempt; pages[] keeps the last UID that was
- * actually read, since the next attempt wipes it. */
-static void hitag2_note_failure(uint8_t stage, uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE]) {
-    if (stage > HITAG2_FAIL_UID) {
-        memcpy(g_seen_uid, pages[HITAG2_PAGE_UID], HITAG2_PAGE_SIZE);
-    }
-    if (stage > g_fail_stage) {
-        g_fail_stage = stage;  /* report the furthest any attempt got */
-    }
-    memcpy(pages[HITAG2_PAGE_UID], g_seen_uid, HITAG2_PAGE_SIZE);
-    bsp_delay_ms(HITAG2_FIELD_OFF_MS);
-}
 
 void hitag2_reader_last_result(uint8_t *fail_stage, uint8_t *attempts) {
     *fail_stage = g_fail_stage;
     *attempts = g_attempts;
 }
 
+typedef uint8_t (*hitag2_session_t)(const uint8_t *secret,
+                                    uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
+                                    uint32_t timeout_ms);
+
+static bool hitag2_read_verified(hitag2_session_t session, const uint8_t *secret,
+                                 uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
+                                 uint32_t timeout_ms) {
+    uint8_t prev[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE];
+    uint8_t seen_uid[HITAG2_PAGE_SIZE] = {0};
+    bool have_prev = false;
+
+    g_fail_stage = HITAG2_FAIL_NONE;
+    for (g_attempts = 1; g_attempts <= HITAG2_SESSION_ATTEMPTS; g_attempts++) {
+        uint8_t stage = session(secret, pages, timeout_ms);
+        if (stage == HITAG2_FAIL_NONE) {
+            if (have_prev && memcmp(prev, pages, sizeof(prev)) == 0) {
+                g_fail_stage = HITAG2_FAIL_NONE;
+                return true;
+            }
+            memcpy(prev, pages, sizeof(prev));
+            have_prev = true;
+            stage = HITAG2_FAIL_VERIFY;
+        }
+        if (stage > HITAG2_FAIL_UID) {
+            memcpy(seen_uid, pages[HITAG2_PAGE_UID], HITAG2_PAGE_SIZE);
+        }
+        if (stage > g_fail_stage) {
+            g_fail_stage = stage;  /* report the furthest any attempt got */
+        }
+        bsp_delay_ms(HITAG2_FIELD_OFF_MS);
+    }
+    g_attempts = HITAG2_SESSION_ATTEMPTS;
+    /* The next attempt wipes pages[]; hand back the last UID actually read. */
+    memcpy(pages[HITAG2_PAGE_UID], seen_uid, HITAG2_PAGE_SIZE);
+    return false;
+}
+
 bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
                          uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
                          uint32_t timeout_ms) {
-    g_fail_stage = HITAG2_FAIL_NONE;
-    memset(g_seen_uid, 0, sizeof(g_seen_uid));
-    for (g_attempts = 1; g_attempts <= HITAG2_SESSION_ATTEMPTS; g_attempts++) {
-        uint8_t stage = hitag2_read_session(password, pages, timeout_ms);
-        if (stage == HITAG2_FAIL_NONE) {
-            g_fail_stage = HITAG2_FAIL_NONE;
-            return true;
-        }
-        hitag2_note_failure(stage, pages);
-    }
-    g_attempts = HITAG2_SESSION_ATTEMPTS;
-    return false;
+    return hitag2_read_verified(hitag2_read_session, password, pages, timeout_ms);
 }
 
 bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
                                 uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
                                 uint32_t timeout_ms) {
-    g_fail_stage = HITAG2_FAIL_NONE;
-    memset(g_seen_uid, 0, sizeof(g_seen_uid));
-    for (g_attempts = 1; g_attempts <= HITAG2_SESSION_ATTEMPTS; g_attempts++) {
-        uint8_t stage = hitag2_crypto_read_session(key, pages, timeout_ms);
-        if (stage == HITAG2_FAIL_NONE) {
-            g_fail_stage = HITAG2_FAIL_NONE;
-            return true;
-        }
-        hitag2_note_failure(stage, pages);
-    }
-    g_attempts = HITAG2_SESSION_ATTEMPTS;
-    return false;
+    return hitag2_read_verified(hitag2_crypto_read_session, key, pages, timeout_ms);
 }

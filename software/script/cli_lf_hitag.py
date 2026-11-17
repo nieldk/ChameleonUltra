@@ -41,7 +41,10 @@ def _fail_text(fail, rejected):
         return f"No usable answer to START_AUTH in {attempts} attempts (no tag, or the reply did not decode)."
     if stage == 2:
         return f"UID {uid.hex().upper()} read, then no answer: {rejected}."
-    return f"UID {uid.hex().upper()} read and authenticated, but a page read got no answer."
+    if stage == 3:
+        return f"UID {uid.hex().upper()} read and authenticated, but a page read got no answer."
+    return (f"UID {uid.hex().upper()} read, but no two reads in {attempts} attempts returned "
+            f"the same data (link too noisy).")
 
 
 def _parse_hex4(s, label):
