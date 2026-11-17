@@ -2418,6 +2418,61 @@ function ht2ParseHex6(s, label){
 function ht2PageLines(pages){
   return pages.map((p,i) => "    "+i+"  "+Array.from(p).map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join(" ")+"  "+(HT2_PAGE_NAMES[i]||"User"));
 }
+// Tag information and page table as printed by proxmark3's lf hitag read
+// --ht2 (cmdlfhitag.c); same as cli_lf_hitag.py's _print_tag().
+const HT2_TYPES = {1:"PCF 7936", 2:"PCF 7946", 3:"PCF 7947", 4:"PCF 7942/44", 5:"PCF 7943", 6:"PCF 7941", 7:"PCF 7952", 8:"PCF 7961", 9:"PCF 7945"};
+const HT2_INFO = ["UID", "Pwd", "Key/Pwd", "Config", "User", "User", "User", "User"];
+function ht2Breakdown(bs, start, n, msg){
+  return "  "+".".repeat(start)+bs.slice(start, start+n)+".".repeat(8-start-n)+" - "+msg;
+}
+function ht2Lock(page, config){
+  if(page===0) return "L ";
+  if(page===1) return (config & 0x80) ? "L " : "RW";
+  if(page===2) return (config & 0x80) ? ((config & 0x08) ? "L " : "R ") : "RW";
+  if(page===3) return (config & 0x40) ? "R " : "RW";
+  if(page===4 || page===5) return (config & 0x20) ? "R " : "RW";
+  return (config & 0x10) ? "R " : "RW";
+}
+function ht2TagLines(pages){
+  const hex = p => Array.from(p).map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join(" ");
+  const uid = ((pages[0][0]<<24)|(pages[0][1]<<16)|(pages[0][2]<<8)|pages[0][3])>>>0;
+  const config = pages[3][0];
+  const bs = config.toString(2).padStart(8,"0");
+  const lines = [
+    "--- Tag Information ---------------------------",
+    "UID...... "+uid.toString(16).toUpperCase().padStart(8,"0"),
+    "TYPE..... "+(HT2_TYPES[(uid>>>4)&0xF]||""),
+    "Config... 0x"+config.toString(16).toUpperCase().padStart(2,"0"),
+    "  "+bs,
+    ht2Breakdown(bs, 0, 4, "RFU"),
+    ht2Breakdown(bs, 4, 1, (config & 0x08) ? "Crypto mode" : "Password mode"),
+    ht2Breakdown(bs, 5, 2, ["Public mode B, Coding: biphase", "Public mode A, Coding: manchester",
+                            "Public mode C, Coding: biphase", "Hitag 2"][(config>>1)&3]),
+    ht2Breakdown(bs, 7, 1, (config & 0x01) ? "Biphase" : "Manchester"),
+    "",
+    "----------------------------------------------",
+    " #      | data        | ascii | lck | Info",
+    "--------+-------------+-------+-----+---------",
+  ];
+  pages.forEach((p,i) => {
+    const ascii = Array.from(p).map(b => (b>=0x20 && b<0x7F) ? String.fromCharCode(b) : ".").join("");
+    lines.push(String(i).padStart(2," ")+"/0x"+i.toString(16).toUpperCase().padStart(2,"0")+" | "+hex(p)+" | "+ascii+"  | "+ht2Lock(i, config)+"  | "+(HT2_INFO[i]||"User"));
+  });
+  lines.push("--------+-------------+-------+-----+---------",
+             " L = Locked, RW = Read Write, R = Read Only",
+             "----------------------------------------------");
+  return lines;
+}
+// Failed read/cread: the device sends fail_stage(1) attempts(1) uid(4).
+function ht2FailLine(f, rejected){
+  if(f.data.length < 6) return "No answer, or "+rejected+".";
+  const stage = f.data[0], attempts = f.data[1];
+  const uid = Array.from(f.data.slice(2,6)).map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join("");
+  if(stage <= 1) return "No usable answer to START_AUTH in "+attempts+" attempts (no tag, or the reply did not decode).";
+  if(stage === 2) return "UID "+uid+" read, then no answer: "+rejected+".";
+  if(stage === 3) return "UID "+uid+" read and authenticated, but a page read got no answer.";
+  return "UID "+uid+" read, but no two reads in "+attempts+" attempts returned the same data (link too noisy).";
+}
 const lfHitag2 = lf.subgroup("hitag2", "Hitag2 commands (125 kHz) -- password mode, and known-key crypto mode for emulation");
 lfHitag2.command("econfig", "Set/get the emulated Hitag2 tag (8 pages, in the active slot). With no options, shows the slot's current pages", [
   {names:["--uid"], takesValue:true, dest:"uid"},
@@ -2467,9 +2522,9 @@ lfHitag2.command("read", "Read a Hitag2 tag in password mode: START_AUTH, UID, s
   await needReader();
   const pwd = ht2ParseHex4(a.pwd, "--pwd");
   const f = await request(CU.LF_HITAG2_READ, pwd);
-  if(!OK_STATUSES.has(f.status)) return ["No answer, or password rejected (wrong key, or tag is in crypto mode)."];
+  if(!OK_STATUSES.has(f.status)) return [ht2FailLine(f, "password rejected (wrong key, or tag is in crypto mode)")];
   const pages = [0,1,2,3,4,5,6,7].map(i => f.data.slice(i*4, i*4+4));
-  return ht2PageLines(pages);
+  return ht2TagLines(pages);
 });
 lfHitag2.command("cread", "Read a Hitag2 tag in crypto mode with a known key (no key recovery): START_AUTH, UID, send a Nr/Ar challenge built from -k, read the rest on acceptance", [
   {names:["-k","--key"], takesValue:true, dest:"key", required:true},
@@ -2477,9 +2532,9 @@ lfHitag2.command("cread", "Read a Hitag2 tag in crypto mode with a known key (no
   await needReader();
   const key = ht2ParseHex6(a.key, "--key");
   const f = await request(CU.LF_HITAG2_CRYPTO_READ, key);
-  if(!OK_STATUSES.has(f.status)) return ["No answer, or challenge rejected (wrong key, or tag is in password mode)."];
+  if(!OK_STATUSES.has(f.status)) return [ht2FailLine(f, "challenge rejected (wrong key, or tag is in password mode)")];
   const pages = [0,1,2,3,4,5,6,7].map(i => f.data.slice(i*4, i*4+4));
-  return ht2PageLines(pages);
+  return ht2TagLines(pages);
 });
 lfHitag2.command("raw", "Debug: send START_AUTH and print the raw GPIOTE edge intervals (Tc units) instead of running them through the RF/32 Manchester classifier", [
 ], async (a) => {
