@@ -18,7 +18,7 @@ import argparse
 
 from cli_core import (
     ArgumentParserNoExit, ReaderRequiredUnit, SlotIndexArgsAndGoUnit,
-    lf, CG, CY, CR, C0,
+    lf, CG, CY, CR, CC, C0,
 )
 from chameleon_enum import SlotNumber, TagSpecificType
 
@@ -30,6 +30,73 @@ PAGE_NAMES = {
     2: "Key bytes 0-1 in bytes 2-3, rest reserved (crypto mode only)",
     3: "Config + tag password",
 }
+
+
+# Tag information and page table as printed by RfidResearchGroup/proxmark3's
+# `lf hitag read --ht2` (client/src/cmdlfhitag.c: getHitagTypeStr,
+# print_hitag2_configuration, print_hitag2_blocks).
+_HT2_TYPES = {
+    1: "PCF 7936", 2: "PCF 7946", 3: "PCF 7947", 4: "PCF 7942/44", 5: "PCF 7943",
+    6: "PCF 7941", 7: "PCF 7952", 8: "PCF 7961", 9: "PCF 7945",
+}
+_HT2_INFO = ["UID", "Pwd", "Key/Pwd", "Config", "User", "User", "User", "User"]
+
+
+def _ht2_breakdown(bs, start, n, msg, color=""):
+    end = C0 if color else ""
+    return f"  {'.' * start}{color}{bs[start:start + n]}{end}{'.' * (8 - start - n)} - {color}{msg}{end}"
+
+
+def _ht2_lock(page, config):
+    if page == 0:
+        return f"{CR}L {C0}"
+    if page == 1:
+        return f"{CR}L {C0}" if config & 0x80 else f"{CG}RW{C0}"
+    if page == 2:
+        if config & 0x80:
+            return f"{CR}L {C0}" if config & 0x08 else f"{CR}R {C0}"
+        return f"{CG}RW{C0}"
+    if page == 3:
+        return f"{CR}R {C0}" if config & 0x40 else f"{CG}RW{C0}"
+    if page in (4, 5):
+        return f"{CR}R {C0}" if config & 0x20 else f"{CG}RW{C0}"
+    return f"{CR}R {C0}" if config & 0x10 else f"{CG}RW{C0}"
+
+
+def _print_tag(pages):
+    pages = [bytes(p) for p in pages]
+    uid = int.from_bytes(pages[0], "big")
+    config = pages[3][0]
+    bs = f"{config:08b}"
+    print()
+    print(f" --- {CC}Tag Information{C0} ---------------------------")
+    print(f" UID...... {CG}{uid:08X}{C0}")
+    print(f" TYPE..... {CG}{_HT2_TYPES.get((uid >> 4) & 0xF, '')}{C0}")
+    print(f" Config... {CY}0x{config:02X}{C0}")
+    print(f"  {bs}")
+    print(_ht2_breakdown(bs, 0, 4, "RFU"))
+    if config & 0x08:
+        print(_ht2_breakdown(bs, 4, 1, "Crypto mode", CY))
+    else:
+        print(_ht2_breakdown(bs, 4, 1, "Password mode"))
+    print(_ht2_breakdown(bs, 5, 2, (
+        "Public mode B, Coding: biphase",
+        "Public mode A, Coding: manchester",
+        "Public mode C, Coding: biphase",
+        "Hitag 2",
+    )[(config >> 1) & 3]))
+    print(_ht2_breakdown(bs, 7, 1, "Biphase" if config & 0x01 else "Manchester"))
+    print()
+    print(" ----------------------------------------------")
+    print("  #      | data        | ascii | lck | Info")
+    print(" --------+-------------+-------+-----+---------")
+    for i, page in enumerate(pages):
+        ascii_ = "".join(chr(b) if 0x20 <= b < 0x7F else "." for b in page)
+        info = _HT2_INFO[i] if i < len(_HT2_INFO) else "User"
+        print(f" {i:2d}/0x{i:02X} | {page.hex(' ').upper()} | {ascii_}  | {_ht2_lock(i, config)}  | {info}")
+    print(" --------+-------------+-------+-----+---------")
+    print(f"  {CR}L{C0} = Locked, {CG}RW{C0} = Read Write, R = Read Only")
+    print(" ----------------------------------------------")
 
 
 def _fail_text(fail, rejected):
@@ -161,9 +228,7 @@ class LFHitag2Read(ReaderRequiredUnit):
             print(f" {CR}{_fail_text(fail, 'password rejected (wrong key, or tag is in crypto mode)')}{C0}")
             return
 
-        for i, page in enumerate(pages):
-            label = PAGE_NAMES.get(i, "User")
-            print(f"    {i}  {page.hex(' ').upper()}  {CG}{label}{C0}")
+        _print_tag(pages)
 
 
 @lf_hitag2.command("cread")
@@ -193,9 +258,7 @@ class LFHitag2CryptoRead(ReaderRequiredUnit):
             print(f" {CR}{_fail_text(fail, 'challenge rejected (wrong key, or tag is in password mode)')}{C0}")
             return
 
-        for i, page in enumerate(pages):
-            label = PAGE_NAMES.get(i, "User")
-            print(f"    {i}  {page.hex(' ').upper()}  {CG}{label}{C0}")
+        _print_tag(pages)
 
 
 @lf_hitag2.command("raw")
