@@ -120,14 +120,23 @@ new board's RX circuit; see `firmware/application/Makefile`.
 
 Separate code path from everything above: `lf_hitag2_data.c`'s
 `hitag2_reader_read()`/`hitag2_reader_crypto_read()` drive the CU's own LF
-field and decode a tag's load-modulated reply with a fixed-threshold RF/32
-Manchester classifier (`hitag2_rf32_period()`), not the interactive engine's
-self-calibrating gap decoder -- closer in shape to this tree's EM4x05/T55xx
-reader code than to `lf_ia_engine.c`.
+field and decode a tag's load-modulated reply from `LF_OA_OUT` (the
+comparator output), not through the interactive engine.
+
+The reply is five SOF `1` bits then the data, RF/32 Manchester. Both edges
+are captured on a dedicated GPIOTE channel (`hi_accuracy`; the PORT/SENSE
+path is too slow for toggle), but only rising edges are used for timing: on
+real hardware falling edges move by up to half a unit with the preceding
+pattern, and a single high half-bit after a two-unit high and one-unit low
+sometimes never crosses the comparator. `hitag2_receive_frame()` walks
+rising-to-rising intervals (1T/1.5T/2T, plus 2.5T/3T for a lost edge)
+through a two-state machine. RX arms about one bit into the SOF, so the
+number of SOF bits left is taken from when the first edge lands relative
+to the end of TX (`HITAG2_REPLY_START_TC`).
 
 * **`lf hitag2 raw`**: sends START_AUTH and prints the raw GPIOTE edge
-  intervals captured (Tc units, 1 Tc = 8 µs) instead of running them through
-  the classifier -- the reader-side equivalent of `lf interactive env read`,
+  intervals captured (Tc units, 1 Tc = 8 µs) instead of decoding them
+  (`-b` dumps every run with its level, the decoder's actual input) -- the reader-side equivalent of `lf interactive env read`,
   for when `read`/`cread` report no answer and the question is what the
   comparator is actually producing. Also prints the app_timer tick gap
   between the last TX edge and RX actually arming: TX happens inside a

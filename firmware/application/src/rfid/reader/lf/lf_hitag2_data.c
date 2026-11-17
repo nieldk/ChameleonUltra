@@ -38,34 +38,49 @@ NRF_LOG_MODULE_REGISTER();
 #define HITAG2_T_WAIT_POWERUP_TC        313  /* tag internal powerup, 312.5 Tc */
 #define HITAG2_T_WAIT_START_AUTH_MAX_TC 232  /* tag gives up waiting for START_AUTH after this */
 #define HITAG2_T_WAIT_RESP_TC           227  /* measured: tag's first answer edge, from reader's last edge */
+#define HITAG2_T_WAIT_2_TC              90   /* min quiet time after a reply before the next command */
 
-/* Reply (tag -> reader) bit rate: RF/32 Manchester, matching lf_ia_hitag2.c's
- * HT2_BIT_FC on the emulation side -- same protocol, same carrier, so the
- * same Tc-per-bit value. Kept as a separate constant here, same as this
- * file's own HITAG2_T_0_TC/HITAG2_T_1_TC already duplicate the emulator's
- * HT2_T0_US/HT2_T1_US: the two sides don't share headers. */
+/* Reply (tag -> reader): RF/32 Manchester, 32 Tc per bit, matching
+ * lf_ia_hitag2.c's HT2_BIT_FC on the emulation side. */
 #define HITAG2_BIT_FC   32u
 
-#define HITAG2_RESP_TIMEOUT_TC   600   /* generous window to catch the ~227 Tc answer */
+/* Every reply starts with five 1 bits (start of frame) before the data. */
+#define HITAG2_SOF_BITS 5u
+
+/* Tc from the end of TX (g_tx_done_tick) to the reply's first rising edge,
+ * as seen through LF_OA_OUT. Measured on real hardware against CU's own
+ * emulator: RX arms ~230-237 Tc after TX and the second SOF edge lands
+ * ~10 Tc later. Only has to be right to +-16 Tc (half a bit). */
+#define HITAG2_REPLY_START_TC   214u
+
+#define HITAG2_MIN_HIGH_TC       5u
+#define HITAG2_IDLE_TC           110u /* no edge for this long: frame over */
 #define HITAG2_CB_SIZE           64
-#define HITAG2_MAX_RUNS          140  /* >= 2 * max frame bits (64); merged runs mean fewer in practice */
 
 static circular_buffer g_cb;
+static volatile uint16_t g_last_cnt;
 
-/* Pushes one run (level + length, Tc units) per GPIOTE edge on LF_OA_OUT,
- * for lf_ia_decode_runs() -- requires lf_125khz_radio_gpiote_enable(true)
- * (both edges), unlike every other LF protocol's rising-edge-only capture.
- * The level is the run that just ENDED, i.e. the one before this edge: a
- * rising edge means that run was low, a falling edge means it was high.
- * Which physical level the comparator calls "load" is not yet confirmed on
- * real hardware -- if replies decode inverted, flip LF_IA_INVERT in
- * hitag2_receive_frame() rather than this guess. */
+/* One run (level + length in Tc) per LF_OA_OUT edge; needs
+ * lf_125khz_radio_gpiote_enable(true). The level is the run that just
+ * ended: a rising edge ends a low run. Lengths are differences of the
+ * free-running carrier counter -- clearing it per edge drops the counts
+ * that land between capture and clear (~1.4% short on real hardware). */
 static void hitag2_edge_cb(void) {
-    uint32_t cnt = get_lf_counter_value();
-    uint16_t len = (cnt > LF_IA_RUN_LEN_MAX) ? LF_IA_RUN_LEN_MAX : (uint16_t)cnt;
-    bool completed_run_was_load = !lf_125khz_radio_last_edge_was_rising();
-    uint16_t run = LF_IA_RUN(completed_run_was_load, len);
+    uint16_t now = (uint16_t)get_lf_counter_value();
+    uint16_t len = (uint16_t)(now - g_last_cnt);
+    g_last_cnt = now;
+    if (len > LF_IA_RUN_LEN_MAX) {
+        len = LF_IA_RUN_LEN_MAX;
+    }
+    uint16_t run = LF_IA_RUN(!lf_125khz_radio_last_edge_was_rising(), len);
     cb_push_back(&g_cb, &run);
+}
+
+static void hitag2_rx_arm(bool both_edges) {
+    cb_init(&g_cb, HITAG2_CB_SIZE, sizeof(uint16_t));
+    register_rio_callback(hitag2_edge_cb);
+    lf_125khz_radio_gpiote_enable(both_edges);
+    g_last_cnt = 0;
     clear_lf_counter_value();
 }
 
@@ -174,65 +189,190 @@ static uint16_t hitag2_page_frame(uint8_t opcode, uint8_t page) {
 }
 
 /* -----------------------------------------------------------------------
- * Receive side (tag -> reader): plain Manchester, no preamble, no SOF --
- * the tag's reply is exactly `nbits` data bits starting at its first edge.
- * Arms the GPIOTE edge counter right after the reader's last transmitted
- * edge and decodes until `nbits` bits are collected or the window times
- * out.
+ * Receive side (tag -> reader): five SOF 1 bits, then `nbits` data bits,
+ * RF/32 Manchester (1 = load then no load, 0 = the reverse).
+ *
+ * Decoded from rising edges only. Measured on real hardware (lf hitag2 raw
+ * -b against a tag PM3 reads fine): rising edges sit within a few Tc of
+ * nominal, falling edges move by up to half a unit with the preceding
+ * pattern, and a single high half-bit that follows a two-unit high and a
+ * one-unit low sometimes never crosses the comparator at all. Run-by-run
+ * Manchester (lf_ia_decode_runs()) breaks on both; rising-to-rising
+ * intervals only see the second, as one 2.5T/3T interval.
+ *
+ * A rising edge is either the start of a 1 that follows a 1 (state B) or
+ * the middle of a 0 (state M). From there:
+ *   B: 1T -> 1          1.5T -> 0 (M)
+ *   M: 1T -> 0          1.5T -> 1,1 (B)        2T -> 1,0
+ *      2.5T -> 1,1,1 (B)   3T -> 1,1,0         lost edge: 1.5T + the rest
+ * A 1 after a 0 has no rising edge of its own, so in M anything that is
+ * not 1T (including the frame simply ending) means the next bit is 1.
+ *
+ * RX arms about a bit into the SOF, so how many SOF bits are left is worked
+ * out from when the first edge lands relative to the end of TX.
  * --------------------------------------------------------------------- */
 
-/* How many leading runs to try dropping before decoding, and in which load
- * polarity: neither is known at compile time. A leading run can be the
- * arm-to-first-edge gap (clear_lf_counter_value() firing before the tag's
- * reply starts) or a short comparator glitch (lf hitag2 raw has shown both,
- * on real hardware, in the same capture) -- either misaligns every half-bit
- * after it by one run if not dropped, or if wrongly dropped. Rather than
- * guess which applies, try a handful of offsets; Manchester's own coding
- * check (lf_ia_decode_runs() stops at the first bit that breaks it) makes a
- * wrong offset or polarity fail outright, not decode plausible-looking
- * garbage, so whichever combination reaches nbits clean bits first is the
- * real one. */
-#define HITAG2_RX_MAX_SKIP   4
+/* app_timer tick (RTC1, APP_TIMER_CONFIG_RTC_FREQUENCY=1 -> 16384 Hz, ~61us/tick)
+ * at the instant the last TX bit's edge finishes, for measuring the gap to
+ * when RX arms and the reply's first edge lands. */
+static volatile uint32_t g_tx_done_tick;
+
+#define HITAG2_RX_MAX_BITS  (HITAG2_SOF_BITS + 64u + 3u)
 
 static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_ms) {
-    cb_init(&g_cb, HITAG2_CB_SIZE, sizeof(uint16_t));
-    register_rio_callback(hitag2_edge_cb);
-    lf_125khz_radio_gpiote_enable(true);
-    clear_lf_counter_value();
+    hitag2_rx_arm(true);
+    uint32_t arm_tc = (((app_timer_cnt_get() - g_tx_done_tick) & 0xFFFFFFu) * 61u) / 8u;
 
-    uint16_t runs[HITAG2_MAX_RUNS];
-    size_t n_runs = 0;
-    uint8_t bits_buf[(64 + 7) / 8] = {0};
-    bool ok = false;
+    uint8_t s[(HITAG2_RX_MAX_BITS + 7) / 8] = {0};
+    uint8_t n = 0;
+    uint8_t sof = HITAG2_SOF_BITS;  /* SOF bits expected in s[] */
+    uint32_t first_tc = arm_tc;     /* end of TX -> first rising edge */
+    uint32_t acc = 0;               /* Tc since the last accepted rising edge */
+    uint32_t rise_acc = 0;          /* acc at a rising edge not yet accepted */
+    int32_t carry = 0;              /* half the last edge's timing error */
+    bool started = false;
+    bool in_m = false;
+    bool done = false;
+
+#define HITAG2_EMIT(b)                         \
+    do {                                       \
+        if (n < HITAG2_RX_MAX_BITS) {          \
+            lf_ia_bit_put(s, n, (b));          \
+            n++;                               \
+        }                                      \
+    } while (0)
 
     autotimer *p_at = bsp_obtain_timer(0);
-    while (!ok && NO_TIMEOUT_1MS(p_at, timeout_ms)) {
+    while (!done && NO_TIMEOUT_1MS(p_at, timeout_ms)) {
         uint16_t run = 0;
         if (!cb_pop_front(&g_cb, &run)) {
+            /* Signed: an edge between the two reads makes this negative. */
+            if (started && (int16_t)((uint16_t)get_lf_counter_value() - g_last_cnt) > (int16_t)HITAG2_IDLE_TC) {
+                if (in_m) {
+                    HITAG2_EMIT(1);
+                }
+                done = true;
+            }
             continue;
         }
-        if (n_runs < HITAG2_MAX_RUNS) {
-            runs[n_runs++] = run;
+        /* A rising edge only counts once its high run has lasted
+         * HITAG2_MIN_HIGH_TC: idle comparator noise is 1-2 Tc pulses, the
+         * weakest real half-bit seen is 8. */
+        if (!LF_IA_RUN_IS_LOAD(run)) {
+            rise_acc = acc + LF_IA_RUN_LEN(run);
+            acc = rise_acc;
+            continue;
         }
-        for (uint8_t skip = 0; !ok && skip < HITAG2_RX_MAX_SKIP && skip < n_runs; skip++) {
-            static const uint32_t flags_try[] = {0, LF_IA_INVERT};
-            for (uint8_t f = 0; !ok && f < ARRAY_SIZE(flags_try); f++) {
-                if (lf_ia_decode_runs(runs + skip, n_runs - skip, LF_IA_CODING_MANCHESTER,
-                                       HITAG2_BIT_FC, flags_try[f], bits_buf, nbits) >= nbits) {
-                    ok = true;
-                }
+        acc += LF_IA_RUN_LEN(run);
+        if (rise_acc == 0 || LF_IA_RUN_LEN(run) < HITAG2_MIN_HIGH_TC) {
+            rise_acc = 0;
+            continue;
+        }
+        uint32_t high = LF_IA_RUN_LEN(run);
+        acc = rise_acc;
+        rise_acc = 0;
+
+        if (!started) {
+            first_tc += acc;
+            acc = high;
+            uint32_t missed = (first_tc + HITAG2_BIT_FC / 2 > HITAG2_REPLY_START_TC)
+                              ? (first_tc + HITAG2_BIT_FC / 2 - HITAG2_REPLY_START_TC) / HITAG2_BIT_FC : 0;
+            sof = (missed >= HITAG2_SOF_BITS) ? 0 : (uint8_t)(HITAG2_SOF_BITS - missed);
+            started = true;
+            HITAG2_EMIT(1);
+            continue;
+        }
+
+        int32_t adj = (int32_t)acc + carry;
+        if (adj < 20) {
+            acc += high;
+            continue;  /* too close to the last edge: fold into the next interval */
+        }
+        uint32_t whole = acc;
+        acc = high;
+
+        /* Nominal interval in half-bits (2 = 1T ... 6 = 3T), 0 = none. */
+        uint8_t hb = (adj < 40) ? 2 : (adj < 56) ? 3 : (adj < 72) ? 4 : (adj < 88) ? 5 : (adj <= 104) ? 6 : 0;
+
+        if (!in_m) {
+            if (hb == 2) {
+                HITAG2_EMIT(1);
+            } else if (hb == 3) {
+                HITAG2_EMIT(0);
+                in_m = true;
+            } else if (n == 1) {
+                /* The "first edge" was a stray one; restart from this one. */
+                first_tc += whole;
+                uint32_t missed = (first_tc + HITAG2_BIT_FC / 2 > HITAG2_REPLY_START_TC)
+                                  ? (first_tc + HITAG2_BIT_FC / 2 - HITAG2_REPLY_START_TC) / HITAG2_BIT_FC : 0;
+                sof = (missed >= HITAG2_SOF_BITS) ? 0 : (uint8_t)(HITAG2_SOF_BITS - missed);
+                carry = 0;
+                continue;
+            } else {
+                done = true;
+            }
+        } else {
+            switch (hb) {
+                case 2:
+                    HITAG2_EMIT(0);
+                    break;
+                case 3:
+                    HITAG2_EMIT(1);
+                    HITAG2_EMIT(1);
+                    in_m = false;
+                    break;
+                case 4:
+                    HITAG2_EMIT(1);
+                    HITAG2_EMIT(0);
+                    break;
+                case 5:
+                    HITAG2_EMIT(1);
+                    HITAG2_EMIT(1);
+                    HITAG2_EMIT(1);
+                    in_m = false;
+                    break;
+                case 6:
+                    HITAG2_EMIT(1);
+                    HITAG2_EMIT(1);
+                    HITAG2_EMIT(0);
+                    break;
+                default:
+                    HITAG2_EMIT(1);
+                    done = true;
+                    break;
             }
         }
+        if (hb != 0) {
+            carry = (adj - (int32_t)hb * 16) / 2;
+        }
+        if (n >= sof + nbits) {
+            done = true;
+        }
     }
+#undef HITAG2_EMIT
     bsp_return_timer(p_at);
     lf_125khz_radio_gpiote_disable();
     unregister_rio_callback();
     cb_free(&g_cb);
 
-    if (!ok) {
+    /* The SOF can't be longer than the run of 1s actually seen. */
+    uint8_t ones = 0;
+    while (ones < n && lf_ia_bit_get(s, ones)) {
+        ones++;
+    }
+    if (sof > ones) {
+        sof = ones;
+    }
+    if (n < sof + nbits) {
         return false;
     }
-    memcpy(out, bits_buf, (size_t)(nbits + 7) / 8);
+    memset(out, 0, (size_t)(nbits + 7) / 8);
+    for (uint8_t i = 0; i < nbits; i++) {
+        lf_ia_bit_put(out, i, lf_ia_bit_get(s, sof + i));
+    }
+    /* The tag wants quiet before the next command (T_WAIT_2); decoding can
+     * finish on the frame's very last edge. */
+    bsp_delay_us(HITAG2_T_WAIT_2_TC * 8);
     return true;
 }
 
@@ -244,11 +384,6 @@ static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_m
 static uint32_t g_send_value;
 static uint8_t  g_send_nbits;
 static volatile bool g_timeslot_done = false;
-
-/* app_timer tick (RTC1, APP_TIMER_CONFIG_RTC_FREQUENCY=1 -> 16384 Hz, ~61us/tick)
- * at the instant the last TX bit's edge finishes, for measuring the gap to
- * when RX actually arms -- see hitag2_reader_raw_capture(). */
-static volatile uint32_t g_tx_done_tick;
 
 /* request_timeslot()'s configure_next_event_earliest() (timeslot.c) asks for
  * NRF_RADIO_HFCLK_CFG_NO_GUARANTEE, so the SoftDevice may still be on the RC
@@ -297,6 +432,7 @@ static uint8_t g_send8_nbits;
 
 static void hitag2_send8_timeslot_cb(void) {
     hitag2_send_bits_bytes(g_send8_buf, g_send8_nbits);
+    g_tx_done_tick = app_timer_cnt_get();
     g_timeslot_done = true;
 }
 
@@ -373,10 +509,7 @@ bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out
 
     *hfclk_running_out = g_hfclk_running_at_tx;
     uint32_t rx_arm_tick_pre = app_timer_cnt_get();
-    cb_init(&g_cb, HITAG2_CB_SIZE, sizeof(uint16_t));
-    register_rio_callback(hitag2_edge_cb);
-    lf_125khz_radio_gpiote_enable(both_edges);
-    clear_lf_counter_value();
+    hitag2_rx_arm(both_edges);
     *rx_arm_gap_ticks_out = (rx_arm_tick_pre - g_tx_done_tick) & 0xFFFFFFu;
 
     uint8_t n = 0;
@@ -391,10 +524,8 @@ bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out
             intervals[n++] = (uint8_t)((LF_IA_RUN_IS_LOAD(run) ? 0x80 : 0) |
                                         (len > 0x7F ? 0x7F : len));
         } else {
-            /* Rising-only: hitag2_edge_cb()'s level bit is always 0 here,
-             * so this is the plain rising-to-rising interval, truncated mod
-             * 256 instead of clamped (unchanged in practice -- real runs
-             * never get near that). */
+            /* Rising-only: the level bit is always 0, so this is the
+             * rising-to-rising interval, truncated mod 256. */
             intervals[n++] = (uint8_t)run;
         }
     }

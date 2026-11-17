@@ -14,12 +14,9 @@ extern "C" {
  * Protocol constants below are taken from RfidResearchGroup/proxmark3's
  * armsrc/hitag2.c + include/protocols.h (the working reference
  * implementation PM3's "Aurora" release ported from RFIDler), not derived
- * from a datasheet guess. The reply (tag -> reader) is genuine RF/32
- * Manchester, decoded with the interactive LF engine's lf_ia_decode_runs()
- * against both GPIOTE edges on LF_OA_OUT -- the same coding and bit rate
- * lf_ia_hitag2.c's emulator already answers CU's own reader with. The one
- * untested part is which LF_OA_OUT level the comparator calls "load": if
- * replies decode inverted, flip LF_IA_INVERT in hitag2_receive_frame().
+ * from a datasheet guess. The reply (tag -> reader) is five SOF 1 bits
+ * followed by the data, RF/32 Manchester, decoded from LF_OA_OUT's rising
+ * edges -- see hitag2_receive_frame() for why not from both.
  * --------------------------------------------------------------------- */
 
 #define HITAG2_NUM_PAGES   8
