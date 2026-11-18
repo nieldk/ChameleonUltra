@@ -15,6 +15,9 @@ RFIDler -- not from a datasheet guess.
 """
 
 import argparse
+import time
+
+from chameleon_com import NotOpenException, CMDInvalidException
 
 from cli_core import (
     ArgumentParserNoExit, ReaderRequiredUnit, SlotIndexArgsAndGoUnit,
@@ -391,18 +394,18 @@ class LFHitag2Dict(ReaderRequiredUnit):
                     print(f" {CY}[{i + 1}/{len(ordered)}] {k}: not 8 or 12 hex digits, skipped{C0}")
                     continue
                 kind = "pwd" if len(kb) == 4 else "crypto"
-                # The read can miss on a marginal link or time out; try a key
-                # twice before moving on, and never let one key stop the run.
-                pages = None
-                for _ in range(2):
-                    try:
-                        pages = (self.cmd.hitag2_read(kb) if len(kb) == 4
-                                 else self.cmd.hitag2_crypto_read(kb))[1]
-                    except (TimeoutError, OSError) as e:
-                        print(f" {CY}[{i + 1}/{len(ordered)}] {k}: {e}{C0}")
-                        pages = None
-                    if pages is not None:
-                        break
+                if i:
+                    time.sleep(0.2)  # let the field and the tag settle between keys
+                try:
+                    pages = (self.cmd.hitag2_read(kb) if len(kb) == 4
+                             else self.cmd.hitag2_crypto_read(kb))[1]
+                except NotOpenException:
+                    print(f" {CR}Device disconnected (it reset during the read). "
+                          f"Reconnect with `hw connect` and retry.{C0}")
+                    return
+                except (TimeoutError, OSError, CMDInvalidException) as e:
+                    print(f" {CY}[{i + 1}/{len(ordered)}] {k}: {e}{C0}")
+                    pages = None
                 if pages is not None:
                     print(f" {CG}[{i + 1}/{len(ordered)}] {k}: FOUND ({kind} mode){C0}")
                     _print_tag(pages)
