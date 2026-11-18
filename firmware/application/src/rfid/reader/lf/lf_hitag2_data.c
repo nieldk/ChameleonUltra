@@ -29,8 +29,9 @@ NRF_LOG_MODULE_REGISTER();
 
 #define HT2_RESET_MS      20u          /* field off before a session: tag cold-starts */
 #define HT2_POWER_UP_US   (371u * 8u)  /* field on this long before START_AUTH (313 powerup + margin) */
-#define HT2_TRIES         12u          /* cold-start START_AUTHs before giving up (tag answers ~1 in 3) */
+#define HT2_TRIES         20u          /* START_AUTHs per session, field held on (marginal reader->tag link) */
 #define HT2_PAGE_TRIES    6u           /* READ PAGEs per page, for two answers that agree (no CRC) */
+#define HT2_READ_ATTEMPTS 5u           /* whole password sessions before giving up */
 
 static lf_rdr_link_t m_link = {
     .gap_us = 6u * 8u,
@@ -97,22 +98,26 @@ static bool exchange_val(uint32_t value, size_t n, uint32_t power_up_us, uint32_
     return exchange(tx, n, power_up_us, page);
 }
 
-/* Sends START_AUTH (11000), each try a full cold-start (field off, power up,
- * command), up to HT2_TRIES times: this tag answers only a fresh powered-up
- * START_AUTH, not a second one sent while it already waits. With need >= 2
- * the UID must come back the same twice (no CRC). The answered try leaves
- * the field on, the tag waiting for the password/challenge; the frame's SOF
- * length, once learned, carries across tries. */
-static bool hitag2_start_auth(uint32_t *uid, uint8_t need) {
+/* Resets the tag from cold: field off, then on. The caller sends the first
+ * command (with HT2_POWER_UP_US) while it waits for the tag to power up. */
+static void hitag2_field_reset(void) {
+    lf_rdr_field(false);
+    bsp_delay_ms(HT2_RESET_MS);
     ht2_frame_reset(&m_frame);
+}
+
+/* Sends START_AUTH (11000) up to HT2_TRIES times with the field held on
+ * (power up on the first try only), for a reader->tag link that only
+ * carries the command now and then. With need >= 2 the UID must come back
+ * the same twice (no CRC). Call hitag2_field_reset() first. The answered
+ * try leaves the field on, the tag waiting for the password/challenge. */
+static bool hitag2_start_auth(uint32_t *uid, uint8_t need) {
     ht2_agree_t agree;
     ht2_agree_reset(&agree);
     for (uint8_t i = 0; i < HT2_TRIES; i++) {
         bsp_wdt_feed();
-        lf_rdr_field(false);
-        bsp_delay_ms(HT2_RESET_MS);
         uint32_t v;
-        if (!exchange_val(0x18u, 5, HT2_POWER_UP_US, &v)) {
+        if (!exchange_val(0x18u, 5, i == 0 ? HT2_POWER_UP_US : 0, &v)) {
             continue;
         }
         if (need < 2 || ht2_agree_add(&agree, v, uid)) {
@@ -125,6 +130,7 @@ static bool hitag2_start_auth(uint32_t *uid, uint8_t need) {
 
 bool hitag2_reader_get_uid(uint8_t uid[HITAG2_PAGE_SIZE], uint32_t timeout_ms) {
     (void)timeout_ms;
+    hitag2_field_reset();
     uint32_t v;
     bool ok = hitag2_start_auth(&v, 2);
     lf_rdr_field(false);
@@ -140,6 +146,7 @@ static uint8_t hitag2_crypto_read_session(const uint8_t key[HITAG2_KEY_SIZE],
     (void)timeout_ms;
     memset(pages, 0, HITAG2_NUM_PAGES * HITAG2_PAGE_SIZE);
 
+    hitag2_field_reset();
     /* need=1: a wrong UID just fails this session's auth; the whole-session
      * verify wrapper requires two complete sessions to agree. */
     uint32_t uid;
@@ -256,35 +263,30 @@ static bool hitag2_read_verified(hitag2_session_t session, const uint8_t *secret
 /* Password mode has no CRC, so each page is read until two answers agree
  * (ht2_agree) rather than by repeating the whole session. START_AUTH is
  * retried within the one session; the field stays up throughout. */
-bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
-                         uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
-                         uint32_t timeout_ms) {
-    (void)timeout_ms;
-    g_fail_stage = HITAG2_FAIL_NONE;
-    g_attempts = 1;
+/* One password session: START_AUTH, password, then every page read until two
+ * answers agree. Returns the furthest stage reached. */
+static uint8_t hitag2_password_session(const uint8_t password[HITAG2_PAGE_SIZE],
+                                       uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE]) {
     memset(pages, 0, HITAG2_NUM_PAGES * HITAG2_PAGE_SIZE);
 
+    hitag2_field_reset();
     /* need=1: page 0 is read back below and checked against this UID. */
     uint32_t uid;
     if (!hitag2_start_auth(&uid, 1)) {
-        lf_rdr_field(false);
-        g_fail_stage = HITAG2_FAIL_UID;
-        return false;
+        return HITAG2_FAIL_UID;
     }
+    u32_be(uid, pages[HITAG2_PAGE_UID]);
 
     uint32_t pwd_val = ((uint32_t)password[0] << 24) | ((uint32_t)password[1] << 16) |
                        ((uint32_t)password[2] << 8)  | (uint32_t)password[3];
     uint32_t page3;
     bool authed = false;
-    for (uint8_t i = 0; i < 3 && !authed; i++) {
+    for (uint8_t i = 0; i < HT2_PAGE_TRIES && !authed; i++) {
         authed = exchange_val(pwd_val, 32, 0, &page3);
     }
     if (!authed) {
         /* Wrong password, or the tag is in crypto mode. */
-        u32_be(uid, pages[HITAG2_PAGE_UID]);
-        lf_rdr_field(false);
-        g_fail_stage = HITAG2_FAIL_AUTH;
-        return false;
+        return HITAG2_FAIL_AUTH;
     }
 
     uint8_t mask = 0;
@@ -302,7 +304,6 @@ bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
             }
         }
     }
-    lf_rdr_field(false);
 
     /* Page 0 read back must match the START_AUTH UID, or trust neither. */
     uint32_t page0 = ((uint32_t)pages[0][0] << 24) | ((uint32_t)pages[0][1] << 16) |
@@ -312,11 +313,39 @@ bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
     }
     if (mask != 0xFFu) {
         u32_be(uid, pages[HITAG2_PAGE_UID]);
-        g_fail_stage = HITAG2_FAIL_PAGE;
-        return false;
+        return HITAG2_FAIL_PAGE;
     }
+    return HITAG2_FAIL_NONE;
+}
+
+/* Password mode has no CRC, so each page is read until two answers agree
+ * (ht2_agree) within a session; the whole session is retried up to
+ * HT2_READ_ATTEMPTS times for a marginal reader->tag link. */
+bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
+                         uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
+                         uint32_t timeout_ms) {
+    (void)timeout_ms;
     g_fail_stage = HITAG2_FAIL_NONE;
-    return true;
+    uint8_t seen_uid[HITAG2_PAGE_SIZE] = {0};
+
+    for (g_attempts = 1; g_attempts <= HT2_READ_ATTEMPTS; g_attempts++) {
+        bsp_wdt_feed();
+        uint8_t stage = hitag2_password_session(password, pages);
+        if (stage == HITAG2_FAIL_NONE) {
+            lf_rdr_field(false);
+            g_fail_stage = HITAG2_FAIL_NONE;
+            return true;
+        }
+        if (stage > HITAG2_FAIL_UID) {
+            memcpy(seen_uid, pages[HITAG2_PAGE_UID], HITAG2_PAGE_SIZE);
+        }
+        if (stage > g_fail_stage) {
+            g_fail_stage = stage;
+        }
+    }
+    lf_rdr_field(false);
+    memcpy(pages[HITAG2_PAGE_UID], seen_uid, HITAG2_PAGE_SIZE);
+    return false;
 }
 
 bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
@@ -338,6 +367,7 @@ bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out
     *rx_arm_gap_ticks_out = 0;
     *hfclk_running_out = true;
 
+    hitag2_field_reset();
     uint32_t uid;
     (void)hitag2_start_auth(&uid, 1);  /* retries internally; dump whatever the last try captured */
     lf_rdr_field(false);
