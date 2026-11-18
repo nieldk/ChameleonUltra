@@ -278,31 +278,56 @@ class LFHitag2RawCapture(ReaderRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
         p = ArgumentParserNoExit()
         p.description = (
-            "Debug: send START_AUTH and print the answer's envelope runs -- "
-            "the ADC decoder's own input -- as level and length in Tc units "
-            "(1 Tc = 8us). Use this to see what the tag's reply looks like "
-            "when `read`/`cread` report no answer."
+            "Debug: send START_AUTH and print the raw GPIOTE edge intervals "
+            "the device captured, in Tc units (1 Tc = 8us), instead of "
+            "decoding them. Use this to see what the comparator actually "
+            "produces on real hardware when `read`/`cread` report no "
+            "answer."
         )
+        p.add_argument("-b", "--both-edges", action="store_true",
+                        help="dump the same both-edge, leveled runs read/cread's own "
+                             "decode consumes, instead of the original rising-only "
+                             "dump -- use this to see the actual decode input")
         return p
 
     def on_exec(self, args: argparse.Namespace):
-        _gap, _hfclk, intervals = self.cmd.hitag2_raw_capture()
+        rx_arm_gap_us, hfclk_running, intervals = self.cmd.hitag2_raw_capture(args.both_edges)
+        print(f" RX armed {rx_arm_gap_us} us after the last TX edge "
+              f"(Hitag2's reply window is ~1600-1650 us after that edge).")
+        if not hfclk_running:
+            print(f" {CR}HFCLK was on the RC oscillator, not the crystal, "
+                  f"during this TX burst -- bit timing was off nominal "
+                  f"16 MHz (request_timeslot() does not guarantee the "
+                  f"crystal).{C0}")
         if not intervals:
-            print(f" {CR}No reply runs captured (check the tag is in the field).{C0}")
+            print(f" {CR}No edges captured at all -- comparator saw nothing "
+                  f"(check the tag is actually in the field).{C0}")
             return
-        print(f" Captured {len(intervals)} run(s), half-bit buckets (1 Tc = 8us):")
-        # Each byte: bit 7 = load level, bits 6..0 = length in Tc, clamped to
-        # 0x7F. A half-bit is 16 Tc, so a run is 1-3 half-bits.
-        buckets = ((16, "0.5T "), (24, "0.75T"), (32, "1T   "), (48, "1.5T "))
-        for i, b in enumerate(intervals):
-            level = "H" if (b & 0x80) else "L"
-            length = b & 0x7F
-            tag = "?"
-            for center, name in buckets:
-                if abs(length - center) <= 4:
-                    tag = name
-                    break
-            print(f"    [{i:2}]  {level}  {length:3}  {tag}")
+        print(f" Captured {len(intervals)} interval(s), Tc units:")
+        if args.both_edges:
+            # Each byte: bit 7 = load level, bits 6..0 = length (clamped to
+            # 0x7F) -- see hitag2_reader_raw_capture()'s both_edges doc.
+            # Half-bit buckets (16/24/32 Tc), half of the rising-only ones,
+            # since every run here is at most one bit wide.
+            buckets = ((16, "0.5T "), (24, "0.75T"), (32, "1T   "))
+            for i, b in enumerate(intervals):
+                level = "H" if (b & 0x80) else "L"
+                length = b & 0x7F
+                tag = "?"
+                for center, name in buckets:
+                    if abs(length - center) <= 4:
+                        tag = name
+                        break
+                print(f"    [{i:2}]  {level}  {length:3}  {tag}")
+        else:
+            buckets = ((32, "1T "), (48, "1.5T"), (64, "2T "))
+            for i, v in enumerate(intervals):
+                tag = "?"
+                for center, name in buckets:
+                    if abs(v - center) <= 8:
+                        tag = name
+                        break
+                print(f"    [{i:2}]  {v:3}  {tag}")
 
 
 def _load_key_file(path):

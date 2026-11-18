@@ -14,9 +14,10 @@ extern "C" {
  * Protocol constants below are taken from RfidResearchGroup/proxmark3's
  * armsrc/hitag2.c + include/protocols.h (the working reference
  * implementation PM3's "Aurora" release ported from RFIDler), not derived
- * from a datasheet guess. The reply (tag -> reader) is five or six SOF 1
- * bits then the data, RF/32 Manchester, captured and decoded with the ADC
- * reader engine (lf_rdr_ia.c) -- see lf_hitag2_data.c. */
+ * from a datasheet guess. The reply (tag -> reader) is five SOF 1 bits
+ * followed by the data, RF/32 Manchester, decoded from LF_OA_OUT's rising
+ * edges -- see hitag2_receive_frame() for why not from both.
+ * --------------------------------------------------------------------- */
 
 #define HITAG2_NUM_PAGES   8
 #define HITAG2_PAGE_SIZE   4   /* bytes per page */
@@ -81,11 +82,23 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
                                 uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
                                 uint32_t timeout_ms);
 
-/* Debug: send START_AUTH and return the answer's envelope runs -- the ADC
- * decoder's own input -- as level+length bytes (bit 7 load level, bits 6..0
- * length in Tc, clamped to 0x7F). both_edges and the gap/hfclk outputs are
- * kept for client compatibility: both_edges is ignored, gap is 0, hfclk is
- * true. */
+/* Debug: send START_AUTH and return up to max_n raw GPIOTE edge intervals
+ * instead of decoding them -- for seeing what the comparator actually
+ * produces on real hardware.
+ *
+ * both_edges: false dumps rising-to-rising intervals (Tc units, truncated
+ * mod 256) -- the original dump. true dumps the same both-edge, leveled
+ * runs hitag2_receive_frame() decodes (load level in bit 7, length clamped
+ * to 0x7F Tc in bits 6..0) -- use this one when `read`/`cread` fail, to see
+ * the actual decode input rather than a rising-only proxy for it.
+ *
+ * rx_arm_gap_ticks_out: app_timer (RTC1, ~61us/tick) gap between the last TX
+ * edge and RX actually arming -- see the .c file's comment on why this gap
+ * matters specifically for Hitag2's tight reply window.
+ *
+ * hfclk_running_out: true if the crystal, not the RC oscillator, was the
+ * HFCLK source when the TX burst ran (request_timeslot() only asks for
+ * NRF_RADIO_HFCLK_CFG_NO_GUARANTEE, see the .c file). */
 bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out,
                                 uint32_t *rx_arm_gap_ticks_out, bool *hfclk_running_out,
                                 bool both_edges, uint32_t timeout_ms);

@@ -45,10 +45,6 @@ bool lf_125khz_radio_last_edge_was_rising(void);
 void lf_125khz_radio_saadc166_enable(lf_adc_callback_t cb);
 void lf_125khz_radio_saadc166_disable(void);
 
-/* Gate the PWM-period-end -> SAADC-sample PPI without touching the ADC set-up,
- * for a caller driving the SAADC directly (lf_rdr_ia.c). */
-void lf_125khz_radio_sample_link(bool on);
-
 void lf_125khz_radio_gpiote_disable(void);
 
 void start_lf_125khz_radio(void);

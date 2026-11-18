@@ -2536,21 +2536,23 @@ lfHitag2.command("cread", "Read a Hitag2 tag in crypto mode with a known key (no
   const pages = [0,1,2,3,4,5,6,7].map(i => f.data.slice(i*4, i*4+4));
   return ht2TagLines(pages);
 });
-lfHitag2.command("raw", "Debug: send START_AUTH and print the answer's envelope runs (level + length in Tc), the ADC decoder's own input", [
+lfHitag2.command("raw", "Debug: send START_AUTH and print the raw GPIOTE edge intervals (Tc units) instead of running them through the RF/32 Manchester classifier", [
 ], async (a) => {
   await needReader();
-  const f = okOrThrow(await request(CU.LF_HITAG2_RAW_CAPTURE, []));
+  const f = okOrThrow(await request(CU.LF_HITAG2_RAW_CAPTURE));
+  const gapTicks = f.data.length >= 4 ? (f.data[0] | (f.data[1]<<8) | (f.data[2]<<16) | (f.data[3]<<24)) >>> 0 : 0;
+  const gapUs = Math.round(gapTicks * 1000000 / 16384);
+  const hfclkRunning = f.data.length > 4 ? !!f.data[4] : false;
   const n = f.data.length > 5 ? f.data[5] : 0;
   const intervals = Array.from(f.data.slice(6, 6 + n));
-  if(!intervals.length){ return ["No reply runs captured (check the tag is in the field)."]; }
-  // Each byte: bit 7 load level, bits 6..0 length in Tc (clamped 0x7F).
-  const buckets = [[16,"0.5T "],[24,"0.75T"],[32,"1T   "],[48,"1.5T "]];
-  const lines = [`Captured ${intervals.length} run(s), half-bit buckets (1 Tc = 8us):`];
-  intervals.forEach((b, i) => {
-    const level = (b & 0x80) ? "H" : "L";
-    const length = b & 0x7F;
-    const hit = buckets.find(([c]) => Math.abs(length - c) <= 4);
-    lines.push(`    [${String(i).padStart(2," ")}]  ${level}  ${String(length).padStart(3," ")}  ${hit ? hit[1] : "?"}`);
+  const lines = [`RX armed ${gapUs} us after the last TX edge (Hitag2's reply window is ~1600-1650 us after that edge).`];
+  if(!hfclkRunning){ lines.push("HFCLK was on the RC oscillator, not the crystal, during this TX burst -- bit timing was off nominal 16 MHz (request_timeslot() does not guarantee the crystal)."); }
+  if(!intervals.length){ lines.push("No edges captured at all -- comparator saw nothing (check the tag is actually in the field)."); return lines; }
+  const buckets = [[32,"1T "],[48,"1.5T"],[64,"2T "]];
+  lines.push(`Captured ${intervals.length} interval(s), Tc units:`);
+  intervals.forEach((v, i) => {
+    const hit = buckets.find(([c]) => Math.abs(v - c) <= 8);
+    lines.push(`    [${String(i).padStart(2," ")}]  ${String(v).padStart(3," ")}  ${hit ? hit[1] : "?"}`);
   });
   return lines;
 });
