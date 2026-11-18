@@ -63,6 +63,9 @@ typedef struct {
     uint32_t eof_us;        // a field-on stretch this long after a gap ends the command
     bool want_decode;       // run lf_ia_decode_intervals on each command before on_command
     lf_ia_decode_cfg_t decode;
+    // Carrier periods to hold the load off after an answer before listening again, so the reader sees the frame end
+    // (a genuine tag rests unloaded). 0: one bit of the answer's coding.
+    uint32_t rest_fc;
 
     // Called with the field newly up, before the first command. May be NULL.
     void (*field_on)(void *ctx);

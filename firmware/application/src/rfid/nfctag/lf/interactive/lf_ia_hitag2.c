@@ -282,6 +282,9 @@ static const lf_ia_module_t m_hitag2 = {
     // All 32 bits of a command can share a value (e.g. a zero password), leaving no second class to self-calibrate
     // against; fall back to the reader's documented fixed timing for that case.
     .decode = { .min_ratio_pct = 115, .short_is_one = false, .fallback_t0_us = HT2_T0_US, .fallback_t1_us = HT2_T1_US },
+    // Rest 56 carrier periods unloaded after an answer; with the 200 us settle (25 periods) that ends ~81 periods
+    // after the answer, inside the ~90 a Hitag2 reader may wait, and a CU reader sees ~58 quiet periods (needs 48).
+    .rest_fc = 56u,
     .field_on = field_on,
     .on_command = on_command,
     .field_off = field_off,
