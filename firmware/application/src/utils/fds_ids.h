@@ -40,6 +40,13 @@
  */
 #define FDS_SLOT_TAG_NICK_NAME_FILE_ID_BASE 0x1200
 
+/*
+ * Captured Hitag2 {nR}{aR} reader auth attempts (sect 5.3 key recovery), so
+ * they survive a reboot. One record: count(1) + count*8 bytes.
+ */
+#define FDS_HITAG2_NONCES_FILE_ID           0x1300
+#define FDS_HITAG2_NONCES_RECORD_KEY        0x1
+
 // Note that previously assigned records may need to be cleaned from Flash.
 // Taking into account the possible overlaps, it boils down to
 // ID 0x1066 Keys 0x1066

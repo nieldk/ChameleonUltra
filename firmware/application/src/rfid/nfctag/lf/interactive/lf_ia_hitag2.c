@@ -19,6 +19,8 @@
 
 #include "hitag2_crypto.h"
 #include "lf_hitag2_data.h"
+#include "fds_util.h"
+#include "fds_ids.h"
 
 #define HT2_EOF_US    (300u)   // longer than a 1 bit's field-on time (30 - 6 periods, 192 µs)
 // The reader samples from 192 to about 320 periods after its command, which ends 36 periods after the stop gap. A
@@ -48,6 +50,12 @@ static uint64_t m_cs;
 #define HT2_NONCE_LOG_MAX 32
 static uint8_t m_nonce_log[HT2_NONCE_LOG_MAX][8];
 static uint8_t m_nonce_n;
+// Set when the log changes; the main loop flushes it to flash (fds_write_sync
+// blocks, so it must not run from the capture path). Persist survives a reboot.
+static volatile bool m_nonce_dirty;
+static bool m_nonce_loaded;
+// 4-byte aligned so FDS can word-write it; sized to count(1) + 32*8, word-rounded.
+static uint32_t m_nonce_fds_buf[(1u + HT2_NONCE_LOG_MAX * 8u + 3u) / 4u];
 
 uint8_t lf_ia_hitag2_get_nonces(uint8_t *out, uint8_t max) {
     uint8_t n = (m_nonce_n < max) ? m_nonce_n : max;
@@ -57,6 +65,35 @@ uint8_t lf_ia_hitag2_get_nonces(uint8_t *out, uint8_t max) {
 
 void lf_ia_hitag2_clear_nonces(void) {
     m_nonce_n = 0;
+    m_nonce_dirty = true;  // flush empties the flash record too
+}
+
+void lf_ia_hitag2_nonces_init(void) {
+    if (m_nonce_loaded) {
+        return;
+    }
+    m_nonce_loaded = true;
+    uint16_t len = 0;
+    uint8_t *buf = (uint8_t *)m_nonce_fds_buf;
+    if (fds_read_sync(FDS_HITAG2_NONCES_FILE_ID, FDS_HITAG2_NONCES_RECORD_KEY, &len, buf) && len >= 1) {
+        uint8_t n = buf[0] > HT2_NONCE_LOG_MAX ? HT2_NONCE_LOG_MAX : buf[0];
+        if ((uint16_t)(1u + n * 8u) <= len) {
+            memcpy(m_nonce_log, buf + 1, (size_t)n * 8u);
+            m_nonce_n = n;
+        }
+    }
+}
+
+void lf_ia_hitag2_nonces_flush(void) {
+    if (!m_nonce_dirty) {
+        return;
+    }
+    m_nonce_dirty = false;
+    uint8_t n = m_nonce_n;  // snapshot; a concurrent capture re-sets dirty
+    uint8_t *buf = (uint8_t *)m_nonce_fds_buf;
+    buf[0] = n;
+    memcpy(buf + 1, m_nonce_log, (size_t)n * 8u);
+    fds_write_sync(FDS_HITAG2_NONCES_FILE_ID, FDS_HITAG2_NONCES_RECORD_KEY, 1u + n * 8u, buf);
 }
 
 static uint32_t bits_value(const uint8_t *bits, size_t first, size_t n) {
@@ -214,6 +251,7 @@ static lf_ia_verdict_t on_command(void *ctx, const lf_ia_command_t *cmd, lf_ia_r
             if (m_nonce_n < HT2_NONCE_LOG_MAX &&
                 (m_nonce_n == 0 || memcmp(m_nonce_log[m_nonce_n - 1], rx, 8) != 0)) {
                 memcpy(m_nonce_log[m_nonce_n++], rx, 8);
+                m_nonce_dirty = true;  // main loop persists to flash
             }
             uint64_t key = hitag2_rev64(crypto_key_raw());
             uint32_t uid = hitag2_rev32(le32(&m_pages[4u * HITAG2_PAGE_UID]));

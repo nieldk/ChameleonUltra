@@ -16,3 +16,9 @@ const lf_ia_module_t *lf_ia_hitag2_load(const uint8_t *pages);
 // to `max` 8-byte pairs into `out` and returns the count; clear empties the log.
 uint8_t lf_ia_hitag2_get_nonces(uint8_t *out, uint8_t max);
 void lf_ia_hitag2_clear_nonces(void);
+
+// Load the captured nonces from flash at startup, and flush them back when
+// changed. flush must run from the main loop (it blocks on an FDS write), not
+// from the capture path.
+void lf_ia_hitag2_nonces_init(void);
+void lf_ia_hitag2_nonces_flush(void);

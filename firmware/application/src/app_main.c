@@ -41,6 +41,7 @@ NRF_LOG_MODULE_REGISTER();
 #endif
 #include "syssleep.h"
 #include "tag_emulation.h"
+#include "rfid/nfctag/lf/interactive/lf_ia_hitag2.h"
 #include "usb_main.h"
 #include "rgb_marquee.h"
 #include "tag_persistence.h"
@@ -1279,6 +1280,7 @@ int main(void) {
     button_init();            // Button initialization for handling business logic
     sleep_timer_init();       // Soft timer initialization for hibernation
     tag_emulation_init();     // Analog card initialization
+    lf_ia_hitag2_nonces_init();  // Restore captured Hitag2 nonces from flash
     BOOT_STEP("tag");
     rgb_marquee_init();       // Light effect initialization
     app_standalone_init();    // Standalone (host-less) mode subsystem
@@ -1313,6 +1315,9 @@ int main(void) {
         // Proactive FDS GC while idle — keeps dirty records low so an on-demand
         // GC never has to run mid-command (see fds_idle_gc_maybe).
         fds_idle_gc_maybe();
+
+        // Persist newly captured Hitag2 nonces so they survive a reboot.
+        lf_ia_hitag2_nonces_flush();
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
         // Field generator rainbow animation
