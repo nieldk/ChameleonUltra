@@ -1178,37 +1178,16 @@ class ChameleonCMD:
         return resp
 
     @expect_response([Status.LF_TAG_OK])
-    def hitag2_raw_capture(self, both_edges: bool = False):
+    def hitag2_raw_capture(self):
         """
-        Debug: send START_AUTH and return the raw GPIOTE edge intervals the
-        device captured, instead of decoding them.
+        Debug: send START_AUTH and return the answer's envelope runs -- the
+        ADC decoder's own input. Each byte packs the run's load level in bit
+        7 and its length (Tc units, clamped to 0x7F) in bits 6..0.
 
-        both_edges=False (default): rising-to-rising intervals (Tc units,
-        truncated mod 256) -- the original dump.
-        both_edges=True: the same both-edge, leveled runs the reader's own
-        decode (lf_ia_decode_runs(), Manchester) consumes -- each byte packs
-        the run's load level in bit 7 and its length (Tc units, clamped to
-        0x7F) in bits 6..0. Use this one to see the actual decode input when
-        `read`/`cread` fail, not a rising-only proxy for it.
-
-        Also returns the RTC1 app_timer tick gap (~61us/tick) between the
-        last TX edge and RX actually arming, since on this device's
-        architecture (TX via a radio timeslot, RX armed only after that
-        timeslot's SD radio session fully closes) that gap competes
-        directly with Hitag2's own ~1.6-1.65ms reply window.
-
-        Also returns hfclk_running: whether the crystal, not the RC
-        oscillator, was the HFCLK source while the TX burst ran. The radio
-        timeslot this TX uses only asks for NRF_RADIO_HFCLK_CFG_NO_GUARANTEE,
-        so the SoftDevice is allowed to leave HFCLK on the RC oscillator
-        for it; False here means the bit timing just sent ran at whatever
-        the RC oscillator's tolerance is, not nominal 16 MHz.
-
-        :return: parsed tuple (rx_arm_gap_us, hfclk_running, intervals)
-            where intervals is a list of ints (possibly empty, if no edges
-            at all were seen -- that is itself informative)
+        :return: parsed tuple (rx_arm_gap_us, hfclk_running, intervals), kept
+            for compatibility: gap is 0 and hfclk True on the ADC path.
         """
-        resp = self.device.send_cmd_sync(Command.LF_HITAG2_RAW_CAPTURE, bytes([1 if both_edges else 0]))
+        resp = self.device.send_cmd_sync(Command.LF_HITAG2_RAW_CAPTURE, b"")
         gap_ticks = int.from_bytes(resp.data[0:4], "little") if len(resp.data) >= 4 else 0
         hfclk_running = bool(resp.data[4]) if len(resp.data) > 4 else False
         n = resp.data[5] if len(resp.data) > 5 else 0

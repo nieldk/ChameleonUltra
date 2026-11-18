@@ -505,6 +505,8 @@ ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
     $(PROJ_DIR)/rfid/reader/lf/lf_em410x_data.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_em4x05_data.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_hitag2_data.c \
+    $(PROJ_DIR)/rfid/reader/lf/lf_hitag2_frame.c \
+    $(PROJ_DIR)/rfid/reader/lf/lf_rdr_ia.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_gap.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_reader_generic.c \
     $(PROJ_DIR)/rfid/reader/lf/lf_reader_data.c \

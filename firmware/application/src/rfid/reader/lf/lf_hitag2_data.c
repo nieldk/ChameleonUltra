@@ -3,186 +3,72 @@
 #include <string.h>
 
 #include "app_status.h"
-#include "app_timer.h"
 #include "bsp_delay.h"
-#include "bsp_time.h"
-#include "circular_buffer.h"
 #include "hitag2_crypto.h"
-#include "lf_125khz_radio.h"
-#include "lf_reader_data.h"
-#include "nrf_soc.h"
-#include "timeslot.h"
-
+#include "lf_hitag2_frame.h"
+#include "lf_rdr_ia.h"
 #include "lf_ia_codec.h"
 
 #define NRF_LOG_MODULE_NAME lf_hitag2
 #include "nrf_log.h"
-#include "nrf_log_ctrl.h"
-#include "nrf_log_default_backends.h"
 NRF_LOG_MODULE_REGISTER();
 
 /* -----------------------------------------------------------------------
- * Protocol constants, verified against RfidResearchGroup/proxmark3
- * (armsrc/hitag2.c, include/protocols.h) -- see header comment.
- * All *_TC constants are in carrier periods (Tc = 1/125000 s = 8 us).
+ * Hitag2 reader on the interactive ADC reader engine (lf_rdr_ia.c): the
+ * command goes out as field gaps inside a timeslot, the answer is captured
+ * with the ADC (one sample per carrier period from the command's end) and
+ * decoded from that recording. This replaces the earlier comparator-edge
+ * receive path, which lost weak or blurred pulses the ADC still resolves.
+ *
+ * Command timings follow a Hitag2 reader's (proxmark3 armsrc/hitag2.c): a
+ * gap of 6 carrier periods starts each bit, a 0 is 20 periods gap to gap and
+ * a 1 is 30, a stop gap and 36 periods of field end the command. The tag
+ * answers ~199-230 periods later in RF/32 Manchester behind 5 or 6 SOF ones.
  * --------------------------------------------------------------------- */
 
-/* HITAG2_START_AUTH/READ_PAGE/READ_PAGE_INV/WRITE_PAGE moved to
- * lf_hitag2_data.h -- hitag2_tag.c (tag emulation) needs them too. */
+#define HT2_RESET_MS      20u          /* field off before a session: tag cold-starts */
+#define HT2_POWER_UP_US   (371u * 8u)  /* field on this long before START_AUTH (313 powerup + margin) */
 
-#define HITAG2_T_LOW_TC    6    /* field-off pulse per bit, 4..10 Tc range */
-#define HITAG2_T_0_TC      20   /* total bit-0 duration, 18..22 Tc range */
-#define HITAG2_T_1_TC      30   /* total bit-1 duration, 26..32 Tc range */
-#define HITAG2_T_STOP_TC   36   /* EOF stop condition after the last bit, T_EOF should be > 36 Tc */
+static lf_rdr_link_t m_link = {
+    .gap_us = 6u * 8u,
+    /* Stopping and restarting the PWM adds ~14 us to each bit, so a 0 of 20
+     * periods and a 1 of 30 are asked for that much shorter. */
+    .bit0_us = 20u * 8u - 14u,
+    .bit1_us = 30u * 8u - 14u,
+    .eof_gap = 1u | LF_RDR_DAMP_GAPS,
+    .stop_us = 36u * 8u,
+    .coding = LF_IA_CODING_MANCHESTER,
+    .coding_flags = 0,
+    .bit_fc = 32,
+    .window_us = 1000,
+    .capture_n = 2048,
+    .min_depth = 40,
+    .slice_pct = 25,  /* the detector falls back from a load slowly: slice near the low rail */
+};
 
-#define HITAG2_T_WAIT_POWERUP_TC        313  /* tag internal powerup, 312.5 Tc */
-#define HITAG2_T_WAIT_START_AUTH_MAX_TC 232  /* tag gives up waiting for START_AUTH after this */
-#define HITAG2_T_WAIT_RESP_TC           227  /* measured: tag's first answer edge, from reader's last edge */
-#define HITAG2_T_WAIT_2_TC              90   /* min quiet time after a reply before the next command */
-
-/* Reply (tag -> reader): RF/32 Manchester, 32 Tc per bit, matching
- * lf_ia_hitag2.c's HT2_BIT_FC on the emulation side. */
-#define HITAG2_BIT_FC   32u
-
-/* Every reply starts with five 1 bits (start of frame) before the data. */
-#define HITAG2_SOF_BITS 5u
-
-/* Tc from the end of TX (g_tx_done_tick) to the reply's first rising edge,
- * as seen through LF_OA_OUT. Measured on real hardware against CU's own
- * emulator (second SOF edge ~246 Tc after TX). Only has to be right to
- * +-16 Tc (half a bit). */
-#define HITAG2_REPLY_START_TC   214u
-
-#define HITAG2_REPLY_WAIT_TC     1000u /* give up if no reply edge by then (8 ms) */
-#define HITAG2_MIN_HIGH_TC       5u
-#define HITAG2_TWO_UNIT_HIGH_TC  17u  /* measured: one unit 8-16 Tc, two units 17-28 */
-#define HITAG2_IDLE_TC           110u /* no edge for this long: frame over */
-#define HITAG2_CB_SIZE           64
-
-static circular_buffer g_cb;
-static volatile uint16_t g_last_cnt;
-
-/* One run (level + length in Tc) per LF_OA_OUT edge; needs
- * lf_125khz_radio_gpiote_enable(true). The level is the run that just
- * ended: a rising edge ends a low run. Lengths are differences of the
- * free-running carrier counter -- clearing it per edge drops the counts
- * that land between capture and clear (~1.4% short on real hardware). */
-static void hitag2_edge_cb(void) {
-    uint16_t now = (uint16_t)get_lf_counter_value();
-    uint16_t len = (uint16_t)(now - g_last_cnt);
-    g_last_cnt = now;
-    if (len > LF_IA_RUN_LEN_MAX) {
-        len = LF_IA_RUN_LEN_MAX;
-    }
-    uint16_t run = LF_IA_RUN(!lf_125khz_radio_last_edge_was_rising(), len);
-    cb_push_back(&g_cb, &run);
-}
-
-static void hitag2_rx_arm(bool both_edges) {
-    cb_init(&g_cb, HITAG2_CB_SIZE, sizeof(uint16_t));
-    register_rio_callback(hitag2_edge_cb);
-    lf_125khz_radio_gpiote_enable(both_edges);
-    g_last_cnt = 0;
-    clear_lf_counter_value();
-}
-
-/* Each BPLM bit toggles stop/start_lf_125khz_radio(), and that PWM driver
- * makes its own HFCLK request/release around each toggle -- so across a
- * whole TX burst it churns the SoftDevice's HFCLK reference count to zero
- * and back repeatedly, never letting the crystal (HFXO startup is ~0.36ms,
- * longer than the gap between toggles) actually settle. Confirmed on real
- * hardware: sd_clock_hfclk_is_running() read false during TX every time.
- *
- * Fix is the same one lf_xtal_counter.c already uses for TIMER1: hold our
- * own HFCLK request for the whole field session. The SoftDevice reference-
- * counts requests, so our hold keeps the crystal up regardless of how often
- * the PWM driver's own request/release toggles underneath it. */
-static void hitag2_hfclk_hold(void) {
-    sd_clock_hfclk_request();
-    uint32_t running = 0;
-    while (!running) {
-        sd_clock_hfclk_is_running(&running);
-    }
-}
-
-static void hitag2_hfclk_release(void) {
-    sd_clock_hfclk_release();
-}
-
-/* -----------------------------------------------------------------------
- * Transmit side (reader -> tag), Binary Pulse Length Modulation.
- *
- * Per bit: drop the field for T_LOW, restore it, then hold it for the
- * remainder of the bit period (T_0 or T_1 minus T_LOW). This is the exact
- * sequence of armsrc/hitag2.c's hitag2_reader_send_bit(), just expressed
- * with this codebase's stop/start_lf_125khz_radio() primitives (the same
- * primitives lf_em4x05_data.c's send_em4305_bit() uses for its own gap
- * encoding).
- * --------------------------------------------------------------------- */
-
-static void hitag2_send_bit(bool bit) {
-    stop_lf_125khz_radio();
-    bsp_delay_us(HITAG2_T_LOW_TC * 8);
-    start_lf_125khz_radio();
-    if (bit) {
-        bsp_delay_us((HITAG2_T_1_TC - HITAG2_T_LOW_TC) * 8);
-    } else {
-        bsp_delay_us((HITAG2_T_0_TC - HITAG2_T_LOW_TC) * 8);
-    }
-}
-
-/* EOF: one more T_LOW drop, then hold the field through T_STOP. Same shape
- * as hitag2_send_bit(), just with a fixed stop-condition hold instead of a
- * data-dependent one -- matches armsrc/hitag2.c's hitag2_reader_send_frame()
- * exactly, which every frame sender there appends after its bit loop.
- *
- * Without this, a gap-interval receiver (this codebase's own tag-emulation
- * engine, lf_ia_engine.c) has no edge to measure the last bit's duration
- * against and silently drops it -- confirmed on real hardware: a 5-bit
- * START_AUTH decoded as 4 bits by CU's own emulator reading CU's own
- * reader. A receiver with a fixed decode window (a real tag's analog
- * front end) may equally rely on this EOF to recognize the command is
- * complete rather than still waiting for more bits. */
-static void hitag2_send_eof(void) {
-    stop_lf_125khz_radio();
-    bsp_delay_us(HITAG2_T_LOW_TC * 8);
-    start_lf_125khz_radio();
-    bsp_delay_us(HITAG2_T_STOP_TC * 8);
-}
-
-/* Sends the low `nbits` bits of `value`, MSB first, followed by the EOF. */
-static void hitag2_send_bits(uint32_t value, uint8_t nbits) {
-    for (int8_t i = (int8_t)(nbits - 1); i >= 0; i--) {
-        hitag2_send_bit((value >> i) & 1);
-    }
-    hitag2_send_eof();
-}
-
-/* Sends `nbits` bits from a byte array, MSB first, followed by the EOF --
- * same framing as hitag2_send_bits, just for frames wider than 32 bits (the
- * 64-bit Nr/Ar crypto-mode challenge). Bit i is bit (7 - i%8) of byte i/8,
- * matching how hitag2_receive_frame packs a received frame. */
-static void hitag2_send_bits_bytes(const uint8_t *bytes, uint8_t nbits) {
-    for (uint8_t i = 0; i < nbits; i++) {
-        hitag2_send_bit((bytes[i / 8] >> (7 - (i % 8))) & 1);
-    }
-    hitag2_send_eof();
-}
+/* SOF length and per-answer framing, learned once per session. */
+static ht2_frame_t m_frame;
 
 static uint32_t le32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
-/* 10-bit READ_PAGE/WRITE_PAGE/READ_PAGE_INVERTED frame.
- *
- * tx0 = opcode | (page << 3) | (complement >> 2), where complement = page ^ 7
- * (3 bits); the remaining 2 low bits of complement are the frame's last 2
- * bits. Derived from -- and verified bit-for-bit self-consistent with --
- * armsrc/hitag2.c's own sector decode:
- *   sector = ~(((rx[0]<<2)&0x04) | ((rx[1]>>6)&0x03)) & 0x07
- * and its own command encode:
- *   tx[0] = OPCODE | (blocknr << 3) | ((blocknr ^ 7) >> 2)
- */
+static void bits_put(uint8_t *bits, size_t first, uint32_t v, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        lf_ia_bit_put(bits, first + i, (v >> (n - 1u - i)) & 1u);
+    }
+}
+
+static void u32_be(uint32_t v, uint8_t out[4]) {
+    out[0] = (uint8_t)(v >> 24);
+    out[1] = (uint8_t)(v >> 16);
+    out[2] = (uint8_t)(v >> 8);
+    out[3] = (uint8_t)v;
+}
+
+/* 10-bit READ_PAGE/WRITE_PAGE frame: tx0 = opcode | (page<<3) | (comp>>2),
+ * comp = page ^ 7; the low 2 bits of comp are the frame's last 2 bits.
+ * Verified bit-for-bit against armsrc/hitag2.c's own sector decode. */
 static uint16_t hitag2_page_frame(uint8_t opcode, uint8_t page) {
     uint8_t page3 = page & 0x7;
     uint8_t comp  = (page3 ^ 0x7) & 0x7;
@@ -190,474 +76,103 @@ static uint16_t hitag2_page_frame(uint8_t opcode, uint8_t page) {
     return ((uint16_t)tx0 << 2) | (comp & 0x3);
 }
 
-/* -----------------------------------------------------------------------
- * Receive side (tag -> reader): five SOF 1 bits, then `nbits` data bits,
- * RF/32 Manchester (1 = load then no load, 0 = the reverse).
- *
- * Decoded from rising edges only. Measured on real hardware (lf hitag2 raw
- * -b against a tag PM3 reads fine): rising edges sit within a few Tc of
- * nominal, falling edges move by up to half a unit with the preceding
- * pattern, and a single high half-bit that follows a two-unit high and a
- * one-unit low sometimes never crosses the comparator at all. Run-by-run
- * Manchester (lf_ia_decode_runs()) breaks on both; rising-to-rising
- * intervals only see the second, as one 2.5T/3T interval.
- *
- * A rising edge is either the start of a 1 that follows a 1 (state B) or
- * the middle of a 0 (state M). From there:
- *   B: 1T -> 1          1.5T -> 0 (M)
- *   M: 1T -> 0          1.5T -> 1,1 (B)        2T -> 1,0
- *      2.5T -> 1,1,1 (B)   3T -> 1,1,0         lost edge: 1.5T + the rest
- * A lost edge inside a run of equal bits gives the same intervals (2T in
- * B is 1,1; in M 2T/3T can be 0,0 / 0,0,0); see short_high below.
- * A 1 after a 0 has no rising edge of its own, so in M anything that is
- * not 1T (including the frame simply ending) means the next bit is 1.
- *
- * RX may arm after the reply has begun, so how many SOF bits are left is
- * worked out from when the first edge lands relative to the end of TX.
- * --------------------------------------------------------------------- */
-
-/* app_timer tick (RTC1, APP_TIMER_CONFIG_RTC_FREQUENCY=1 -> 16384 Hz, ~61us/tick)
- * at the instant the last TX bit's edge finishes, for measuring the gap to
- * when RX arms and the reply's first edge lands. */
-static volatile uint32_t g_tx_done_tick;
-
-#define HITAG2_RX_MAX_BITS  (HITAG2_SOF_BITS + 64u + 3u)
-
-static bool hitag2_receive_frame(uint8_t *out, uint8_t nbits, uint32_t timeout_ms) {
-    hitag2_rx_arm(true);
-    uint32_t arm_tc = (((app_timer_cnt_get() - g_tx_done_tick) & 0xFFFFFFu) * 61u) / 8u;
-
-    uint8_t s[(HITAG2_RX_MAX_BITS + 7) / 8] = {0};
-    uint8_t n = 0;
-    uint8_t sof = HITAG2_SOF_BITS;  /* SOF bits expected in s[] */
-    uint32_t first_tc = arm_tc;     /* end of TX -> first rising edge */
-    uint32_t acc = 0;               /* Tc since the last accepted rising edge */
-    uint32_t rise_acc = 0;          /* acc at a rising edge not yet accepted */
-    uint32_t last_high = 0;         /* high run that followed the last accepted edge */
-    int32_t carry = 0;              /* half the last edge's timing error */
-    bool started = false;
-    bool in_m = false;
-    bool done = false;
-
-#define HITAG2_EMIT(b)                         \
-    do {                                       \
-        if (n < HITAG2_RX_MAX_BITS) {          \
-            lf_ia_bit_put(s, n, (b));          \
-            n++;                               \
-        }                                      \
-    } while (0)
-
-    autotimer *p_at = bsp_obtain_timer(0);
-    while (!done && NO_TIMEOUT_1MS(p_at, timeout_ms)) {
-        uint16_t run = 0;
-        if (!cb_pop_front(&g_cb, &run)) {
-            if (!started && (uint16_t)get_lf_counter_value() > HITAG2_REPLY_WAIT_TC) {
-                done = true;  /* nothing came: don't sit out the whole timeout */
-            }
-            /* Signed: an edge between the two reads makes this negative. */
-            if (started && (int16_t)((uint16_t)get_lf_counter_value() - g_last_cnt) > (int16_t)HITAG2_IDLE_TC) {
-                if (in_m) {
-                    HITAG2_EMIT(1);
-                }
-                done = true;
-            }
-            continue;
-        }
-        /* A rising edge only counts once its high run has lasted
-         * HITAG2_MIN_HIGH_TC: idle comparator noise is 1-2 Tc pulses, the
-         * weakest real half-bit seen is 8. */
-        if (!LF_IA_RUN_IS_LOAD(run)) {
-            rise_acc = acc + LF_IA_RUN_LEN(run);
-            acc = rise_acc;
-            continue;
-        }
-        acc += LF_IA_RUN_LEN(run);
-        if (rise_acc == 0 || LF_IA_RUN_LEN(run) < HITAG2_MIN_HIGH_TC) {
-            rise_acc = 0;
-            continue;
-        }
-        uint32_t high = LF_IA_RUN_LEN(run);
-        acc = rise_acc;
-        rise_acc = 0;
-
-        if (!started) {
-            first_tc += acc;
-            acc = high;
-            if (first_tc + HITAG2_BIT_FC / 2 < HITAG2_REPLY_START_TC) {
-                continue;  /* too early to be the reply: idle noise */
-            }
-            uint32_t missed = (first_tc + HITAG2_BIT_FC / 2 > HITAG2_REPLY_START_TC)
-                              ? (first_tc + HITAG2_BIT_FC / 2 - HITAG2_REPLY_START_TC) / HITAG2_BIT_FC : 0;
-            sof = (missed >= HITAG2_SOF_BITS) ? 0 : (uint8_t)(HITAG2_SOF_BITS - missed);
-            started = true;
-            last_high = high;
-            HITAG2_EMIT(1);
-            continue;
-        }
-
-        int32_t adj = (int32_t)acc + carry;
-        if (adj < 20) {
-            acc += high;
-            continue;  /* too close to the last edge: fold into the next interval */
-        }
-        uint32_t whole = acc;
-        acc = high;
-        /* A lost edge leaves the same interval as real data; the high run
-         * before it tells them apart: one unit means the missing pulse was
-         * a plain repeat of the last bit, two units is the pattern above. */
-        bool short_high = last_high < HITAG2_TWO_UNIT_HIGH_TC;
-        last_high = high;
-
-        /* Nominal interval in half-bits (2 = 1T ... 6 = 3T), 0 = none. */
-        uint8_t hb = (adj < 40) ? 2 : (adj < 56) ? 3 : (adj < 72) ? 4 : (adj < 88) ? 5 : (adj <= 104) ? 6 : 0;
-
-        if (!in_m) {
-            if (hb == 2) {
-                HITAG2_EMIT(1);
-            } else if (hb == 4 && n > 1) {
-                HITAG2_EMIT(1);  /* 1,1 with the edge between them lost */
-                HITAG2_EMIT(1);
-            } else if (hb == 5 && n > 1) {
-                /* 1,0 with the 1's edge lost. 0,0 with the first 0's edge
-                 * lost measures the same; that pulse follows a two-unit
-                 * low, and those have not been seen to drop. */
-                HITAG2_EMIT(1);
-                HITAG2_EMIT(0);
-                in_m = true;
-            } else if (hb == 3) {
-                HITAG2_EMIT(0);
-                in_m = true;
-            } else if (n == 1) {
-                /* The "first edge" was a stray one; restart from this one. */
-                first_tc += whole;
-                uint32_t missed = (first_tc + HITAG2_BIT_FC / 2 > HITAG2_REPLY_START_TC)
-                                  ? (first_tc + HITAG2_BIT_FC / 2 - HITAG2_REPLY_START_TC) / HITAG2_BIT_FC : 0;
-                sof = (missed >= HITAG2_SOF_BITS) ? 0 : (uint8_t)(HITAG2_SOF_BITS - missed);
-                carry = 0;
-                continue;  /* last_high already holds this edge's high run */
-            } else {
-                done = true;
-            }
-        } else {
-            switch (hb) {
-                case 2:
-                    HITAG2_EMIT(0);
-                    break;
-                case 3:
-                    HITAG2_EMIT(1);
-                    HITAG2_EMIT(1);
-                    in_m = false;
-                    break;
-                case 4:
-                    HITAG2_EMIT(short_high ? 0 : 1);  /* 0,0 or 1,0 */
-                    HITAG2_EMIT(0);
-                    break;
-                case 5:
-                    HITAG2_EMIT(short_high ? 0 : 1);  /* 0,1,1 or 1,1,1 */
-                    HITAG2_EMIT(1);
-                    HITAG2_EMIT(1);
-                    in_m = false;
-                    break;
-                case 6:
-                    HITAG2_EMIT(short_high ? 0 : 1);  /* 0,0,0 or 1,1,0 */
-                    HITAG2_EMIT(short_high ? 0 : 1);
-                    HITAG2_EMIT(0);
-                    break;
-                default:
-                    HITAG2_EMIT(1);
-                    done = true;
-                    break;
-            }
-        }
-        if (hb != 0) {
-            carry = (adj - (int32_t)hb * 16) / 2;
-        }
-        if (n >= sof + nbits) {
-            done = true;
-        }
-    }
-#undef HITAG2_EMIT
-    bsp_return_timer(p_at);
-    lf_125khz_radio_gpiote_disable();
-    unregister_rio_callback();
-    cb_free(&g_cb);
-
-    /* The SOF can't be longer than the run of 1s actually seen. */
-    uint8_t ones = 0;
-    while (ones < n && lf_ia_bit_get(s, ones)) {
-        ones++;
-    }
-    if (sof > ones) {
-        sof = ones;
-    }
-    if (n < sof + nbits) {
+/* One command/answer. tx is n bits (first bit first); the 32-bit answer page,
+ * SOF stripped, is returned in *page. Returns false if the tag did not answer
+ * or the answer did not frame. */
+static bool exchange(const uint8_t *tx, size_t n, uint32_t power_up_us, uint32_t *page) {
+    lf_rdr_reply_t rx;
+    if (!lf_rdr_transact(&m_link, tx, n, power_up_us, &rx)) {
         return false;
     }
-    memset(out, 0, (size_t)(nbits + 7) / 8);
-    for (uint8_t i = 0; i < nbits; i++) {
-        lf_ia_bit_put(out, i, lf_ia_bit_get(s, sof + i));
-    }
-    /* The tag wants quiet before the next command (T_WAIT_2); decoding can
-     * finish on the frame's very last edge. */
-    bsp_delay_us(HITAG2_T_WAIT_2_TC * 8);
-    return true;
+    return ht2_frame_page(&m_frame, rx.bits, rx.n_bits, rx.clean, page);
 }
 
-/* -----------------------------------------------------------------------
- * Command helpers -- each is one request_timeslot() transmit followed by
- * one receive window, mirroring lf_em4x05_data.c's per-command structure.
- * --------------------------------------------------------------------- */
-
-/* Timeslot length for one TX frame. request_timeslot() only returns once
- * the slot has run out (sd_radio_session_close() waits for it), and RX
- * cannot arm before that -- so every microsecond of slot past the end of
- * TX is reply lost. Sized to worst-case bit time this cost ~1.9 ms after
- * START_AUTH (one SOF bit gone) and ~4 ms after an all-zero password (ten
- * bits gone, seen on real hardware); the reply starts ~1.65 ms after TX.
- * So: the frame's actual length, plus the measured ~7 us/symbol of PWM
- * stop/start overhead with headroom. Overstaying a slot is fatal, hence
- * headroom rather than none. */
-static uint32_t hitag2_slot_us(uint8_t nbits, uint32_t ones) {
-    uint32_t tx_tc = ones * HITAG2_T_1_TC + (nbits - ones) * HITAG2_T_0_TC +
-                     HITAG2_T_LOW_TC + HITAG2_T_STOP_TC;
-    return tx_tc * 8u + 700u + 12u * (nbits + 1u);
+/* exchange() for a command that fits in 32 bits. */
+static bool exchange_val(uint32_t value, size_t n, uint32_t power_up_us, uint32_t *page) {
+    uint8_t tx[4] = {0};
+    bits_put(tx, 0, value, n);
+    return exchange(tx, n, power_up_us, page);
 }
 
-static uint32_t g_send_value;
-static uint8_t  g_send_nbits;
-static volatile bool g_timeslot_done = false;
-
-/* request_timeslot()'s configure_next_event_earliest() (timeslot.c) asks for
- * NRF_RADIO_HFCLK_CFG_NO_GUARANTEE, so the SoftDevice may still be on the RC
- * oscillator when the callback runs -- it only promises the crystal for
- * NRF_RADIO_HFCLK_CFG_XTAL_GUARANTEED. Latched right before the PWM bit-bang
- * so hitag2_reader_raw_capture() can report whether the crystal was actually
- * up for this particular TX burst. */
-static volatile bool g_hfclk_running_at_tx;
-
-static void hitag2_send_timeslot_cb(void) {
-    uint32_t hfclk_running = 0;
-    sd_clock_hfclk_is_running(&hfclk_running);
-    g_hfclk_running_at_tx = (hfclk_running != 0);
-    hitag2_send_bits(g_send_value, g_send_nbits);
-    g_tx_done_tick = app_timer_cnt_get();
-    g_timeslot_done = true;
-}
-
-static bool hitag2_tx_rx(uint32_t tx_value, uint8_t tx_nbits,
-                          uint8_t *rx_out, uint8_t rx_nbits,
-                          uint32_t powerup_wait_us, uint32_t timeout_ms) {
-    g_send_value    = tx_value;
-    g_send_nbits    = tx_nbits;
-    g_timeslot_done = false;
-
-    uint32_t ones = 0;
-    for (uint8_t i = 0; i < tx_nbits; i++) {
-        ones += (tx_value >> i) & 1u;
-    }
-    request_timeslot(powerup_wait_us + hitag2_slot_us(tx_nbits, ones), hitag2_send_timeslot_cb);
-
-    autotimer *p_wait = bsp_obtain_timer(0);
-    while (!g_timeslot_done && NO_TIMEOUT_1MS(p_wait, 20)) {}
-    bsp_return_timer(p_wait);
-
-    if (!g_timeslot_done) {
-        return false;
-    }
-    return hitag2_receive_frame(rx_out, rx_nbits, timeout_ms);
-}
-
-/* Byte-buffer send path, additive alongside hitag2_tx_rx above: only the
- * 64-bit Nr/Ar crypto challenge needs more than 32 bits, and the existing
- * uint32-based path (hardware-verified for password mode) is left alone. */
-static uint8_t g_send8_buf[8];
-static uint8_t g_send8_nbits;
-
-static void hitag2_send8_timeslot_cb(void) {
-    hitag2_send_bits_bytes(g_send8_buf, g_send8_nbits);
-    g_tx_done_tick = app_timer_cnt_get();
-    g_timeslot_done = true;
-}
-
-static bool hitag2_tx_rx_bytes(const uint8_t *tx_bytes, uint8_t tx_nbits,
-                                uint8_t *rx_out, uint8_t rx_nbits,
-                                uint32_t powerup_wait_us, uint32_t timeout_ms) {
-    memcpy(g_send8_buf, tx_bytes, (size_t)(tx_nbits + 7) / 8);
-    g_send8_nbits   = tx_nbits;
-    g_timeslot_done = false;
-
-    uint32_t ones = 0;
-    for (uint8_t i = 0; i < tx_nbits; i++) {
-        ones += (tx_bytes[i / 8] >> (7 - (i % 8))) & 1u;
-    }
-    request_timeslot(powerup_wait_us + hitag2_slot_us(tx_nbits, ones), hitag2_send8_timeslot_cb);
-
-    autotimer *p_wait = bsp_obtain_timer(0);
-    while (!g_timeslot_done && NO_TIMEOUT_1MS(p_wait, 20)) {}
-    bsp_return_timer(p_wait);
-
-    if (!g_timeslot_done) {
-        return false;
-    }
-    return hitag2_receive_frame(rx_out, rx_nbits, timeout_ms);
-}
-
-/* Debug aid: send START_AUTH and dump the raw GPIOTE edge intervals on
- * LF_OA_OUT in place of decoding them -- for seeing what the comparator
- * actually produces on real silicon.
- *
- * both_edges selects the same capture hitag2_receive_frame() uses (every
- * run, with its load level packed into bit 7 and its length, clamped to
- * 0x7F Tc, in bits 6..0) instead of the original rising-only dump (bit 7
- * always 0, length truncated mod 256) -- so hitag2_receive_frame()'s own
- * decode input can be inspected directly instead of guessed at from a
- * rising-only proxy.
- *
- * Also reports rx_arm_gap_ticks: the app_timer (RTC1, ~61us/tick) gap
- * between the last TX edge finishing (timestamped inside the timeslot
- * callback) and RX actually arming here, after request_timeslot() has torn
- * its SD radio session down. Hitag2's reply window is only ~199-206 T0
- * (~1.6-1.65ms) after the reader's last edge -- unlike EM4x05/T55xx, whose
- * much longer windows this TX-then-arm structure was proven against -- so if
- * that teardown alone is in the same ballpark, RX would arm after the tag
- * has already answered and nothing would ever be seen.
- *
- * Also reports hfclk_running_out: whether the crystal (not the RC
- * oscillator) was the HFCLK source at the instant the TX burst ran, per
- * NRF_RADIO_HFCLK_CFG_NO_GUARANTEE above -- a false here means the bit
- * timing just sent was off nominal 16 MHz by whatever the RC oscillator's
- * tolerance is, not the values the classifier and the tag both expect. */
-bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out,
-                                uint32_t *rx_arm_gap_ticks_out, bool *hfclk_running_out,
-                                bool both_edges, uint32_t timeout_ms) {
-    *n_out = 0;
-    *rx_arm_gap_ticks_out = 0;
-    *hfclk_running_out = false;
-    hitag2_hfclk_hold();
-    start_lf_125khz_radio();
-    bsp_delay_us(HITAG2_T_WAIT_POWERUP_TC * 8);
-
-    g_send_value    = 0x18;  /* START_AUTH, 5 bits -- see hitag2_reader_get_uid */
-    g_send_nbits    = 5;
-    g_timeslot_done = false;
-    request_timeslot(hitag2_slot_us(5, 2), hitag2_send_timeslot_cb);
-
-    autotimer *p_wait = bsp_obtain_timer(0);
-    while (!g_timeslot_done && NO_TIMEOUT_1MS(p_wait, 20)) {}
-    bsp_return_timer(p_wait);
-
-    if (!g_timeslot_done) {
-        stop_lf_125khz_radio();
-        hitag2_hfclk_release();
-        return false;
-    }
-
-    *hfclk_running_out = g_hfclk_running_at_tx;
-    uint32_t rx_arm_tick_pre = app_timer_cnt_get();
-    hitag2_rx_arm(both_edges);
-    *rx_arm_gap_ticks_out = (rx_arm_tick_pre - g_tx_done_tick) & 0xFFFFFFu;
-
-    uint8_t n = 0;
-    autotimer *p_at = bsp_obtain_timer(0);
-    while (n < max_n && NO_TIMEOUT_1MS(p_at, timeout_ms)) {
-        uint16_t run = 0;
-        if (!cb_pop_front(&g_cb, &run)) {
-            continue;
-        }
-        if (both_edges) {
-            uint16_t len = LF_IA_RUN_LEN(run);
-            intervals[n++] = (uint8_t)((LF_IA_RUN_IS_LOAD(run) ? 0x80 : 0) |
-                                        (len > 0x7F ? 0x7F : len));
-        } else {
-            /* Rising-only: the level bit is always 0, so this is the
-             * rising-to-rising interval, truncated mod 256. */
-            intervals[n++] = (uint8_t)run;
-        }
-    }
-    bsp_return_timer(p_at);
-    lf_125khz_radio_gpiote_disable();
-    unregister_rio_callback();
-    cb_free(&g_cb);
-
-    stop_lf_125khz_radio();
-    hitag2_hfclk_release();
-    *n_out = n;
-    return n > 0;
+/* Powers the tag up from cold and sends START_AUTH (11000). Leaves the field
+ * on, the tag waiting for the password/challenge. */
+static bool hitag2_start_auth(uint32_t *uid) {
+    lf_rdr_field(false);
+    bsp_delay_ms(HT2_RESET_MS);
+    ht2_frame_reset(&m_frame);
+    return exchange_val(0x18u, 5, HT2_POWER_UP_US, uid);
 }
 
 bool hitag2_reader_get_uid(uint8_t uid[HITAG2_PAGE_SIZE], uint32_t timeout_ms) {
-    /* START_AUTH is 5 bits, top-aligned in the frame: value 0x18 (binary
-     * 11000) sent as the low 5 bits -- see HITAG2_START_AUTH's own comment
-     * in protocols.h ("left 5 bits only"); hitag2_send_bits sends the low
-     * `nbits` bits MSB-first, so passing 0x18/5 here reproduces "11000". */
-    hitag2_hfclk_hold();
-    start_lf_125khz_radio();
-    bsp_delay_us(HITAG2_T_WAIT_POWERUP_TC * 8);
-    bool ok = hitag2_tx_rx(0x18, 5, uid, 32, 0, timeout_ms);
+    (void)timeout_ms;
+    uint32_t v;
+    bool ok = hitag2_start_auth(&v);
+    lf_rdr_field(false);
+    if (ok) {
+        u32_be(v, uid);
+    }
     return ok;
 }
 
 static uint8_t hitag2_read_session(const uint8_t password[HITAG2_PAGE_SIZE],
                          uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
                          uint32_t timeout_ms) {
+    (void)timeout_ms;
     memset(pages, 0, HITAG2_NUM_PAGES * HITAG2_PAGE_SIZE);
 
-    /* hitag2_reader_get_uid() turns the field on unconditionally; this
-     * function owns the field for the whole session and must turn it back
-     * off on every exit (matches lf_em4x05_data.c's own reader functions --
-     * leaving the field on across a failed attempt denies the tag the fresh
-     * power-up its next START_AUTH needs). */
-    if (!hitag2_reader_get_uid(pages[HITAG2_PAGE_UID], timeout_ms)) {
-        stop_lf_125khz_radio();
-        hitag2_hfclk_release();
+    uint32_t uid;
+    if (!hitag2_start_auth(&uid)) {
+        lf_rdr_field(false);
         return HITAG2_FAIL_UID;
     }
+    u32_be(uid, pages[HITAG2_PAGE_UID]);
 
     uint32_t pwd_val = ((uint32_t)password[0] << 24) | ((uint32_t)password[1] << 16) |
-                        ((uint32_t)password[2] << 8)  | (uint32_t)password[3];
-    uint8_t reply[4];
-    if (!hitag2_tx_rx(pwd_val, 32, reply, 32, 0, timeout_ms)) {
-        /* Tag may have ignored this (wrong password, or crypto mode) --
-         * either way there is nothing more we can read without the key. */
-        stop_lf_125khz_radio();
-        hitag2_hfclk_release();
+                       ((uint32_t)password[2] << 8)  | (uint32_t)password[3];
+    uint32_t page3;
+    bool authed = false;
+    for (uint32_t i = 0; i < 3 && !authed; i++) {
+        authed = exchange_val(pwd_val, 32, 0, &page3);
+    }
+    if (!authed) {
+        /* Wrong password, or the tag is in crypto mode: nothing more to read. */
+        lf_rdr_field(false);
         return HITAG2_FAIL_AUTH;
     }
-    memcpy(pages[HITAG2_PAGE_CONFIG], reply, 4);
+    u32_be(page3, pages[HITAG2_PAGE_CONFIG]);
     memcpy(pages[HITAG2_PAGE_PWD], password, 4);
 
     static const uint8_t remaining_pages[] = {2, 4, 5, 6, 7};
     for (size_t i = 0; i < sizeof(remaining_pages); i++) {
         uint8_t page = remaining_pages[i];
         uint16_t frame = hitag2_page_frame(HITAG2_READ_PAGE, page);
-        uint8_t out[4];
-        if (!hitag2_tx_rx(frame, 10, out, 32, 0, timeout_ms)) {
-            stop_lf_125khz_radio();
-            hitag2_hfclk_release();
+        uint32_t v;
+        if (!exchange_val(frame, 10, 0, &v)) {
+            lf_rdr_field(false);
             return HITAG2_FAIL_PAGE;
         }
-        memcpy(pages[page], out, 4);
+        u32_be(v, pages[page]);
     }
-    stop_lf_125khz_radio();
-    hitag2_hfclk_release();
+    lf_rdr_field(false);
     return HITAG2_FAIL_NONE;
 }
 
 static uint8_t hitag2_crypto_read_session(const uint8_t key[HITAG2_KEY_SIZE],
                                 uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
                                 uint32_t timeout_ms) {
+    (void)timeout_ms;
     memset(pages, 0, HITAG2_NUM_PAGES * HITAG2_PAGE_SIZE);
 
-    /* Field lifecycle is owned here, same reasoning as hitag2_reader_read(). */
-    if (!hitag2_reader_get_uid(pages[HITAG2_PAGE_UID], timeout_ms)) {
-        stop_lf_125khz_radio();
-        hitag2_hfclk_release();
+    uint32_t uid;
+    if (!hitag2_start_auth(&uid)) {
+        lf_rdr_field(false);
         return HITAG2_FAIL_UID;
     }
+    u32_be(uid, pages[HITAG2_PAGE_UID]);
 
-    /* Key and UID are plain little-endian decodes of the raw bytes, then bit-reversed per byte (hitag2_rev64/32) --
-     * matches RfidResearchGroup/proxmark3's hitag2_crypto() reader function exactly. IV fixed to 0: Nr freshness
-     * only matters to an attacker, not to this legitimate known-key read. */
+    /* Key and UID: little-endian decodes of the raw bytes, bit-reversed per
+     * byte (hitag2_rev64/32) -- matches proxmark3's hitag2_crypto(). IV 0:
+     * Nr freshness only matters to an attacker, not a known-key read. */
     uint64_t key_raw = (uint64_t)key[0] | ((uint64_t)key[1] << 8) | ((uint64_t)key[2] << 16) |
                         ((uint64_t)key[3] << 24) | ((uint64_t)key[4] << 32) | ((uint64_t)key[5] << 40);
     uint64_t cs = hitag2_crypto_init(hitag2_rev64(key_raw), hitag2_rev32(le32(pages[HITAG2_PAGE_UID])), 0);
@@ -667,47 +182,46 @@ static uint8_t hitag2_crypto_read_session(const uint8_t key[HITAG2_KEY_SIZE],
     memset(nrar + 4, 0xFF, 4);
     hitag2_crypto_build_auth(&cs, nrar + 4);  /* Ar = inverted keystream, consumes 32 bits */
 
-    uint8_t reply[4];
-    if (!hitag2_tx_rx_bytes(nrar, 64, reply, 32, 0, timeout_ms)) {
-        /* No answer: wrong key, or the tag is actually in password mode. */
-        stop_lf_125khz_radio();
-        hitag2_hfclk_release();
+    uint32_t page3;
+    if (!exchange(nrar, 64, 0, &page3)) {
+        /* No answer: wrong key, or the tag is in password mode. */
+        lf_rdr_field(false);
         return HITAG2_FAIL_AUTH;
     }
+    uint8_t reply[4];
+    u32_be(page3, reply);
     hitag2_crypto_transcrypt(&cs, reply, 4, 0);
-    memcpy(pages[HITAG2_PAGE_CONFIG], reply, 4);  /* already have page 3 -- skip re-reading it below */
+    memcpy(pages[HITAG2_PAGE_CONFIG], reply, 4);  /* page 3 from the auth reply */
 
     static const uint8_t remaining_pages[] = {1, 2, 4, 5, 6, 7};
     for (size_t i = 0; i < sizeof(remaining_pages); i++) {
         uint8_t page = remaining_pages[i];
         uint16_t frame = hitag2_page_frame(HITAG2_READ_PAGE, page);
-        /* Every frame is encrypted once crypto mode is active, the command as much as the reply: pack the 10-bit
-         * frame into bytes the same way a received frame would be, XOR it with the next keystream bits (1 byte +
-         * 2 bits, matching the frame's own 10/8 split), then send the result. */
+        /* Every frame is encrypted in crypto mode, command as much as reply:
+         * pack the 10-bit frame into bytes as a received frame would be, XOR
+         * the next keystream (1 byte + 2 bits), send the result. */
         uint8_t fb[2] = { (uint8_t)(frame >> 2), (uint8_t)((frame & 0x3u) << 6) };
         hitag2_crypto_transcrypt(&cs, fb, 1, 2);
         uint32_t enc_value = ((uint32_t)fb[0] << 2) | (fb[1] >> 6);
 
-        uint8_t out[4];
-        if (!hitag2_tx_rx(enc_value, 10, out, 32, 0, timeout_ms)) {
-            stop_lf_125khz_radio();
-            hitag2_hfclk_release();
+        uint32_t v;
+        if (!exchange_val(enc_value, 10, 0, &v)) {
+            lf_rdr_field(false);
             return HITAG2_FAIL_PAGE;
         }
+        uint8_t out[4];
+        u32_be(v, out);
         hitag2_crypto_transcrypt(&cs, out, 4, 0);
         memcpy(pages[page], out, 4);
     }
-    stop_lf_125khz_radio();
-    hitag2_hfclk_release();
+    lf_rdr_field(false);
     return HITAG2_FAIL_NONE;
 }
 
-/* The link is marginal in both directions on real hardware (the tag does
- * not always answer START_AUTH, and the comparator can drop reply pulses),
- * and Hitag2 replies carry no checksum: a misread bit is otherwise silent
- * (seen: one page off by two bits in an otherwise good crypto read). So a
- * session is repeated from a fresh power-up until one returns the same
- * eight pages as any earlier one (the last HITAG2_KEEP are kept). */
+/* Hitag2 replies carry no checksum, so a misread page is otherwise silent. A
+ * session is repeated from a fresh power-up until one returns the same eight
+ * pages as an earlier one (the last HITAG2_KEEP are kept). Crypto sessions
+ * advance the cipher per command, so retry is whole-session, not per-page. */
 #define HITAG2_SESSION_ATTEMPTS  12
 #define HITAG2_FIELD_OFF_MS      10
 #define HITAG2_KEEP              4
@@ -769,4 +283,36 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
                                 uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
                                 uint32_t timeout_ms) {
     return hitag2_read_verified(hitag2_crypto_read_session, key, pages, timeout_ms);
+}
+
+/* Debug: send START_AUTH and return the answer's envelope runs -- the ADC
+ * decoder's own input -- as level+length bytes (bit 7 load level, bits 6..0
+ * length in Tc, clamped to 0x7F). both_edges is accepted for CLI
+ * compatibility and ignored; there are no rising-only edges on this path. */
+bool hitag2_reader_raw_capture(uint8_t *intervals, uint8_t max_n, uint8_t *n_out,
+                                uint32_t *rx_arm_gap_ticks_out, bool *hfclk_running_out,
+                                bool both_edges, uint32_t timeout_ms) {
+    (void)both_edges;
+    (void)timeout_ms;
+    *n_out = 0;
+    *rx_arm_gap_ticks_out = 0;
+    *hfclk_running_out = true;
+
+    uint32_t uid;
+    bool ok = hitag2_start_auth(&uid);
+    lf_rdr_field(false);
+    if (!ok) {
+        /* start_auth frames the answer; fall through to dump runs anyway. */
+    }
+
+    size_t nr = 0;
+    const uint16_t *runs = lf_rdr_runs(&nr);
+    uint8_t n = 0;
+    for (size_t i = 0; i < nr && n < max_n; i++) {
+        uint16_t len = LF_IA_RUN_LEN(runs[i]);
+        intervals[n++] = (uint8_t)((LF_IA_RUN_IS_LOAD(runs[i]) ? 0x80 : 0) |
+                                    (len > 0x7F ? 0x7F : len));
+    }
+    *n_out = n;
+    return n > 0;
 }

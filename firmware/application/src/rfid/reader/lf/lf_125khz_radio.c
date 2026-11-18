@@ -171,6 +171,16 @@ void lf_125khz_radio_saadc_disable(void) {
     unregister_lf_adc_callback();
 }
 
+// Gate the PWM-period-end -> SAADC-sample PPI on or off without touching the
+// ADC's own set-up, for a caller that drives the SAADC directly (lf_rdr_ia.c).
+void lf_125khz_radio_sample_link(bool on) {
+    if (on) {
+        APP_ERROR_CHECK(nrfx_ppi_channel_enable(m_pwm_saadc_sample_ppi_channel));
+    } else {
+        APP_ERROR_CHECK(nrfx_ppi_channel_disable(m_pwm_saadc_sample_ppi_channel));
+    }
+}
+
 /* --- 166.67 kHz SAADC capture (TIMER3-triggered, decoupled from the carrier) ---
  * Real Indala is PSK1 fc/2: the 125 kHz CARRIER phase is flipped per data bit
  * (the tuned LF antenna filters out the 62.5 kHz subcarrier). Sampling at
