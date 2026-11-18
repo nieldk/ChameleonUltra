@@ -1010,3 +1010,43 @@ uint8_t hitag2_reader_crack(const uint8_t nrar[8],
     }
     return HITAG2_CRACK_OK;
 }
+
+/* Bench stand-in for a car: run `count` crypto auths with a distinct reader
+ * nonce each, so a tag being emulated captures distinct {nR}{aR} traces for the
+ * sect 5.3 key-recovery attack. A real car varies its own nonce; this only
+ * matters for a CU-vs-CU bench. Needs the key (the car knows it). Returns how
+ * many auths the tag answered. */
+uint8_t hitag2_reader_gen_nonces(const uint8_t key[HITAG2_KEY_SIZE], uint8_t count, uint32_t timeout_ms) {
+    uint8_t uid[HITAG2_PAGE_SIZE];
+    if (!hitag2_reader_get_uid(uid, timeout_ms)) {
+        stop_lf_125khz_radio();
+        hitag2_hfclk_release();
+        return 0;
+    }
+    stop_lf_125khz_radio();
+    hitag2_hfclk_release();
+
+    uint64_t key_raw = (uint64_t)key[0] | ((uint64_t)key[1] << 8) | ((uint64_t)key[2] << 16) |
+                        ((uint64_t)key[3] << 24) | ((uint64_t)key[4] << 32) | ((uint64_t)key[5] << 40);
+    uint32_t uid_rev = hitag2_rev32(le32(uid));
+
+    uint8_t sent = 0;
+    for (uint8_t i = 0; i < count; i++) {
+        bsp_wdt_feed();
+        /* Distinct wire nonce; Ar built so the iv matches what the tag derives
+         * from the same bytes (rev32(le32(nrar))), so the auth still succeeds. */
+        uint8_t nrar[8] = { 0, 0, 0, i, 0xFF, 0xFF, 0xFF, 0xFF };
+        uint64_t cs = hitag2_crypto_init(hitag2_rev64(key_raw), uid_rev, hitag2_rev32(le32(nrar)));
+        hitag2_crypto_build_auth(&cs, nrar + 4);
+
+        uint8_t aT[HITAG2_PAGE_SIZE];
+        if (hitag2_reader_get_uid(uid, timeout_ms) &&
+            hitag2_tx_rx_bytes(nrar, 64, aT, 32, 0, timeout_ms)) {
+            sent++;
+        }
+        stop_lf_125khz_radio();
+        hitag2_hfclk_release();
+        bsp_delay_ms(HITAG2_FIELD_OFF_MS);
+    }
+    return sent;
+}

@@ -3055,6 +3055,15 @@ static data_frame_tx_t *cmd_processor_lf_hitag2_crypto_read(uint16_t cmd, uint16
     return data_frame_make(cmd, STATUS_LF_TAG_OK, sizeof(pages), (uint8_t *)pages);
 }
 
+static data_frame_tx_t *cmd_processor_lf_hitag2_gen_nonces(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    // In: 6-byte key + 1-byte count. Out: 1-byte count of auths the tag answered.
+    if (length < HITAG2_KEY_SIZE + 1) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint8_t sent = hitag2_reader_gen_nonces(data, data[HITAG2_KEY_SIZE], 60);
+    return data_frame_make(cmd, STATUS_LF_TAG_OK, 1, &sent);
+}
+
 #define LF_HITAG2_RAW_CAPTURE_MAX (48u)
 static data_frame_tx_t *cmd_processor_lf_hitag2_raw_capture(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     // In: both_edges(1, optional, defaults to 0/false for an older client).
@@ -5315,6 +5324,7 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_LF_HITAG2_CRYPTO_READ,        before_reader_run,           cmd_processor_lf_hitag2_crypto_read,         NULL                   },
     {    DATA_CMD_LF_HITAG2_RAW_CAPTURE,        before_reader_run,           cmd_processor_lf_hitag2_raw_capture,         NULL                   },
     {    DATA_CMD_LF_HITAG2_CRACK,              before_reader_run,           cmd_processor_lf_hitag2_crack,               NULL                   },
+    {    DATA_CMD_LF_HITAG2_GEN_NONCES,         before_reader_run,           cmd_processor_lf_hitag2_gen_nonces,          NULL                   },
     {    DATA_CMD_LF_IA_TRACE_READ,             NULL,                        cmd_processor_lf_ia_trace_read,              NULL                   },
     {    DATA_CMD_LF_IA_TRACE_CLEAR,            NULL,                        cmd_processor_lf_ia_trace_clear,             NULL                   },
     {    DATA_CMD_LF_IA_ENV_ARM,                NULL,                        cmd_processor_lf_ia_env_arm,                 NULL                   },

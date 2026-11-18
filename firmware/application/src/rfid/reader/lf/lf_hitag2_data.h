@@ -96,6 +96,12 @@ uint8_t hitag2_reader_crack(const uint8_t nrar[8],
                             uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
                             uint32_t timeout_ms);
 
+/* Bench car stand-in: run `count` crypto auths with a distinct reader nonce
+ * each, so an emulated tag captures distinct {nR}{aR} traces (sect 5.3). Needs
+ * the key; returns how many auths the tag answered. CU-vs-CU bench only. */
+uint8_t hitag2_reader_gen_nonces(const uint8_t key[HITAG2_KEY_SIZE], uint8_t count,
+                                 uint32_t timeout_ms);
+
 /* Debug: send START_AUTH and return up to max_n raw GPIOTE edge intervals
  * instead of decoding them -- for seeing what the comparator actually
  * produces on real hardware.

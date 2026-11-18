@@ -1204,6 +1204,21 @@ class ChameleonCMD:
         return resp
 
     @expect_response([Status.LF_TAG_OK])
+    def hitag2_gen_nonces(self, key: bytes, count: int):
+        """
+        Bench car stand-in (sect 5.3): run `count` crypto auths with a distinct
+        reader nonce each, so a tag being emulated captures distinct {nR}{aR}.
+        Needs the key. Returns the number of auths the tag answered.
+
+        :param key: 6-byte crypto-mode key
+        :param count: how many auths to send (1-32)
+        """
+        resp = self.device.send_cmd_sync(Command.LF_HITAG2_GEN_NONCES,
+                                         bytes(key) + bytes([count]), timeout=30)
+        resp.parsed = resp.data[0] if len(resp.data) else 0
+        return resp
+
+    @expect_response([Status.LF_TAG_OK])
     def hitag2_raw_capture(self, both_edges: bool = False):
         """
         Debug: send START_AUTH and return the raw GPIOTE edge intervals the

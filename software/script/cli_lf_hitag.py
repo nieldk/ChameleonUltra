@@ -372,6 +372,38 @@ class LFHitag2Nonces(DeviceRequiredUnit):
               f"<nR0> <aR0> <nR1> <aR1>")
 
 
+@lf_hitag2.command("gennonces")
+class LFHitag2GenNonces(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        p = ArgumentParserNoExit()
+        p.description = (
+            "Bench stand-in for a car (sect. 5.3): run N crypto auths with a "
+            "distinct reader nonce each, against a Hitag2 tag being emulated on "
+            "another CU, so that tag captures distinct {nR}{aR} traces for "
+            "ht2crack5. Needs the key; only for a CU-vs-CU bench (a real car "
+            "varies its own nonce)."
+        )
+        p.add_argument("-k", "--key", required=True, metavar="HEX12",
+                       help="6-byte crypto-mode key, 12 hex digits")
+        p.add_argument("-n", "--count", type=int, default=16, metavar="N",
+                       help="number of auths to send, 1-32 (default 16)")
+        return p
+
+    def on_exec(self, args: argparse.Namespace):
+        try:
+            key = _parse_hex6(args.key, "--key")
+        except ValueError as e:
+            print(f" {CR}{e}{C0}")
+            return
+        if not (1 <= args.count <= 32):
+            print(f" {CR}--count must be 1-32{C0}")
+            return
+
+        sent = self.cmd.hitag2_gen_nonces(key, args.count)
+        print(f" {CG}{sent}{C0} of {args.count} auth(s) answered; "
+              f"read them with {CC}lf hitag2 nonces{C0} on the emulating CU")
+
+
 @lf_hitag2.command("raw")
 class LFHitag2RawCapture(ReaderRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
