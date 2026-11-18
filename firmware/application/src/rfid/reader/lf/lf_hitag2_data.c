@@ -4,6 +4,7 @@
 
 #include "app_status.h"
 #include "bsp_delay.h"
+#include "bsp_wdt.h"
 #include "hitag2_crypto.h"
 #include "lf_hitag2_frame.h"
 #include "lf_rdr_ia.h"
@@ -28,7 +29,7 @@ NRF_LOG_MODULE_REGISTER();
 
 #define HT2_RESET_MS      20u          /* field off before a session: tag cold-starts */
 #define HT2_POWER_UP_US   (371u * 8u)  /* field on this long before START_AUTH (313 powerup + margin) */
-#define HT2_TRIES         8u           /* START_AUTHs per session: a tag answers only every second one */
+#define HT2_TRIES         12u          /* cold-start START_AUTHs before giving up (tag answers ~1 in 3) */
 #define HT2_PAGE_TRIES    6u           /* READ PAGEs per page, for two answers that agree (no CRC) */
 
 static lf_rdr_link_t m_link = {
@@ -96,20 +97,22 @@ static bool exchange_val(uint32_t value, size_t n, uint32_t power_up_us, uint32_
     return exchange(tx, n, power_up_us, page);
 }
 
-/* Cold-starts the tag and sends START_AUTH (11000) until it answers, up to
- * HT2_TRIES times in one powered session (a tag answers only every second
- * one). With need >= 2 the UID must come back the same twice (no CRC). The
- * last answered START_AUTH leaves the field on, the tag waiting for the
- * password/challenge. */
+/* Sends START_AUTH (11000), each try a full cold-start (field off, power up,
+ * command), up to HT2_TRIES times: this tag answers only a fresh powered-up
+ * START_AUTH, not a second one sent while it already waits. With need >= 2
+ * the UID must come back the same twice (no CRC). The answered try leaves
+ * the field on, the tag waiting for the password/challenge; the frame's SOF
+ * length, once learned, carries across tries. */
 static bool hitag2_start_auth(uint32_t *uid, uint8_t need) {
-    lf_rdr_field(false);
-    bsp_delay_ms(HT2_RESET_MS);
     ht2_frame_reset(&m_frame);
     ht2_agree_t agree;
     ht2_agree_reset(&agree);
     for (uint8_t i = 0; i < HT2_TRIES; i++) {
+        bsp_wdt_feed();
+        lf_rdr_field(false);
+        bsp_delay_ms(HT2_RESET_MS);
         uint32_t v;
-        if (!exchange_val(0x18u, 5, i == 0 ? HT2_POWER_UP_US : 0, &v)) {
+        if (!exchange_val(0x18u, 5, HT2_POWER_UP_US, &v)) {
             continue;
         }
         if (need < 2 || ht2_agree_add(&agree, v, uid)) {
@@ -137,8 +140,10 @@ static uint8_t hitag2_crypto_read_session(const uint8_t key[HITAG2_KEY_SIZE],
     (void)timeout_ms;
     memset(pages, 0, HITAG2_NUM_PAGES * HITAG2_PAGE_SIZE);
 
+    /* need=1: a wrong UID just fails this session's auth; the whole-session
+     * verify wrapper requires two complete sessions to agree. */
     uint32_t uid;
-    if (!hitag2_start_auth(&uid, 2)) {
+    if (!hitag2_start_auth(&uid, 1)) {
         lf_rdr_field(false);
         return HITAG2_FAIL_UID;
     }
@@ -221,6 +226,7 @@ static bool hitag2_read_verified(hitag2_session_t session, const uint8_t *secret
 
     g_fail_stage = HITAG2_FAIL_NONE;
     for (g_attempts = 1; g_attempts <= HITAG2_SESSION_ATTEMPTS; g_attempts++) {
+        bsp_wdt_feed();
         uint8_t stage = session(secret, pages, timeout_ms);
         if (stage == HITAG2_FAIL_NONE) {
             for (uint8_t i = 0; i < n_prev && i < HITAG2_KEEP; i++) {
@@ -258,8 +264,9 @@ bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
     g_attempts = 1;
     memset(pages, 0, HITAG2_NUM_PAGES * HITAG2_PAGE_SIZE);
 
+    /* need=1: page 0 is read back below and checked against this UID. */
     uint32_t uid;
-    if (!hitag2_start_auth(&uid, 2)) {
+    if (!hitag2_start_auth(&uid, 1)) {
         lf_rdr_field(false);
         g_fail_stage = HITAG2_FAIL_UID;
         return false;
@@ -282,6 +289,7 @@ bool hitag2_reader_read(const uint8_t password[HITAG2_PAGE_SIZE],
 
     uint8_t mask = 0;
     for (uint8_t p = 0; p < HITAG2_NUM_PAGES; p++) {
+        bsp_wdt_feed();
         uint16_t frame = hitag2_page_frame(HITAG2_READ_PAGE, p);
         ht2_agree_t agree;
         ht2_agree_reset(&agree);
