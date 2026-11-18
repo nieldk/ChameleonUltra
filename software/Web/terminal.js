@@ -2415,6 +2415,11 @@ function ht2ParseHex6(s, label){
   if(!/^[0-9a-fA-F]{12}$/.test(s)) throw new ArgError(label+" must be 12 hex digits (6 bytes)");
   return hexBytes(s);
 }
+function ht2ParseHex8(s, label){
+  s = (s||"").trim();
+  if(!/^[0-9a-fA-F]{16}$/.test(s)) throw new ArgError(label+" must be 16 hex digits (8 bytes)");
+  return hexBytes(s);
+}
 function ht2PageLines(pages){
   return pages.map((p,i) => "    "+i+"  "+Array.from(p).map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join(" ")+"  "+(HT2_PAGE_NAMES[i]||"User"));
 }
@@ -2472,6 +2477,16 @@ function ht2FailLine(f, rejected){
   if(stage === 2) return "UID "+uid+" read, then no answer: "+rejected+".";
   if(stage === 3) return "UID "+uid+" read and authenticated, but a page read got no answer.";
   return "UID "+uid+" read, but no two reads in "+attempts+" attempts returned the same data (link too noisy).";
+}
+// Failed crack: the device sends crack_status(1) uid(4).
+function ht2CrackFailLine(f){
+  if(f.data.length < 5) return "No answer from the tag.";
+  const status = f.data[0];
+  const uid = Array.from(f.data.slice(1,5)).map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join("");
+  if(status === 1) return "No usable answer to START_AUTH (no tag, or the reply did not decode).";
+  if(status === 2) return "No encrypted command was answered: the tag is not in crypto mode, or this {nR}{aR} is not valid for it.";
+  if(status === 3) return "UID "+uid+" authenticated, but the read-page-0 command was not found (link too noisy).";
+  return "Crack failed.";
 }
 const lfHitag2 = lf.subgroup("hitag2", "Hitag2 commands (125 kHz) -- password mode, and known-key crypto mode for emulation");
 lfHitag2.command("econfig", "Set/get the emulated Hitag2 tag (8 pages, in the active slot). With no options, shows the slot's current pages", [
@@ -2555,6 +2570,43 @@ lfHitag2.command("raw", "Debug: send START_AUTH and print the raw GPIOTE edge in
     lines.push(`    [${String(i).padStart(2," ")}]  ${String(v).padStart(3," ")}  ${hit ? hit[1] : "?"}`);
   });
   return lines;
+});
+lfHitag2.command("crack", "Recover a crypto-mode Hitag2's memory without its key ('Gone in 360 Seconds' sect. 5.1): replay a captured {nR}{aR}, brute-force the encrypted read, dump all 8 pages", [
+  {names:["--nrar"], takesValue:true, dest:"nrar", required:true},
+], async (a) => {
+  await needReader();
+  const nrar = ht2ParseHex8(a.nrar, "--nrar");
+  const f = await request(CU.LF_HITAG2_CRACK, nrar);
+  if(!OK_STATUSES.has(f.status)) return [ht2CrackFailLine(f)];
+  const pages = [0,1,2,3,4,5,6,7].map(i => f.data.slice(i*4, i*4+4));
+  return ht2TagLines(pages);
+});
+lfHitag2.command("nonces", "Show the {nR}{aR} reader auth attempts captured while this device emulates a Hitag2 tag (sect. 5.3 key recovery). Recover the key on a PC with ht2crack5", [
+  {names:["--clear"], takesValue:false, dest:"clear"},
+], async (a) => {
+  if(a.clear){ okOrThrow(await request(CU.HITAG2_CLEAR_NONCES)); return ["cleared"]; }
+  const uf = okOrThrow(await request(CU.HITAG2_GET_EMU_ID));
+  const uid = Array.from(uf.data.slice(0,4)).map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join("");
+  const f = okOrThrow(await request(CU.HITAG2_GET_NONCES));
+  const n = f.data.length ? f.data[0] : 0;
+  if(!n) return ["no nonces captured (arm Hitag2 emulation and let a reader authenticate)"];
+  const hx = (s,e) => Array.from(f.data.slice(s,e)).map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join("");
+  const lines = ["UID "+uid+", "+n+" pair(s):"];
+  for(let i=0;i<n;i++){ lines.push("   nR "+hx(1+i*8,1+i*8+4)+"  aR "+hx(1+i*8+4,1+i*8+8)); }
+  lines.push("PC: proxmark3 tools/hitag2crack/ht2crack5 "+uid+" <nR0> <aR0> <nR1> <aR1>");
+  return lines;
+});
+lfHitag2.command("gennonces", "Bench stand-in for a car (sect. 5.3): run N crypto auths with a distinct nonce each against a Hitag2 tag emulated on another CU, so it captures distinct {nR}{aR}. Needs the key; CU-vs-CU bench only", [
+  {names:["-k","--key"], takesValue:true, dest:"key", required:true},
+  {names:["-n","--count"], takesValue:true, dest:"count"},
+], async (a) => {
+  await needReader();
+  const key = ht2ParseHex6(a.key, "--key");
+  const count = a.count === undefined ? 16 : parseInt(a.count, 10);
+  if(!(count >= 1 && count <= 32)) throw new ArgError("--count must be 1-32");
+  const f = okOrThrow(await request(CU.LF_HITAG2_GEN_NONCES, key.concat([count])));
+  const sent = f.data.length ? f.data[0] : 0;
+  return [sent+" of "+count+" auth(s) answered; read them with 'lf hitag2 nonces' on the emulating CU"];
 });
 
 /* ================= lf interactive ================= */
