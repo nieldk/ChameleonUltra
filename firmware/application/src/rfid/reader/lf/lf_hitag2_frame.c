@@ -10,9 +10,16 @@ void ht2_frame_reset(ht2_frame_t *f) {
 }
 
 bool ht2_frame_page(ht2_frame_t *f, const uint8_t *bits, size_t n, bool clean, uint32_t *page) {
+    (void)clean;
     if (f->sof == 0) {
-        // The length can only be read off an answer that ended cleanly: one with junk after it is longer than it is.
-        if (!clean || n < 32u + HT2_SOF_MIN || n > 32u + HT2_SOF_MAX) {
+        // Learn the SOF length from an answer of exactly 37 or 38 bits that
+        // opens with that many ones. The decoder marks an answer clean only
+        // when the runs run out; a capture that runs past the reply into the
+        // settled field ends on a coding violation instead, so a complete
+        // frame reads back not-clean. The tight length and all-ones prefix
+        // pin the SOF without the clean flag: junk after the frame would push
+        // n past 38 (rejected here), and a short frame below 37.
+        if (n < 32u + HT2_SOF_MIN || n > 32u + HT2_SOF_MAX) {
             return false;
         }
         for (size_t i = 0; i < n - 32u; i++) {
