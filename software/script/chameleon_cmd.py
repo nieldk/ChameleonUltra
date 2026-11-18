@@ -1843,6 +1843,22 @@ class ChameleonCMD:
         return resp
 
     @expect_response(Status.SUCCESS)
+    def hitag2_get_nonces(self):
+        """
+        Get the {nR}{aR} reader auth attempts captured while emulating a
+        Hitag2 tag (sect 5.3 key recovery). Returns a list of 8-byte pairs.
+        """
+        resp = self.device.send_cmd_sync(Command.HITAG2_GET_NONCES)
+        n = resp.data[0] if len(resp.data) else 0
+        resp.parsed = [bytes(resp.data[1 + i * 8:1 + i * 8 + 8]) for i in range(n)]
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def hitag2_clear_nonces(self):
+        """Clear the captured {nR}{aR} log."""
+        return self.device.send_cmd_sync(Command.HITAG2_CLEAR_NONCES)
+
+    @expect_response(Status.SUCCESS)
     def jablotron_set_emu_id(self, id: bytes):
         """
         Set the card number emulated by Jablotron.

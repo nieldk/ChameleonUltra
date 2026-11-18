@@ -41,6 +41,24 @@ static ht2_state_t m_state;
 static bool m_crypto_active;
 static uint64_t m_cs;
 
+/* Captured reader auth attempts for the "Gone in 360 Seconds" key-recovery
+ * attack (sect 5.3): each entry is the 8-byte {nR}{aR} a reader sent. Logged
+ * whether or not it authenticates, since the attacker emulates the tag without
+ * the key; PC-side ht2crack3/4/5 recover the 48-bit key from these pairs. */
+#define HT2_NONCE_LOG_MAX 32
+static uint8_t m_nonce_log[HT2_NONCE_LOG_MAX][8];
+static uint8_t m_nonce_n;
+
+uint8_t lf_ia_hitag2_get_nonces(uint8_t *out, uint8_t max) {
+    uint8_t n = (m_nonce_n < max) ? m_nonce_n : max;
+    memcpy(out, m_nonce_log, (size_t)n * 8u);
+    return n;
+}
+
+void lf_ia_hitag2_clear_nonces(void) {
+    m_nonce_n = 0;
+}
+
 static uint32_t bits_value(const uint8_t *bits, size_t first, size_t n) {
     uint32_t v = 0;
     for (size_t i = 0; i < n; i++) {
@@ -191,6 +209,12 @@ static lf_ia_verdict_t on_command(void *ctx, const lf_ia_command_t *cmd, lf_ia_r
                 return LF_IA_IGNORE;
             }
             const uint8_t *rx = cmd->bits;
+            /* Log {nR}{aR} before the key check (sect 5.3 capture); skip a
+             * nonce identical to the last, so a repeating reader can't fill it. */
+            if (m_nonce_n < HT2_NONCE_LOG_MAX &&
+                (m_nonce_n == 0 || memcmp(m_nonce_log[m_nonce_n - 1], rx, 8) != 0)) {
+                memcpy(m_nonce_log[m_nonce_n++], rx, 8);
+            }
             uint64_t key = hitag2_rev64(crypto_key_raw());
             uint32_t uid = hitag2_rev32(le32(&m_pages[4u * HITAG2_PAGE_UID]));
             uint32_t iv = hitag2_rev32(le32(rx));  // Nr

@@ -309,6 +309,8 @@
 #define DATA_CMD_FDXB_GET_EMU_ID                (5017)
 #define DATA_CMD_HITAG2_SET_EMU_ID              (5018)  // in: 32 bytes, 8 pages
 #define DATA_CMD_HITAG2_GET_EMU_ID              (5019)  // out: 32 bytes, 8 pages
+#define DATA_CMD_HITAG2_GET_NONCES              (5020)  // out: n(1) + n*8 bytes {nR}{aR} captured while emulating (sect 5.3)
+#define DATA_CMD_HITAG2_CLEAR_NONCES            (5021)  // in: none; clears the captured-nonce log
 
 #define DATA_CMD_EM4X05_SCAN                    (3030)
 #define DATA_CMD_EM4X05_READSNIFF               (3032)

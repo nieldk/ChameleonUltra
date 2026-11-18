@@ -20,7 +20,7 @@ import time
 from chameleon_com import NotOpenException, CMDInvalidException
 
 from cli_core import (
-    ArgumentParserNoExit, ReaderRequiredUnit, SlotIndexArgsAndGoUnit,
+    ArgumentParserNoExit, DeviceRequiredUnit, ReaderRequiredUnit, SlotIndexArgsAndGoUnit,
     lf, CG, CY, CR, CC, C0,
 )
 from chameleon_enum import SlotNumber, TagSpecificType
@@ -329,6 +329,47 @@ class LFHitag2Crack(ReaderRequiredUnit):
             return
 
         _print_tag(pages)
+
+
+@lf_hitag2.command("nonces")
+class LFHitag2Nonces(DeviceRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        p = ArgumentParserNoExit()
+        p.description = (
+            "Show the {nR}{aR} reader auth attempts captured while this device "
+            "emulates a Hitag2 tag (sect. 5.3 key recovery). Arm Hitag2 emulation, "
+            "let a reader authenticate repeatedly, then read the pairs here and "
+            "recover the key on a PC with proxmark3 tools/hitag2crack (ht2crack5)."
+        )
+        p.add_argument("-f", "--file", metavar="PATH",
+                       help="write the UID and pairs to a file for ht2crack5")
+        p.add_argument("--clear", action="store_true", help="clear the capture log")
+        return p
+
+    def on_exec(self, args: argparse.Namespace):
+        if args.clear:
+            self.cmd.hitag2_clear_nonces()
+            print(f" {CG}cleared{C0}")
+            return
+
+        uid = bytes(self.cmd.hitag2_get_emu_id()[0])
+        pairs = self.cmd.hitag2_get_nonces()
+        if not pairs:
+            print(f" {CY}no nonces captured (arm Hitag2 emulation and let a reader authenticate){C0}")
+            return
+
+        print(f" UID {CG}{uid.hex().upper()}{C0}, {CG}{len(pairs)}{C0} pair(s):")
+        for p in pairs:
+            print(f"   nR {p[:4].hex().upper()}  aR {p[4:].hex().upper()}")
+
+        if args.file:
+            with open(args.file, "w") as fh:
+                fh.write(f"# UID {uid.hex().upper()}\n")
+                for p in pairs:
+                    fh.write(f"{p[:4].hex().upper()} {p[4:].hex().upper()}\n")
+            print(f" {CG}wrote {args.file}{C0}")
+        print(f" PC: proxmark3 tools/hitag2crack/ht2crack5 {uid.hex().upper()} "
+              f"<nR0> <aR0> <nR1> <aR1>")
 
 
 @lf_hitag2.command("raw")

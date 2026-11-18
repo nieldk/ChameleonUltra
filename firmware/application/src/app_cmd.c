@@ -32,6 +32,7 @@
 #include "lf_ia_debug.h"
 #include "lf_ia_trace.h"
 #include "lf_hitag2_data.h"
+#include "rfid/nfctag/lf/interactive/lf_ia_hitag2.h"
 #include "protocols/fdxb.h"
 #include "rc522.h"
 #include "hw_connect.h"
@@ -2218,6 +2219,20 @@ static data_frame_tx_t *cmd_processor_hitag2_get_emu_id(uint16_t cmd, uint16_t s
     }
     tag_data_buffer_t *buffer = get_buffer_by_tag_type(TAG_TYPE_HITAG2);
     return data_frame_make(cmd, STATUS_SUCCESS, LF_HITAG2_TAG_ID_SIZE, buffer->buffer);
+}
+
+#define HITAG2_NONCE_MAX (32u)
+static data_frame_tx_t *cmd_processor_hitag2_get_nonces(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    // Out: n(1) + n*8 bytes {nR}{aR}, captured while emulating a Hitag2 tag (sect 5.3).
+    static uint8_t out[1 + HITAG2_NONCE_MAX * 8];
+    uint8_t n = lf_ia_hitag2_get_nonces(out + 1, HITAG2_NONCE_MAX);
+    out[0] = n;
+    return data_frame_make(cmd, STATUS_SUCCESS, 1 + n * 8, out);
+}
+
+static data_frame_tx_t *cmd_processor_hitag2_clear_nonces(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    lf_ia_hitag2_clear_nonces();
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
 }
 
 static data_frame_tx_t *cmd_processor_jablotron_set_emu_id(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
@@ -5382,6 +5397,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_FDXB_GET_EMU_ID,                NULL,                      cmd_processor_fdxb_get_emu_id,               NULL                   },
     {    DATA_CMD_HITAG2_SET_EMU_ID,              NULL,                      cmd_processor_hitag2_set_emu_id,             NULL                   },
     {    DATA_CMD_HITAG2_GET_EMU_ID,              NULL,                      cmd_processor_hitag2_get_emu_id,             NULL                   },
+    {    DATA_CMD_HITAG2_GET_NONCES,              NULL,                      cmd_processor_hitag2_get_nonces,             NULL                   },
+    {    DATA_CMD_HITAG2_CLEAR_NONCES,            NULL,                      cmd_processor_hitag2_clear_nonces,           NULL                   },
 
     {    DATA_CMD_SEOS_READ_EMU_DATA,             NULL,                      cmd_processor_seos_read_emu_data,            NULL                   },
     {    DATA_CMD_SEOS_WRITE_EMU_DATA,            NULL,                      cmd_processor_seos_write_emu_data,           NULL                   },

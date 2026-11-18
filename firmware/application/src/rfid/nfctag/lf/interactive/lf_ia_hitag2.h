@@ -11,3 +11,8 @@
 
 // Sets the pages the module answers from and returns the module, for lf_ia_set_module.
 const lf_ia_module_t *lf_ia_hitag2_load(const uint8_t *pages);
+
+// Captured reader {nR}{aR} auth attempts (sect 5.3 key-recovery). get copies up
+// to `max` 8-byte pairs into `out` and returns the count; clear empties the log.
+uint8_t lf_ia_hitag2_get_nonces(uint8_t *out, uint8_t max);
+void lf_ia_hitag2_clear_nonces(void);
