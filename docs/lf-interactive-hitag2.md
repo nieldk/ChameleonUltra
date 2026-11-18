@@ -161,6 +161,43 @@ to the end of TX (`HITAG2_REPLY_START_TC`).
   `T_WAIT_*` constants, which are upstream proxmark3's own verified values.
   `lf hitag2 raw` exists to get a real capture before adjusting these.
 
+## Attacks (Gone in 360 Seconds)
+
+Verdult, Garcia & Balasch, USENIX 2012. The CU captures; heavy key
+recovery runs on a PC with proxmark3 `tools/hitag2crack`.
+
+* **`lf hitag2 dict -k <key> / -f <file>`**: tries a list of known keys
+  (8 hex = password-mode read, 12 hex = crypto-mode read), prints the first
+  that authenticates. A dictionary check, not recovery -- it only finds keys
+  already in the list.
+
+* **`lf hitag2 crack --nrar <16 hex>`** (sect. 5.1, malleability): reads a
+  crypto-mode tag whose key is unknown, from one eavesdropped `{nR}{aR}`.
+  The tag issues no challenge, so the pair is replayed to authenticate, the
+  encrypted read command is brute-forced (`hitag2_reader_crack()` in
+  `lf_hitag2_data.c`, ported from proxmark3 `armsrc/hitag2_crack.c`
+  `ht2_crack1`), keystream is recovered from the known UID, and all 8 pages
+  are dumped including the tag password. No key, no PC. Each read uses the
+  same verify-two-agree as `cread`, since the link carries no checksum.
+  crack2 (2048-bit keystream for the PC TMTO solver, sect. 5.2) is not
+  implemented: the longest extended read is ~2016 bits (~400 ms of one
+  continuous RF burst), past the SoftDevice timeslot ceiling.
+
+* **`lf hitag2 nonces`** (sect. 5.3 capture): while this device emulates a
+  Hitag2 tag, every reader `{nR}{aR}` auth attempt is logged (before the key
+  check, so no key is needed) into a 32-entry ring in `lf_ia_hitag2.c`.
+  `nonces` prints the pairs (`-f` writes an ht2crack5 input file, `--clear`
+  empties the log). Against a real car this collects genuine distinct
+  nonces; a PC then recovers the 48-bit key with `ht2crack5`.
+
+* **`lf hitag2 gennonces -k <key> -n <N>`**: a bench stand-in for a car.
+  Runs `N` crypto auths with a distinct reader nonce each (correct `aR` per
+  nonce, so auth still succeeds) so a tag emulated on another CU captures
+  distinct `{nR}{aR}`. Needs the key; CU-vs-CU bench only, since a real car
+  varies its own nonce. The emulator validates the repeated read command of
+  an extended (10+5r-bit) frame, so the bench behaves like a real tag rather
+  than accepting a wrong-page command padded with garbage.
+
 ## Lessons from bringing Hitag2 up on real hardware
 
 Two bugs took real reader captures to find, and are worth knowing before
