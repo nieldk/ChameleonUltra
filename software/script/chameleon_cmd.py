@@ -1138,7 +1138,7 @@ class ChameleonCMD:
             then (stage, attempts, uid): stage 1 = no answer to START_AUTH,
             2 = no answer to the password, 3 = a page read failed
         """
-        resp = self.device.send_cmd_sync(Command.LF_HITAG2_READ, bytes(password))
+        resp = self.device.send_cmd_sync(Command.LF_HITAG2_READ, bytes(password), timeout=12)
         if resp.status == Status.LF_TAG_OK:
             pages = [resp.data[i * 4:(i + 1) * 4] for i in range(8)]
             resp.parsed = (resp.status, pages, None)
@@ -1164,7 +1164,7 @@ class ChameleonCMD:
         :return: parsed tuple (status, pages, fail), as hitag2_read (stage
             2 = no answer to the challenge)
         """
-        resp = self.device.send_cmd_sync(Command.LF_HITAG2_CRYPTO_READ, bytes(key))
+        resp = self.device.send_cmd_sync(Command.LF_HITAG2_CRYPTO_READ, bytes(key), timeout=12)
         if resp.status == Status.LF_TAG_OK:
             pages = [resp.data[i * 4:(i + 1) * 4] for i in range(8)]
             resp.parsed = (resp.status, pages, None)

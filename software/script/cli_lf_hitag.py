@@ -383,16 +383,26 @@ class LFHitag2Dict(ReaderRequiredUnit):
         try:
             for i, k in enumerate(ordered):
                 try:
-                    if len(k) == 8:
-                        kind, pages = "pwd", self.cmd.hitag2_read(bytes.fromhex(k))[1]
-                    elif len(k) == 12:
-                        kind, pages = "crypto", self.cmd.hitag2_crypto_read(bytes.fromhex(k))[1]
-                    else:
-                        print(f" {CY}[{i + 1}/{len(ordered)}] {k}: not 8 or 12 hex digits, skipped{C0}")
-                        continue
+                    kb = bytes.fromhex(k)
                 except ValueError:
                     print(f" {CY}[{i + 1}/{len(ordered)}] {k}: not valid hex, skipped{C0}")
                     continue
+                if len(kb) not in (4, 6):
+                    print(f" {CY}[{i + 1}/{len(ordered)}] {k}: not 8 or 12 hex digits, skipped{C0}")
+                    continue
+                kind = "pwd" if len(kb) == 4 else "crypto"
+                # The read can miss on a marginal link or time out; try a key
+                # twice before moving on, and never let one key stop the run.
+                pages = None
+                for _ in range(2):
+                    try:
+                        pages = (self.cmd.hitag2_read(kb) if len(kb) == 4
+                                 else self.cmd.hitag2_crypto_read(kb))[1]
+                    except (TimeoutError, OSError) as e:
+                        print(f" {CY}[{i + 1}/{len(ordered)}] {k}: {e}{C0}")
+                        pages = None
+                    if pages is not None:
+                        break
                 if pages is not None:
                     print(f" {CG}[{i + 1}/{len(ordered)}] {k}: FOUND ({kind} mode){C0}")
                     _print_tag(pages)
