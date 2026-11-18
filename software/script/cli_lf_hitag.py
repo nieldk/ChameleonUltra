@@ -114,6 +114,18 @@ def _fail_text(fail, rejected):
             f"the same data (link too noisy).")
 
 
+# Published Hitag2 defaults. 8 hex digits = password mode, 12 = crypto mode.
+# "ONMIKR"/"MIKR" is the transport default; BDF5E846 is Paxton's (PM3's
+# ht2_default_keys). Add site defaults via `dict -f FILE`.
+_DEFAULT_KEYS = [
+    "4F4E4D494B52",  # crypto, "ONMIKR" (MIKRON)
+    "4D494B52",      # password, "MIKR"
+    "BDF5E846",      # password, Paxton
+    "00000000",
+    "FFFFFFFF",
+]
+
+
 def _parse_hex4(s, label):
     s = s.strip()
     if len(s) != 8:
@@ -316,3 +328,77 @@ class LFHitag2RawCapture(ReaderRequiredUnit):
                         tag = name
                         break
                 print(f"    [{i:2}]  {v:3}  {tag}")
+
+
+def _load_key_file(path):
+    """Keys one per line, 8 or 12 hex digits; '#' and blank lines ignored."""
+    keys = []
+    with open(path) as f:
+        for ln, raw in enumerate(f, 1):
+            s = raw.split("#", 1)[0].strip().replace(" ", "")
+            if not s:
+                continue
+            if len(s) not in (8, 12) or not all(c in "0123456789abcdefABCDEF" for c in s):
+                raise ValueError(f"{path}:{ln}: not 8 or 12 hex digits: {raw.strip()!r}")
+            keys.append(s.upper())
+    return keys
+
+
+@lf_hitag2.command("dict")
+class LFHitag2Dict(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        p = ArgumentParserNoExit()
+        p.description = (
+            "Try a list of known keys against a Hitag2 tag. Each 8-hex-digit "
+            "key is tried as a password-mode read, each 12-hex-digit key as a "
+            "crypto-mode read; the first that authenticates is printed. With "
+            "no -f, a short built-in list of published defaults is used. This "
+            "only finds keys already in the list -- it is not key recovery."
+        )
+        p.add_argument("-f", "--file", metavar="FILE",
+                       help="key list, one per line (8 or 12 hex digits; # comments ok)")
+        p.add_argument("-k", "--key", metavar="HEX", action="append",
+                       help="extra key to try, tried before the list (repeatable)")
+        return p
+
+    def on_exec(self, args: argparse.Namespace):
+        keys = list(args.key or [])
+        try:
+            keys += _load_key_file(args.file) if args.file else list(_DEFAULT_KEYS)
+        except (OSError, ValueError) as e:
+            print(f" {CR}{e}{C0}")
+            return
+
+        seen, ordered = set(), []
+        for k in keys:
+            ku = k.strip().upper()
+            if ku and ku not in seen:
+                seen.add(ku)
+                ordered.append(ku)
+        if not ordered:
+            print(f" {CR}No keys to try.{C0}")
+            return
+
+        print(f" Trying {len(ordered)} key(s). Ctrl-C to stop.")
+        try:
+            for i, k in enumerate(ordered):
+                try:
+                    if len(k) == 8:
+                        kind, pages = "pwd", self.cmd.hitag2_read(bytes.fromhex(k))[1]
+                    elif len(k) == 12:
+                        kind, pages = "crypto", self.cmd.hitag2_crypto_read(bytes.fromhex(k))[1]
+                    else:
+                        print(f" {CY}[{i + 1}/{len(ordered)}] {k}: not 8 or 12 hex digits, skipped{C0}")
+                        continue
+                except ValueError:
+                    print(f" {CY}[{i + 1}/{len(ordered)}] {k}: not valid hex, skipped{C0}")
+                    continue
+                if pages is not None:
+                    print(f" {CG}[{i + 1}/{len(ordered)}] {k}: FOUND ({kind} mode){C0}")
+                    _print_tag(pages)
+                    return
+                print(f" [{i + 1}/{len(ordered)}] {k}: no")
+        except KeyboardInterrupt:
+            print(f"\n {CY}Stopped.{C0}")
+            return
+        print(f" {CR}No key in the list worked.{C0}")
