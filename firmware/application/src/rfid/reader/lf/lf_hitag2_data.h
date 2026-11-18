@@ -82,6 +82,20 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
                                 uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
                                 uint32_t timeout_ms);
 
+/* Malleability crack result codes (hitag2_reader_crack). */
+#define HITAG2_CRACK_OK        0
+#define HITAG2_CRACK_NO_UID    1  /* no answer to START_AUTH */
+#define HITAG2_CRACK_NO_ECMD   2  /* no e-cmd answered: not crypto mode, or bad {nR}{aR} */
+#define HITAG2_CRACK_NO_PAGE0  3  /* found an e-cmd but not the read-page-0 command */
+
+/* Key-agnostic malleability crack ("Gone in 360 Seconds" sect. 5.1): replay a
+ * captured 8-byte {nR}{aR}, brute the encrypted read command, recover keystream
+ * from the known id, and dump all 8 pages. Reads a crypto-mode tag without its
+ * key. Returns one of HITAG2_CRACK_*; pages[0] is always the UID. */
+uint8_t hitag2_reader_crack(const uint8_t nrar[8],
+                            uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
+                            uint32_t timeout_ms);
+
 /* Debug: send START_AUTH and return up to max_n raw GPIOTE edge intervals
  * instead of decoding them -- for seeing what the comparator actually
  * produces on real hardware.

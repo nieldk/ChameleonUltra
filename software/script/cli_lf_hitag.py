@@ -143,6 +143,29 @@ def _parse_hex6(s, label):
     return bytes.fromhex(s)
 
 
+def _parse_hex8(s, label):
+    s = s.strip()
+    if len(s) != 16:
+        raise ValueError(f"{label} must be 16 hex digits (8 bytes)")
+    return bytes.fromhex(s)
+
+
+def _crack_fail_text(fail):
+    """Message for a failed crack from the device's (crack_status, uid)."""
+    if fail is None:
+        return "No answer from the tag."
+    status, uid = fail
+    if status == 1:
+        return "No usable answer to START_AUTH (no tag, or the reply did not decode)."
+    if status == 2:
+        return ("No encrypted command was answered: the tag is not in crypto mode, "
+                "or this {nR}{aR} is not valid for it.")
+    if status == 3:
+        return (f"UID {uid.hex().upper()} authenticated, but the read-page-0 command "
+                f"was not found (link too noisy).")
+    return "Crack failed."
+
+
 @lf_hitag2.command("econfig")
 class LFHitag2Econfig(SlotIndexArgsAndGoUnit):
     def args_parser(self) -> ArgumentParserNoExit:
@@ -271,6 +294,38 @@ class LFHitag2CryptoRead(ReaderRequiredUnit):
         status, pages, fail = self.cmd.hitag2_crypto_read(key)
         if pages is None:
             print(f" {CR}{_fail_text(fail, 'challenge rejected (wrong key, or tag is in password mode)')}{C0}")
+            return
+
+        _print_tag(pages)
+
+
+@lf_hitag2.command("crack")
+class LFHitag2Crack(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        p = ArgumentParserNoExit()
+        p.description = (
+            "Recover a crypto-mode Hitag2's memory without its key, using the "
+            "malleability attack from 'Gone in 360 Seconds' (sect. 5.1). "
+            "Needs one valid {nR}{aR} pair eavesdropped from a genuine "
+            "reader/tag authentication. The tag issues no challenge, so the "
+            "pair is replayed to authenticate, the encrypted read command is "
+            "brute-forced, and keystream is recovered from the known UID to "
+            "dump all 8 pages, including the tag password."
+        )
+        p.add_argument("--nrar", required=True, metavar="HEX16",
+                       help="8-byte {nR}{aR} pair, 16 hex digits")
+        return p
+
+    def on_exec(self, args: argparse.Namespace):
+        try:
+            nrar = _parse_hex8(args.nrar, "--nrar")
+        except ValueError as e:
+            print(f" {CR}{e}{C0}")
+            return
+
+        status, pages, fail = self.cmd.hitag2_crack(nrar)
+        if pages is None:
+            print(f" {CR}{_crack_fail_text(fail)}{C0}")
             return
 
         _print_tag(pages)

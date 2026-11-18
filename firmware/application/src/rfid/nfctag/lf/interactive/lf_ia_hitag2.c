@@ -115,7 +115,53 @@ static lf_ia_verdict_t on_command(void *ctx, const lf_ia_command_t *cmd, lf_ia_r
         return LF_IA_IGNORE;
     }
 
-    // A Hitag 2 reader frame is 5, 10, 32 or 64 bits. Other lengths are noise, and must not move the state.
+    // Authenticated read, including redundancy-extended commands ("Gone in 360
+    // Seconds" sect 4.1): the reader repeats the 10-bit read command, the tag
+    // consumes them all and answers 32 bits of the page at the later keystream
+    // offset. A real tag validates the repetition, so every 10-bit block must
+    // decode to the same read command; otherwise a wrong-page command padded
+    // with garbage would be accepted and the crack would lock onto it.
+    if (m_state == HT2_AUTHENTICATED && cmd->n_bits >= 10 && cmd->n_bits <= LF_IA_MAX_BITS &&
+        (cmd->n_bits % 10u) == 0u) {
+        uint8_t frame[LF_IA_MAX_BITS / 8];
+        memcpy(frame, cmd->bits, sizeof(frame));
+        if (m_crypto_active) {
+            // Decrypt the whole command so the keystream advances by n_bits.
+            hitag2_crypto_transcrypt(&m_cs, frame, cmd->n_bits / 8u, cmd->n_bits % 8u);
+        }
+        // Every 10-bit block after the first must repeat it exactly.
+        for (uint32_t off = 10; off < cmd->n_bits; off += 10) {
+            for (uint32_t i = 0; i < 10; i++) {
+                if (lf_ia_bit_get(frame, off + i) != lf_ia_bit_get(frame, i)) {
+                    return LF_IA_IGNORE;
+                }
+            }
+        }
+        // READ PAGE is 11 nnn 00 ~nnn, READ PAGE INVERTED is 01 nnn 10 ~nnn.
+        const uint32_t op = bits_value(frame, 0, 2) << 2 | bits_value(frame, 5, 2);
+        const uint32_t n = bits_value(frame, 2, 3);
+        if (bits_value(frame, 7, 3) != (~n & 7u)) {
+            return LF_IA_IGNORE;
+        }
+        uint32_t value;
+        if (op == 0xCu) {
+            value = page(n);
+        } else if (op == 0x6u) {
+            value = ~page(n);
+        } else {
+            return LF_IA_IGNORE;
+        }
+        if (m_crypto_active) {
+            uint8_t v[4] = {
+                (uint8_t)(value >> 24), (uint8_t)(value >> 16), (uint8_t)(value >> 8), (uint8_t)value
+            };
+            hitag2_crypto_transcrypt(&m_cs, v, sizeof(v), 0);
+            value = bytes_to_be32(v);
+        }
+        return answer(rsp, value);
+    }
+
+    // The remaining reader frames are 5, 32 or 64 bits. Other lengths are noise, and must not move the state.
     switch (cmd->n_bits) {
         case 5:
             if (bits_value(cmd->bits, 0, 5) != 0x18u) {  // START_AUTH, 11000
@@ -160,39 +206,6 @@ static lf_ia_verdict_t on_command(void *ctx, const lf_ia_command_t *cmd, lf_ia_r
             memcpy(p3, &m_pages[4u * HITAG2_PAGE_CONFIG], sizeof(p3));
             hitag2_crypto_transcrypt(&m_cs, p3, sizeof(p3), 0);
             return answer(rsp, bytes_to_be32(p3));
-        }
-
-        case 10: {
-            if (m_state != HT2_AUTHENTICATED) {
-                return LF_IA_IGNORE;
-            }
-            uint8_t frame[2];
-            memcpy(frame, cmd->bits, sizeof(frame));
-            if (m_crypto_active) {
-                hitag2_crypto_transcrypt(&m_cs, frame, 1, 2);  // 10 bits = 1 byte + 2 bits, PM3's own split
-            }
-            // READ PAGE is 11 nnn 00 ~nnn, and READ PAGE INVERTED is 01 nnn 10 ~nnn.
-            const uint32_t op = bits_value(frame, 0, 2) << 2 | bits_value(frame, 5, 2);
-            const uint32_t n = bits_value(frame, 2, 3);
-            if (bits_value(frame, 7, 3) != (~n & 7u)) {
-                return LF_IA_IGNORE;
-            }
-            uint32_t value;
-            if (op == 0xCu) {
-                value = page(n);
-            } else if (op == 0x6u) {
-                value = ~page(n);
-            } else {
-                return LF_IA_IGNORE;
-            }
-            if (m_crypto_active) {
-                uint8_t v[4] = {
-                    (uint8_t)(value >> 24), (uint8_t)(value >> 16), (uint8_t)(value >> 8), (uint8_t)value
-                };
-                hitag2_crypto_transcrypt(&m_cs, v, sizeof(v), 0);
-                value = bytes_to_be32(v);
-            }
-            return answer(rsp, value);
         }
 
         default:

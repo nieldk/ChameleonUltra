@@ -3056,6 +3056,22 @@ static data_frame_tx_t *cmd_processor_lf_hitag2_raw_capture(uint16_t cmd, uint16
     return data_frame_make(cmd, STATUS_LF_TAG_OK, 6 + n, out);
 }
 
+static data_frame_tx_t *cmd_processor_lf_hitag2_crack(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    // In: 8-byte {nR}{aR}. Out (ok): 8 pages * 4 bytes. Out (fail): crack_status(1) uid(4).
+    if (length < 8) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint8_t pages[HITAG2_NUM_PAGES][HITAG2_PAGE_SIZE];
+    uint8_t res = hitag2_reader_crack(data, pages, 60);
+    if (res != HITAG2_CRACK_OK) {
+        uint8_t fail[5];
+        fail[0] = res;
+        memcpy(fail + 1, pages[HITAG2_PAGE_UID], 4);
+        return data_frame_make(cmd, STATUS_LF_TAG_NO_FOUND, sizeof(fail), fail);
+    }
+    return data_frame_make(cmd, STATUS_LF_TAG_OK, sizeof(pages), (uint8_t *)pages);
+}
+
 // In: the index of the first record (u16, big-endian, optional). Out: the count written since the clear (u32), the
 // record size (u16), the number of records here (u8), the number of first records kept (u8), the current boot (u16),
 // then the records. 6 per call, not upstream's 14 -- this fork's RAM budget is tighter; the host pages with "first".
@@ -5283,6 +5299,7 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_LF_HITAG2_READ,               before_reader_run,           cmd_processor_lf_hitag2_read,                NULL                   },
     {    DATA_CMD_LF_HITAG2_CRYPTO_READ,        before_reader_run,           cmd_processor_lf_hitag2_crypto_read,         NULL                   },
     {    DATA_CMD_LF_HITAG2_RAW_CAPTURE,        before_reader_run,           cmd_processor_lf_hitag2_raw_capture,         NULL                   },
+    {    DATA_CMD_LF_HITAG2_CRACK,              before_reader_run,           cmd_processor_lf_hitag2_crack,               NULL                   },
     {    DATA_CMD_LF_IA_TRACE_READ,             NULL,                        cmd_processor_lf_ia_trace_read,              NULL                   },
     {    DATA_CMD_LF_IA_TRACE_CLEAR,            NULL,                        cmd_processor_lf_ia_trace_clear,             NULL                   },
     {    DATA_CMD_LF_IA_ENV_ARM,                NULL,                        cmd_processor_lf_ia_env_arm,                 NULL                   },

@@ -9,6 +9,7 @@
 NRF_LOG_MODULE_REGISTER();
 
 #include "app_timer.h"
+#include "bsp_wdt.h"
 #include "timeslot.h"
 
 
@@ -115,16 +116,32 @@ void request_timeslot(uint32_t time_us, timeslot_callback_t callback) {
     m_ts_canceled = 0;
     uint32_t t_req = app_timer_cnt_get();
 
-    // Open the session
+    // Open the session. Under rapid reopen (crack, dict, repeated reads) the SD
+    // can transiently refuse; skip this slot rather than resetting the chip on
+    // APP_ERROR_CHECK. The caller sees a missed slot and retries.
     err_code = sd_radio_session_open(radio_callback);
-    APP_ERROR_CHECK(err_code);
+    if (err_code != NRF_SUCCESS) {
+        m_callback = NULL;
+        m_is_timeslot_running = false;
+        return;
+    }
 
     // Request timing
     err_code = request_next_event_earliest();
-    APP_ERROR_CHECK(err_code);
+    if (err_code != NRF_SUCCESS) {
+        sd_radio_session_close();
+        while (m_is_timeslot_working) {
+            bsp_wdt_feed();
+            __NOP();
+        }
+        m_callback = NULL;
+        m_is_timeslot_running = false;
+        return;
+    }
 
     // The sequence request is successful
     while (!m_is_timeslot_working) {
+        bsp_wdt_feed();  /* a blocked/canceled grant can spin here past the 5 s watchdog */
         NRF_LOG_PROCESS();
     }
 
@@ -144,17 +161,28 @@ void request_timeslot(uint32_t time_us, timeslot_callback_t callback) {
         m_callback = NULL;  // Destruction record
     }
 
-    // Exit critical point
+    // Exit critical point. Every IRQ disabled above must be re-enabled, or it
+    // stays masked after the slot. RADIO and TIMER0 are SoftDevice-reserved:
+    // leaving them off starves the SD and resets the chip once a BLE event needs
+    // the radio IRQ, which rapid timeslots (crack, dict) make near-certain.
+    NVIC_EnableIRQ(RADIO_IRQn);
+    NVIC_EnableIRQ(TIMER0_IRQn);
+    NVIC_EnableIRQ(TIMER2_IRQn);
     NVIC_EnableIRQ(GPIOTE_IRQn);
     NVIC_EnableIRQ(RTC1_IRQn);
     NVIC_EnableIRQ(MWU_IRQn);
     uint32_t t_done = app_timer_cnt_get();
 
-    // Close the session and wait for the closure to complete
+    // Close the session and wait for the closure to complete. A transient close
+    // error is cleared without resetting the chip, same reasoning as the open above.
     err_code = sd_radio_session_close();
-    APP_ERROR_CHECK(err_code);
-    while (m_is_timeslot_working) {
-        __NOP();
+    if (err_code == NRF_SUCCESS) {
+        while (m_is_timeslot_working) {
+            bsp_wdt_feed();  /* wait for SESSION_CLOSED; a missed event must not trip the watchdog */
+            __NOP();
+        }
+    } else {
+        m_is_timeslot_working = false;
     }
 
     // The task process is completed and the ending work
