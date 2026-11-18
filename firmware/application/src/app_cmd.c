@@ -25,6 +25,10 @@
 #include "blstage.h"
 #include "dfuver.h"
 #include "netdata.h"
+// The interactive Hitag2 tag emulator builds on both ultra and lite, so its
+// header (for the nonce-capture processors below) stays outside the reader-only
+// ultra guard.
+#include "rfid/nfctag/lf/interactive/lf_ia_hitag2.h"
 #if defined(PROJECT_CHAMELEON_ULTRA)
 #include "bsp_wdt.h"
 #include "lf_reader_generic.h"
@@ -32,7 +36,6 @@
 #include "lf_ia_debug.h"
 #include "lf_ia_trace.h"
 #include "lf_hitag2_data.h"
-#include "rfid/nfctag/lf/interactive/lf_ia_hitag2.h"
 #include "protocols/fdxb.h"
 #include "rc522.h"
 #include "hw_connect.h"
