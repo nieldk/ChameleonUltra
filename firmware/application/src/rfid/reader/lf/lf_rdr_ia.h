@@ -15,8 +15,12 @@
 
 #define LF_RDR_MAX_TX_BITS  (128u)
 #define LF_RDR_MAX_RX_BITS  (256u)
-#define LF_RDR_CAPTURE_MAX  (4096u)  // carrier periods, 32.8 ms
-#define LF_RDR_MAX_RUNS     (600u)
+// Sized for Hitag2's reply: ~227 fc command-end-to-reply, then 6 SOF + 32
+// data bits at RF/32 (~1216 fc), ~1450 fc total, less the SKIP_FC start.
+// 1536 covers it with ~1 ms margin (3 KB). Raise both if a slower or longer
+// reply is ever read through this engine.
+#define LF_RDR_CAPTURE_MAX  (1536u)  // carrier periods, 12.3 ms
+#define LF_RDR_MAX_RUNS     (256u)   // >> 2 * 38 reply half-bits, with noise margin
 
 // Bench diagnosis, in eof_gap: start the capture before the command instead of after it, so the reader's own
 // field gaps show in the samples.

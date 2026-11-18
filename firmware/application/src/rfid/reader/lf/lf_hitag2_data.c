@@ -41,7 +41,7 @@ static lf_rdr_link_t m_link = {
     .coding_flags = 0,
     .bit_fc = 32,
     .window_us = 1000,
-    .capture_n = 2048,
+    .capture_n = LF_RDR_CAPTURE_MAX,
     .min_depth = 40,
     .slice_pct = 25,  /* the detector falls back from a load slowly: slice near the low rail */
 };
