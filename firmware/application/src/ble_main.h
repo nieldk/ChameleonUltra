@@ -30,6 +30,12 @@ void unregister_lf_adc_callback(void);
 void lf_adc_claim(void);
 void lf_adc_release(void);
 
+/* The shared LF SAADC buffer, for a claimer that samples the ADC itself
+ * (lf_rdr_ia.c) to reuse instead of allocating its own. Only valid between
+ * lf_adc_claim() and lf_adc_release(), which uninit the SAADC so nothing
+ * else touches this buffer. *capacity is its length in samples. */
+nrf_saadc_value_t *lf_adc_capture_buffer(size_t *capacity);
+
 /* Relay mode: temporarily take over advertising with raw relay data.
  * Call ble_main_relay_adv_restore() when relay stops. */
 void ble_main_relay_adv_set(const uint8_t *raw_adv, uint8_t len);

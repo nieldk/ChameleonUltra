@@ -15,11 +15,10 @@
 
 #define LF_RDR_MAX_TX_BITS  (128u)
 #define LF_RDR_MAX_RX_BITS  (256u)
-// Sized for Hitag2's reply: ~227 fc command-end-to-reply, then 6 SOF + 32
-// data bits at RF/32 (~1216 fc), ~1450 fc total, less the SKIP_FC start.
-// 1536 covers it with ~1 ms margin (3 KB). Raise both if a slower or longer
-// reply is ever read through this engine.
-#define LF_RDR_CAPTURE_MAX  (1536u)  // carrier periods, 12.3 ms
+// Capture is into the shared LF SAADC buffer (lf_adc_capture_buffer), which
+// holds ADC_BUF_COUNT * ADC_BUF_SIZE = 4096 samples, so this costs no RAM of
+// its own; keep it <= that. Hitag2's reply is ~1450 fc end to end.
+#define LF_RDR_CAPTURE_MAX  (2048u)  // carrier periods, 16.4 ms
 #define LF_RDR_MAX_RUNS     (256u)   // >> 2 * 38 reply half-bits, with noise margin
 
 // Bench diagnosis, in eof_gap: start the capture before the command instead of after it, so the reader's own

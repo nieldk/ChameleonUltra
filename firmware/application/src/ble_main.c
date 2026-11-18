@@ -986,6 +986,11 @@ void lf_adc_claim(void) {
     nrfx_saadc_uninit();
 }
 
+nrf_saadc_value_t *lf_adc_capture_buffer(size_t *capacity) {
+    *capacity = ADC_BUF_COUNT * ADC_BUF_SIZE;  /* contiguous int16[] */
+    return &adc_buf[0][0];
+}
+
 // Hands the SAADC back to the battery timer after a claim. The caller has
 // left the nrfx driver uninitialised.
 void lf_adc_release(void) {

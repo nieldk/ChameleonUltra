@@ -18,7 +18,9 @@ NRF_LOG_MODULE_REGISTER();
 
 #define SKIP_FC  (40u)  // carrier periods after the command, while the field recovers from the last gap
 
-static int16_t m_cap[LF_RDR_CAPTURE_MAX];
+// Capture into the shared LF SAADC buffer (lf_adc_claim() uninits the SAADC,
+// so it is idle for the whole transaction) instead of a buffer of our own.
+static int16_t *m_cap;
 static size_t m_cap_n;
 static uint16_t m_runs[LF_RDR_MAX_RUNS];
 static size_t m_runs_n;
@@ -89,6 +91,8 @@ static void send_cb(void) {
 
 static void adc_arm(size_t n) {
     lf_adc_claim();
+    size_t cap = 0;
+    m_cap = lf_adc_capture_buffer(&cap);
     nrf_saadc_int_disable(NRF_SAADC_INT_ALL);
     nrf_saadc_resolution_set(NRF_SAADC_RESOLUTION_14BIT);
     nrf_saadc_oversample_set(NRF_SAADC_OVERSAMPLE_DISABLED);
