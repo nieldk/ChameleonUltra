@@ -9,7 +9,7 @@ sleep, so it covers a session the host wasn't connected for.
 import argparse
 import struct
 
-from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, lf, CR, color_string
+from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, lf, CR, CC, color_string, _box
 
 lf_interactive = lf.subgroup("interactive", "Interactive LF emulation commands")
 
@@ -54,17 +54,17 @@ class LFInteractiveTrace(DeviceRequiredUnit):
                 break
             recs += chunk
         c = self.cmd.lf_ia_counters()
-        print(
-            f" - {c['sessions']} field sessions, {c['commands']} commands, {c['responses']} answered, "
-            f"{c['late']} late, since the clear. This is boot {boot} since the clear."
-        )
+        summary = [
+            f"{c['sessions']} field sessions, {c['commands']} commands, {c['responses']} answered, {c['late']} late",
+            f"boot {boot}, since the last clear",
+        ]
         lost = total - len(recs)
         if lost > 0:
-            print(
-                f" - {total} records: the first {keep} and the latest {len(recs) - keep} are kept"
-            )
+            summary.append(f"{total} records: first {keep} and latest {len(recs) - keep} kept")
         else:
-            print(f" - {total} records")
+            summary.append(f"{total} records")
+        for line in _box("LF Interactive Trace", summary, color=CC, min_width=48):
+            print(line)
         last_session = None
         for i, raw in enumerate(recs):
             if lost > 0 and i == keep:
@@ -180,11 +180,13 @@ class LFInteractiveEnvRead(DeviceRequiredUnit):
             print(" - No samples (arm it first with 'lf interactive env arm')")
             return
         span_us = len(samples) * 10
-        print(
-            f" - {len(samples)} samples, {span_us / 1e3:.2f} ms, newest at {last_us / 1e6:.6f} s, "
-            f"{'frozen on a command' if frozen else 'still live (not frozen)'}"
-        )
-        print(f" - range {min(samples)} .. {max(samples)} ADC counts")
+        summary = [
+            f"{len(samples)} samples, {span_us / 1e3:.2f} ms, newest at {last_us / 1e6:.6f} s",
+            f"{'frozen on a command' if frozen else 'still live (not frozen)'}",
+            f"range {min(samples)} .. {max(samples)} ADC counts",
+        ]
+        for line in _box("LF Envelope", summary, color=CC, min_width=48):
+            print(line)
         for i in range(0, len(samples), 16):
             t0_us = last_us - (len(samples) - i) * 10
             row = " ".join(f"{s:5d}" for s in samples[i:i + 16])
@@ -220,5 +222,6 @@ class LFInteractiveTuning(DeviceRequiredUnit):
         if overrides:
             tuning.update(overrides)
             tuning = self.cmd.lf_ia_tuning_set(tuning)
-        for k, v in tuning.items():
-            print(f" - {k}: {v}")
+        lines = [f"{k:<16} {v}" for k, v in tuning.items()]
+        for line in _box("LF Tuning", lines, color=CC, min_width=32):
+            print(line)
