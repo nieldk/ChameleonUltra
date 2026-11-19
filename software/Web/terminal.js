@@ -2575,7 +2575,11 @@ lfHitag2.command("crack", "Recover a crypto-mode Hitag2's memory without its key
   const f = await request(CU.LF_HITAG2_CRACK, nrar);
   if(!OK_STATUSES.has(f.status)) return [ht2CrackFailLine(f)];
   const pages = [0,1,2,3,4,5,6,7].map(i => f.data.slice(i*4, i*4+4));
-  return ht2TagLines(pages);
+  // Crypto key from the recovered pages: p2[2] p2[3] p1[0..3], as the cipher resets.
+  const hx = b => b.toString(16).padStart(2,"0").toUpperCase();
+  const key = [pages[2][2],pages[2][3],pages[1][0],pages[1][1],pages[1][2],pages[1][3]].map(hx).join("");
+  return [" - Cracked: all 8 pages recovered without the key (malleability)",
+          " Key "+key+"   ->  lf hitag2 cread -k "+key, ...ht2TagLines(pages)];
 });
 lfHitag2.command("nonces", "Show the {nR}{aR} reader auth attempts captured while this device emulates a Hitag2 tag (sect. 5.3 key recovery). Recover the key on a PC with ht2crack5", [
   {names:["--clear"], takesValue:false, dest:"clear"},

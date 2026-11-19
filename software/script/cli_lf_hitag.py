@@ -59,7 +59,7 @@ def _ht2_lock(page, config):
     return f"{CR}R {C0}" if config & 0x10 else f"{CG}RW{C0}"
 
 
-def _print_tag(pages):
+def _print_tag(pages, title="Hitag2 Tag"):
     pages = [bytes(p) for p in pages]
     uid = int.from_bytes(pages[0], "big")
     config = pages[3][0]
@@ -89,7 +89,7 @@ def _print_tag(pages):
         lines.append(f" {i:2d}/0x{i:02X} | {page.hex(' ').upper()} | {ascii_}  | {_ht2_lock(i, config)}  | {info}")
     lines.append(" --------+-------------+-------+-----+---------")
     lines.append(f"  {CR}L{C0} = Locked, {CG}RW{C0} = Read Write, R = Read Only")
-    for line in _box("Hitag2 Tag", lines, color=CC, min_width=46):
+    for line in _box(title, lines, color=CC, min_width=46):
         print(line)
 
 
@@ -314,7 +314,13 @@ class LFHitag2Crack(ReaderRequiredUnit):
             print(f" {CR}{_crack_fail_text(fail)}{C0}")
             return
 
-        _print_tag(pages)
+        # Crypto key from the recovered pages: p2[2] p2[3] p1[0..3], same order
+        # the cipher resets from and as cread -k expects.
+        p1, p2 = bytes(pages[1]), bytes(pages[2])
+        key = bytes([p2[2], p2[3], p1[0], p1[1], p1[2], p1[3]]).hex().upper()
+        print(f" {CG}Cracked{C0}: all 8 pages recovered without the key (malleability)")
+        print(f" Key {CG}{key}{C0}   ->  lf hitag2 cread -k {key}")
+        _print_tag(pages, title="Hitag2 Crack")
 
 
 @lf_hitag2.command("nonces")
