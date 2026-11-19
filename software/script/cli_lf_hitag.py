@@ -27,13 +27,6 @@ from chameleon_enum import SlotNumber, TagSpecificType
 
 lf_hitag2 = lf.subgroup("hitag2", "Hitag2 commands (125 kHz) -- password mode, and known-key crypto mode for emulation")
 
-PAGE_NAMES = {
-    0: "UID",
-    1: "Password (password mode) / key bytes 2-5 (crypto mode)",
-    2: "Key bytes 0-1 in bytes 2-3, rest reserved (crypto mode only)",
-    3: "Config + tag password",
-}
-
 
 # Tag information and page table as printed by RfidResearchGroup/proxmark3's
 # `lf hitag read --ht2` (client/src/cmdlfhitag.c: getHitagTypeStr,
@@ -200,7 +193,7 @@ class LFHitag2Econfig(SlotIndexArgsAndGoUnit):
                 print(f"{CR}Slot type is not Hitag2 -- nothing to show.{C0}")
                 return
             pages = self.cmd.hitag2_get_emu_id()
-            self._print_pages(pages)
+            _print_tag(pages)
             return
 
         if lf_tag_type != TagSpecificType.HITAG2:
@@ -233,12 +226,7 @@ class LFHitag2Econfig(SlotIndexArgsAndGoUnit):
         flat = b"".join(bytes(p) for p in pages)
         self.cmd.hitag2_set_emu_id(flat)
         print(f" {CG}Set Hitag2 emulated tag data success.{C0}")
-        self._print_pages(pages)
-
-    def _print_pages(self, pages):
-        for i, page in enumerate(pages):
-            label = PAGE_NAMES.get(i, "User")
-            print(f"    {i}  {bytes(page).hex(' ').upper()}  {CG}{label}{C0}")
+        _print_tag(pages)
 
 
 @lf_hitag2.command("read")
