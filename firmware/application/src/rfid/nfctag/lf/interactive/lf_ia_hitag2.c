@@ -77,7 +77,7 @@ void lf_ia_hitag2_nonces_init(void) {
         return;
     }
     m_nonce_loaded = true;
-    uint16_t len = 0;
+    uint16_t len = sizeof(m_nonce_fds_buf);  // fds_read_sync uses this as the buffer cap; 0 rejects every record
     uint8_t *buf = (uint8_t *)m_nonce_fds_buf;
     if (fds_read_sync(FDS_HITAG2_NONCES_FILE_ID, FDS_HITAG2_NONCES_RECORD_KEY, &len, buf) && len >= 1) {
         uint8_t n = buf[0] > HT2_NONCE_LOG_MAX ? HT2_NONCE_LOG_MAX : buf[0];
