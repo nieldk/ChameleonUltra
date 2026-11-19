@@ -7233,8 +7233,9 @@ class StandaloneConfig(DeviceRequiredUnit):
                 addr = blob[1:6]
                 ch, br = blob[6], blob[7]
                 dw = int.from_bytes(blob[8:10], 'little')
+                addr_str = addr.hex() if any(addr) else '(unset)'
                 lines = [
-                    f"address:  {addr.hex() if addr != b'\\x00' * 5 else '(unset)'}",
+                    f"address:  {addr_str}",
                     f"channel:  {ch if ch != 0xFF else 'hop'}",
                     f"bitrate:  {'2M' if br else '1M'}",
                     f"dwell:    {dw} ms",
