@@ -21,7 +21,7 @@ from chameleon_com import NotOpenException, CMDInvalidException
 
 from cli_core import (
     ArgumentParserNoExit, DeviceRequiredUnit, ReaderRequiredUnit, SlotIndexArgsAndGoUnit,
-    lf, CG, CY, CR, CC, C0,
+    lf, CG, CY, CR, CC, C0, _box,
 )
 from chameleon_enum import SlotNumber, TagSpecificType
 
@@ -64,35 +64,33 @@ def _print_tag(pages):
     uid = int.from_bytes(pages[0], "big")
     config = pages[3][0]
     bs = f"{config:08b}"
-    print()
-    print(f" --- {CC}Tag Information{C0} ---------------------------")
-    print(f" UID...... {CG}{uid:08X}{C0}")
-    print(f" TYPE..... {CG}{_HT2_TYPES.get((uid >> 4) & 0xF, '')}{C0}")
-    print(f" Config... {CY}0x{config:02X}{C0}")
-    print(f"  {bs}")
-    print(_ht2_breakdown(bs, 0, 4, "RFU"))
-    if config & 0x08:
-        print(_ht2_breakdown(bs, 4, 1, "Crypto mode", CY))
-    else:
-        print(_ht2_breakdown(bs, 4, 1, "Password mode"))
-    print(_ht2_breakdown(bs, 5, 2, (
-        "Public mode B, Coding: biphase",
-        "Public mode A, Coding: manchester",
-        "Public mode C, Coding: biphase",
-        "Hitag 2",
-    )[(config >> 1) & 3]))
-    print(_ht2_breakdown(bs, 7, 1, "Biphase" if config & 0x01 else "Manchester"))
-    print()
-    print(" ----------------------------------------------")
-    print("  #      | data        | ascii | lck | Info")
-    print(" --------+-------------+-------+-----+---------")
+    lines = [
+        f"UID...... {CG}{uid:08X}{C0}",
+        f"TYPE..... {CG}{_HT2_TYPES.get((uid >> 4) & 0xF, '')}{C0}",
+        f"Config... {CY}0x{config:02X}{C0}",
+        f"  {bs}",
+        _ht2_breakdown(bs, 0, 4, "RFU"),
+        _ht2_breakdown(bs, 4, 1, "Crypto mode", CY) if config & 0x08
+        else _ht2_breakdown(bs, 4, 1, "Password mode"),
+        _ht2_breakdown(bs, 5, 2, (
+            "Public mode B, Coding: biphase",
+            "Public mode A, Coding: manchester",
+            "Public mode C, Coding: biphase",
+            "Hitag 2",
+        )[(config >> 1) & 3]),
+        _ht2_breakdown(bs, 7, 1, "Biphase" if config & 0x01 else "Manchester"),
+        "",
+        "  #      | data        | ascii | lck | Info",
+        " --------+-------------+-------+-----+---------",
+    ]
     for i, page in enumerate(pages):
         ascii_ = "".join(chr(b) if 0x20 <= b < 0x7F else "." for b in page)
         info = _HT2_INFO[i] if i < len(_HT2_INFO) else "User"
-        print(f" {i:2d}/0x{i:02X} | {page.hex(' ').upper()} | {ascii_}  | {_ht2_lock(i, config)}  | {info}")
-    print(" --------+-------------+-------+-----+---------")
-    print(f"  {CR}L{C0} = Locked, {CG}RW{C0} = Read Write, R = Read Only")
-    print(" ----------------------------------------------")
+        lines.append(f" {i:2d}/0x{i:02X} | {page.hex(' ').upper()} | {ascii_}  | {_ht2_lock(i, config)}  | {info}")
+    lines.append(" --------+-------------+-------+-----+---------")
+    lines.append(f"  {CR}L{C0} = Locked, {CG}RW{C0} = Read Write, R = Read Only")
+    for line in _box("Hitag2 Tag", lines, color=CC, min_width=46):
+        print(line)
 
 
 def _fail_text(fail, rejected):
@@ -346,9 +344,13 @@ class LFHitag2Nonces(DeviceRequiredUnit):
             print(f" {CY}no nonces captured (arm Hitag2 emulation and let a reader authenticate){C0}")
             return
 
-        print(f" UID {CG}{uid.hex().upper()}{C0}, {CG}{len(pairs)}{C0} pair(s):")
+        lines = [f"UID {CG}{uid.hex().upper()}{C0}   {CG}{len(pairs)}{C0} pair(s)", ""]
         for p in pairs:
-            print(f"   nR {p[:4].hex().upper()}  aR {p[4:].hex().upper()}")
+            lines.append(f"nR {p[:4].hex().upper()}  aR {p[4:].hex().upper()}")
+        lines.append("")
+        lines.append(f"PC: proxmark3 tools/hitag2crack/ht2crack5 {uid.hex().upper()} <nR0> <aR0> ...")
+        for line in _box("Hitag2 Nonces", lines, color=CC, min_width=40):
+            print(line)
 
         if args.file:
             with open(args.file, "w") as fh:
@@ -356,8 +358,6 @@ class LFHitag2Nonces(DeviceRequiredUnit):
                 for p in pairs:
                     fh.write(f"{p[:4].hex().upper()} {p[4:].hex().upper()}\n")
             print(f" {CG}wrote {args.file}{C0}")
-        print(f" PC: proxmark3 tools/hitag2crack/ht2crack5 {uid.hex().upper()} "
-              f"<nR0> <aR0> <nR1> <aR1>")
 
 
 @lf_hitag2.command("gennonces")
