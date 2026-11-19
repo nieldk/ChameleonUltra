@@ -59,7 +59,6 @@ typedef enum {
     ST_IDLE,     // waiting for the wake comparator
     ST_LISTEN,   // capturing a command
     ST_ANSWER,   // an answer is armed or playing
-    ST_REST,     // holding the load off after an answer, so the reader sees the frame end, before listening
     ST_RECHECK,  // a gap ran past lost_us: waiting to check the field with the load off
 } state_t;
 
@@ -479,12 +478,7 @@ static void pwm_handler(nrfx_pwm_evt_type_t ev) {
     }
     lf_ia_trace_stats()->responses++;
     if (m_state == ST_ANSWER) {
-        // Rest with the load off before listening, so the reader sees the frame end rather than taking the load's
-        // immediate return for another bit (the cu-cu "no read" case). The rest is the module's rest_fc, else one bit.
-        load_set(false);
-        m_state = ST_REST;
-        const uint32_t rest_fc = m_module->rest_fc ? m_module->rest_fc : m_rsp.bit_fc;
-        nrfx_timer_compare(&m_ia_timer, CC_TICK, now_us() + rest_fc * LF_IA_US_PER_FC, true);
+        listen(m_tuning.settle_us);
     }
 }
 
@@ -494,11 +488,6 @@ static void timer_handler(nrf_timer_event_t ev, void *ctx) {
     }
     if (m_state == ST_LISTEN) {
         listen_tick();
-        return;
-    }
-    if (m_state == ST_REST) {
-        // Rest done: the frame end has registered, resume listening with the load on.
-        listen(m_tuning.settle_us);
         return;
     }
     nrfx_timer_compare_int_disable(&m_ia_timer, CC_TICK);
