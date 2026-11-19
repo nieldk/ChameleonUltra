@@ -2404,7 +2404,6 @@ lfHidProx.command("econfig", "Set/get the emulated hidprox card id (in the activ
 // page) isn't ported -- this parser has no repeatable-option support; use
 // --uid/--pwd/--config/--tag-pwd, which cover every page econfig needs for
 // password mode.
-const HT2_PAGE_NAMES = {0:"UID", 1:"Password (password mode) / key bytes 2-5 (crypto mode)", 2:"Key bytes 0-1 in bytes 2-3, rest reserved (crypto mode only)", 3:"Config + tag password"};
 function ht2ParseHex4(s, label){
   s = (s||"").trim();
   if(!/^[0-9a-fA-F]{8}$/.test(s)) throw new ArgError(label+" must be 8 hex digits (4 bytes)");
@@ -2419,9 +2418,6 @@ function ht2ParseHex8(s, label){
   s = (s||"").trim();
   if(!/^[0-9a-fA-F]{16}$/.test(s)) throw new ArgError(label+" must be 16 hex digits (8 bytes)");
   return hexBytes(s);
-}
-function ht2PageLines(pages){
-  return pages.map((p,i) => "    "+i+"  "+Array.from(p).map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join(" ")+"  "+(HT2_PAGE_NAMES[i]||"User"));
 }
 // Tag information and page table as printed by proxmark3's lf hitag read
 // --ht2 (cmdlfhitag.c); same as cli_lf_hitag.py's _print_tag().
@@ -2506,8 +2502,8 @@ lfHitag2.command("econfig", "Set/get the emulated Hitag2 tag (8 pages, in the ac
   if(!anySet){
     if(!isHitag2) return ["Slot type is not Hitag2 -- nothing to show."];
     const f = okOrThrow(await request(CU.HITAG2_GET_EMU_ID));
-    const pages = [0,1,2,3,4,5,6,7].map(i => f.data.slice(i*4, i*4+4));
-    return ht2PageLines(pages);
+    const pages = [0,1,2,3,4,5,6,7].map(i => Array.from(f.data.slice(i*4, i*4+4)));
+    return ht2TagLines(pages);
   }
 
   const lines = [];
@@ -2528,7 +2524,7 @@ lfHitag2.command("econfig", "Set/get the emulated Hitag2 tag (8 pages, in the ac
     pages[3] = [configByte, ...tagPwd];
   }
   okOrThrow(await request(CU.HITAG2_SET_EMU_ID, [].concat(...pages)));
-  lines.push(" - Set Hitag2 emulated tag data success.", ...ht2PageLines(pages));
+  lines.push(" - Set Hitag2 emulated tag data success.", ...ht2TagLines(pages));
   return lines;
 });
 lfHitag2.command("read", "Read a Hitag2 tag in password mode: START_AUTH, UID, send -k as the reader password, read the rest on acceptance", [
