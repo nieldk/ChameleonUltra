@@ -9,6 +9,7 @@ import binascii
 import glob
 import math
 import os
+import string
 import tempfile
 import re
 import subprocess
@@ -297,8 +298,9 @@ def load_dic_file(import_dic, keys):
     """
     with open(import_dic.name, "r") as file:
         for line in file:
-            line = line.strip()
-            if line:
+            # tolerate pm3-style dicts: comments, inline comments, blanks
+            line = line.split("#", 1)[0].strip()
+            if len(line) == 12 and all(c in string.hexdigits for c in line):
                 keys.add(bytes.fromhex(line))
     return keys
 

@@ -166,8 +166,8 @@ def print_mem_dump(bindata, blocksize):
 
 def print_key_table(key_map):
     key_width = max(
-        max(len(k) for k in key_map["A"].values()),
-        max(len(k) for k in key_map["B"].values()),
+        max((len(k) for k in key_map["A"].values()), default=0),
+        max((len(k) for k in key_map["B"].values()), default=0),
         len("key A"),
         len("key B"),
     )

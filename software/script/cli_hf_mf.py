@@ -1001,6 +1001,7 @@ class HFMFStaticEncryptedNested(ReaderRequiredUnit):
 
         if not acquire_datas:
             print("Failed to collect nonces, is card present and has backdoor?")
+            return {"A": {}, "B": {}}
 
         uid = format(acquire_datas["uid"], "x")
 
@@ -1033,7 +1034,17 @@ class HFMFStaticEncryptedNested(ReaderRequiredUnit):
             )
             a_key_dic = f"keys_{uid}_{sector_name}_{format(acquire_datas['nts']['a'][sector]['nt'], 'x').zfill(8)}.dic"
             b_key_dic = f"keys_{uid}_{sector_name}_{format(acquire_datas['nts']['b'][sector]['nt'], 'x').zfill(8)}.dic"
-            execute_tool("staticnested_2x1nt_rf08s", [a_key_dic, b_key_dic])
+            # 2x1nt_rf08s cross-reduces two different nonces; when this sector's
+            # A and B keys share one, the filenames collide. Recovering it needs
+            # cross-sector nonce pairing (not implemented), so skip it.
+            if a_key_dic == b_key_dic:
+                print(f"Sector {sector}: A and B share a static nonce, skipping (cross-sector pairing not implemented)")
+                continue
+            try:
+                execute_tool("staticnested_2x1nt_rf08s", [a_key_dic, b_key_dic])
+            except Exception as e:
+                print(f"Sector {sector}: {e}, skipping")
+                continue
 
             keys = open(
                 os.path.join(
@@ -2017,9 +2028,9 @@ class HFMFFCHK(ReaderRequiredUnit):
             mask[i // 4] |= 3 << (6 - i % 4 * 2)
 
         # check keys
-        startedAt = datetime.now()
+        startedAt = datetime.datetime.now()
         sectorKeys = self.check_keys(mask, list(keys))
-        endedAt = datetime.now()
+        endedAt = datetime.datetime.now()
         duration = endedAt - startedAt
         print(
             f" - elapsed time: {color_string((CY, f'{duration.total_seconds():.3f}s'))}"
