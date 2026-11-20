@@ -1006,131 +1006,121 @@ class HFMFStaticEncryptedNested(ReaderRequiredUnit):
         uid = format(acquire_datas["uid"], "x")
 
         key_map = {"A": {}, "B": {}}
+        found_keys = set()  # recovered keys; these cards reuse them across sectors
 
         check_speed = 1.95  # sec per 64 keys
 
-        for sector in range(starting_sector, stopping_sector):
-            sector_name = str(sector).zfill(2)
-            print("Recovering", sector, "sector...")
-            execute_tool(
-                "staticnested_1nt",
-                [
-                    uid,
-                    sector_name,
-                    format(acquire_datas["nts"]["a"][sector]["nt"], "x").zfill(8),
-                    format(acquire_datas["nts"]["a"][sector]["nt_enc"], "x").zfill(8),
-                    str(acquire_datas["nts"]["a"][sector]["parity"]).zfill(4),
-                ],
-            )
-            execute_tool(
-                "staticnested_1nt",
-                [
-                    uid,
-                    sector_name,
-                    format(acquire_datas["nts"]["b"][sector]["nt"], "x").zfill(8),
-                    format(acquire_datas["nts"]["b"][sector]["nt_enc"], "x").zfill(8),
-                    str(acquire_datas["nts"]["b"][sector]["parity"]).zfill(4),
-                ],
-            )
-            a_key_dic = f"keys_{uid}_{sector_name}_{format(acquire_datas['nts']['a'][sector]['nt'], 'x').zfill(8)}.dic"
-            b_key_dic = f"keys_{uid}_{sector_name}_{format(acquire_datas['nts']['b'][sector]['nt'], 'x').zfill(8)}.dic"
-            # 2x1nt_rf08s needs two different nonces (keyA != keyB). When the
-            # sector's A and B nonces match, keyA == keyB: brute the single-nonce
-            # 1nt dictionary directly, and that key is both A and B.
-            same_key = a_key_dic == b_key_dic
-            if same_key:
-                print(f"Sector {sector}: A and B share a nonce (same key), using single-nonce dictionary")
-                b_candidates = b_key_dic
-            else:
-                try:
-                    execute_tool("staticnested_2x1nt_rf08s", [a_key_dic, b_key_dic])
-                except Exception as e:
-                    print(f"Sector {sector}: {e}, skipping")
-                    continue
-                b_candidates = b_key_dic.replace(".dic", "_filtered.dic")
+        def nt_args(kt, sector, sector_name):
+            n = acquire_datas["nts"][kt][sector]
+            return [
+                uid,
+                sector_name,
+                format(n["nt"], "x").zfill(8),
+                format(n["nt_enc"], "x").zfill(8),
+                str(n["parity"]).zfill(4),
+            ]
 
-            keys = open(os.path.join(tempfile.gettempdir(), b_candidates)).readlines()
-            keys_bytes = []
-            for key in keys:
-                keys_bytes.append(bytes.fromhex(key.strip()))
+        def try_known(sector, keytype, slot):
+            # try keys already found on other sectors before any brute force
+            if sector in key_map[slot] or not found_keys:
+                return
+            known = [bytes.fromhex(k) for k in found_keys]
+            for i in range(0, len(known), 64):
+                data = self.cmd.mf1_check_keys_on_block(sector * 4 + 3, keytype, known[i : i + 64])
+                if data:
+                    k = data.hex().zfill(12)
+                    key_map[slot][sector] = k
+                    found_keys.add(k)
+                    print(f"Found {slot} key", k, "(reused)")
+                    return
 
-            key = None
-
+        def brute(sector, keytype, slot, keys_bytes):
             print(
-                "Start checking possible B keys, will take up to",
+                f"Start checking possible {slot} keys, will take up to",
                 math.floor(len(keys_bytes) / 64 * check_speed),
                 "seconds for",
                 len(keys_bytes),
                 "keys",
             )
             for i in tqdm_if_exists(range(0, len(keys_bytes), 64)):
-                data = self.cmd.mf1_check_keys_on_block(
-                    sector * 4 + 3, 0x61, keys_bytes[i : i + 64]
-                )
+                data = self.cmd.mf1_check_keys_on_block(sector * 4 + 3, keytype, keys_bytes[i : i + 64])
                 if data:
-                    key = data.hex().zfill(12)
-                    key_map["B"][sector] = key
-                    print("Found B key", key)
-                    break
+                    k = data.hex().zfill(12)
+                    key_map[slot][sector] = k
+                    found_keys.add(k)
+                    print(f"Found {slot} key", k)
+                    return k
+            return None
 
-            if key and same_key:
-                # keyA == keyB, the one key just found covers both
-                key_map["A"][sector] = key
-                print("Found A key", key)
+        def read_dic(name):
+            with open(os.path.join(tempfile.gettempdir(), name)) as fh:
+                return [bytes.fromhex(l.strip()) for l in fh if l.strip()]
+
+        for sector in range(starting_sector, stopping_sector):
+            sector_name = str(sector).zfill(2)
+            print("Recovering", sector, "sector...")
+
+            try_known(sector, 0x60, "A")
+            try_known(sector, 0x61, "B")
+            if sector in key_map["A"] and sector in key_map["B"]:
                 continue
 
-            if key:
+            # A candidate dict is needed for the A recovery / 1key step below
+            execute_tool("staticnested_1nt", nt_args("a", sector, sector_name))
+            a_key_dic = f"keys_{uid}_{sector_name}_{format(acquire_datas['nts']['a'][sector]['nt'], 'x').zfill(8)}.dic"
+
+            if sector not in key_map["B"]:
+                execute_tool("staticnested_1nt", nt_args("b", sector, sector_name))
+                b_key_dic = f"keys_{uid}_{sector_name}_{format(acquire_datas['nts']['b'][sector]['nt'], 'x').zfill(8)}.dic"
+                # 2x1nt_rf08s needs two different nonces (keyA != keyB). When the
+                # sector's A and B nonces match, keyA == keyB: brute the single-
+                # nonce dict directly, and that key is both A and B.
+                same_key = a_key_dic == b_key_dic
+                if same_key:
+                    print(f"Sector {sector}: A and B share a nonce (same key), using single-nonce dictionary")
+                    b_candidates = b_key_dic
+                else:
+                    try:
+                        execute_tool("staticnested_2x1nt_rf08s", [a_key_dic, b_key_dic])
+                    except Exception as e:
+                        print(f"Sector {sector}: {e}, skipping")
+                        continue
+                    b_candidates = b_key_dic.replace(".dic", "_filtered.dic")
+
+                bkey = brute(sector, 0x61, "B", read_dic(b_candidates))
+                if bkey is None:
+                    print("Failed to find key")
+                    continue
+                if same_key:
+                    key_map["A"][sector] = bkey
+                    found_keys.add(bkey)
+                    print("Found A key", bkey)
+                    continue
+
+            if sector not in key_map["A"]:
+                bkey = key_map["B"][sector]
                 a_key = execute_tool(
                     "staticnested_2x1nt_rf08s_1key",
                     [
                         format(acquire_datas["nts"]["b"][sector]["nt"], "x").zfill(8),
-                        key,
+                        bkey,
                         a_key_dic,
                     ],
                 )
-                keys_bytes = []
-                for key in a_key.split("\n"):
-                    keys_bytes.append(bytes.fromhex(key.strip()))
-                data = self.cmd.mf1_check_keys_on_block(
-                    sector * 4 + 3, 0x60, keys_bytes
-                )
+                keys_bytes = [bytes.fromhex(k.strip()) for k in a_key.split("\n") if k.strip()]
+                data = self.cmd.mf1_check_keys_on_block(sector * 4 + 3, 0x60, keys_bytes)
                 if data:
-                    key = data.hex().zfill(12)
-                    print("Found A key", key)
-                    key_map["A"][sector] = key
-                    continue
+                    akey = data.hex().zfill(12)
+                    key_map["A"][sector] = akey
+                    found_keys.add(akey)
+                    print("Found A key", akey)
                 else:
-                    print(
-                        "Failed to find A key by fast method, trying all possible keys"
-                    )
-                    keys = open(
-                        os.path.join(
-                            tempfile.gettempdir(),
-                            a_key_dic.replace(".dic", "_filtered.dic"),
-                        )
-                    ).readlines()
-                    keys_bytes = []
-                    for key in keys:
-                        keys_bytes.append(bytes.fromhex(key.strip()))
-
-                    print(
-                        "Start checking possible A keys, will take up to",
-                        math.floor(len(keys_bytes) / 64 * check_speed),
-                        "seconds for",
-                        len(keys_bytes),
-                        "keys",
-                    )
-                    for i in tqdm_if_exists(range(0, len(keys_bytes), 64)):
-                        data = self.cmd.mf1_check_keys_on_block(
-                            sector * 4 + 3, 0x60, keys_bytes[i : i + 64]
-                        )
-                        if data:
-                            key = data.hex().zfill(12)
-                            print("Found A key", key)
-                            key_map["A"][sector] = key
-                            break
-            else:
-                print("Failed to find key")
+                    print("Failed to find A key by fast method, trying all possible keys")
+                    # the _filtered dict only exists when 2x1nt ran (B not reused)
+                    a_full = a_key_dic.replace(".dic", "_filtered.dic")
+                    if not os.path.exists(os.path.join(tempfile.gettempdir(), a_full)):
+                        a_full = a_key_dic
+                    brute(sector, 0x60, "A", read_dic(a_full))
 
         for file in glob.glob(tempfile.gettempdir() + "/keys_*.dic"):
             os.remove(file)
