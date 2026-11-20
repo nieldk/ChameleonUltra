@@ -541,6 +541,23 @@ def _build_hid_us():
 
 
 _HID_US = _build_hid_us()
+
+# Danish (ISO) overrides on top of US, keyed by the same usage IDs. From the
+# X11/xkb `dk` map and the CLDR Danish key set: the digit-row shifts, the
+# aring/ae/oslash keys, and the 102nd key. AltGr (right-alt) levels -- @ { [ ] }
+# | etc. -- are not mapped; a right-alt'd key renders as <alt+...>.
+_HID_DK_OVERRIDES = {
+    0x1f: ("2", '"'), 0x20: ("3", "#"), 0x21: ("4", "¤"), 0x23: ("6", "&"),
+    0x24: ("7", "/"), 0x25: ("8", "("), 0x26: ("9", ")"), 0x27: ("0", "="),
+    0x2d: ("+", "?"), 0x2e: ("´", "`"),
+    0x2f: ("å", "Å"), 0x30: ("¨", "^"),            # a-ring, diaeresis/circumflex
+    0x33: ("æ", "Æ"), 0x34: ("ø", "Ø"),        # ae, o-slash
+    0x35: ("½", "§"), 0x31: ("'", "*"),
+    0x36: (",", ";"), 0x37: (".", ":"), 0x38: ("-", "_"),
+    0x64: ("<", ">"),
+}
+_HID_LAYOUTS = {"us": _HID_US, "dk": {**_HID_US, **_HID_DK_OVERRIDES}}
+
 # modifier bits (HID): L/R Ctrl 0x01/0x10, Shift 0x02/0x20, Alt 0x04/0x40, Gui 0x08/0x80
 _MOD_SHIFT = 0x22
 _MOD_CTRL = 0x11
@@ -548,8 +565,8 @@ _MOD_ALT = 0x44
 _MOD_GUI = 0x88
 
 
-def _render_key(code: int, mod: int) -> str:
-    v = _HID_US.get(code)
+def _render_key(code: int, mod: int, layout: str = "us") -> str:
+    v = _HID_LAYOUTS.get(layout, _HID_US).get(code)
     if v is None:
         return f"<0x{code:02x}>"
     if not isinstance(v, tuple):
@@ -564,7 +581,7 @@ def _render_key(code: int, mod: int) -> str:
     return ch
 
 
-def hid_report_to_keys(report: bytes, prev_keys=None):
+def hid_report_to_keys(report: bytes, prev_keys=None, layout: str = "us"):
     """Keys newly pressed in this 8-byte HID report versus prev_keys (the raw
     keycode set from the previous report), as rendered text. Returns
     (text, current_keys). A held key repeats across reports, so only the
@@ -573,18 +590,19 @@ def hid_report_to_keys(report: bytes, prev_keys=None):
     mod = report[0]
     keys = [k for k in report[2:8] if k > 0x03]
     cur = set(keys)
-    text = "".join(_render_key(k, mod) for k in keys if k not in prev)
+    text = "".join(_render_key(k, mod, layout) for k in keys if k not in prev)
     return text, cur
 
 
-def esb_type_from_frames(device_key: bytes, payloads):
+def esb_type_from_frames(device_key: bytes, payloads, layout: str = "us"):
     """Decrypt a sequence of encrypted-keyboard ESB payloads and reconstruct
-    the typed text (down-transitions only). Non-keyboard frames are skipped."""
+    the typed text (down-transitions only). Non-keyboard frames are skipped.
+    layout selects the HID keymap ('us' or 'dk')."""
     out, prev = [], set()
     for pl in payloads:
         rep = esb_decrypt_keyboard_frame(device_key, bytes(pl))
         if rep is None:
             continue
-        text, prev = hid_report_to_keys(rep, prev)
+        text, prev = hid_report_to_keys(rep, prev, layout)
         out.append(text)
     return "".join(out)

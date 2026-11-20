@@ -3943,6 +3943,70 @@ class DataPm3Import(BaseCLIUnit):
         print(authtrace_pretty_dump(sessions))
 
 
+@data.command('esb-analyze')
+class DataEsbAnalyze(BaseCLIUnit):
+    """Analyse a saved ESB/Unifying capture offline -- no device needed.
+
+    Input is either a raw promisc blob (from `standalone esb_promisc
+    get-result --raw -f <file>`), or, with --hex, a text file of payload
+    hex (one per line, # comments allowed) such as the `payload` fields of
+    the --json export. CRC-valid payloads are then run through the same
+    Unifying analysis as the live command: --pairing derives the AES link
+    key, --key <hex> decrypts captured keyboard frames to text.
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Analyse a saved ESB/Unifying capture offline (no device needed)'
+        parser.add_argument('file', type=str, metavar='<path>',
+                            help='raw promisc blob, or payload hex lines with --hex')
+        parser.add_argument('--hex', action='store_true',
+                            help='treat <file> as payload hex, one frame per line (# comments ok)')
+        parser.add_argument('--pairing', action='store_true',
+                            help='derive the Unifying AES link key from captured pairing frames')
+        parser.add_argument('--key', default=None, metavar='<hex>',
+                            help='16-byte device key (hex) to decrypt captured keyboard frames to text')
+        parser.add_argument('--layout', default='us', choices=['us', 'dk'],
+                            help='keyboard layout for --key decryption (default us)')
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        import cli_esb
+        try:
+            blob = open(args.file, 'rb').read()
+        except OSError as e:
+            print(color_string((CR, f"Could not read {args.file}: {e}")))
+            return
+
+        if args.hex:
+            payloads = []
+            for ln in blob.decode('utf-8', 'replace').splitlines():
+                ln = ln.split('#', 1)[0].strip().replace(' ', '')
+                if not ln:
+                    continue
+                try:
+                    payloads.append(bytes.fromhex(ln))
+                except ValueError:
+                    print(color_string((CY, f"skipping non-hex line: {ln!r}")))
+            print(color_string((CG, f"{len(payloads)} payload(s) from {args.file}")))
+        else:
+            recs = cli_esb.parse_promisc_records(blob)
+            if not recs:
+                print(color_string((CR, f"No promisc records in {args.file} -- "
+                                         "wrong format? use --hex for payload hex lines")))
+                return
+            print(color_string((CG, cli_esb.summarize_promisc(recs))))
+            payloads = [c['payload'] for _ch, p, b, f in recs
+                        if (c := cli_esb.esb_crc_best(p, b, f))]
+            print(color_string((CG, f"{len(payloads)} CRC-valid payload(s)")))
+
+        print(color_string((CY, cli_esb.UNIFYING_CREDIT)))
+        if args.pairing or args.key:
+            _esb_unifying_analyze(payloads, args)
+        else:
+            print(color_string((CY, "pass --pairing and/or --key <hex> to analyse")))
+
+
 @data.command('hexsamples')
 class DataHexsamples(BaseCLIUnit):
     def args_parser(self) -> ArgumentParserNoExit:
@@ -6417,7 +6481,47 @@ def _standalone_result_args_parser(description: str) -> ArgumentParserNoExit:
                        help='dump every frame in each session')
     group.add_argument('--pm3', default=None, metavar='<prefix>',
                        help='write each session as a Proxmark3 .trace (<prefix>-NN.trace)')
+    parser.add_argument('--pairing', action='store_true',
+                        help='[esb] derive the Unifying AES link key from captured pairing frames')
+    parser.add_argument('--key', default=None, metavar='<hex>',
+                        help='[esb] 16-byte device key (hex) to decrypt captured keyboard frames to text')
+    parser.add_argument('--layout', default='us', choices=['us', 'dk'],
+                        help='[esb] keyboard layout for --key decryption (default us)')
     return parser
+
+
+def _esb_unifying_analyze(payloads, args):
+    """Optional post-processing of captured ESB payloads: --pairing derives the
+    Unifying AES link key from a captured pairing, --key <hex> decrypts captured
+    encrypted-keyboard frames to text. Both are host-side (cli_esb)."""
+    import cli_esb
+    if args.pairing:
+        info = cli_esb.unifying_pairing_key(payloads)
+        if info is None:
+            print(color_string((CY, "pairing: req1/req2/rsp1/rsp2 not all present in capture "
+                                     "(need the full handshake to derive the key)")))
+        else:
+            name = f" name '{info['device_name']}'" if info['device_name'] else ""
+            scope = "full pairing" if info['full_pairing'] else "key material only"
+            print(color_string((CG, f"pairing: device {info['address'].hex().upper()} "
+                                     f"key {info['device_key'].hex().upper()}{name} [{scope}]")))
+            print(color_string((CY, f"decrypt with: --key {info['device_key'].hex()}")))
+    if args.key:
+        try:
+            key = bytes.fromhex(args.key)
+        except ValueError:
+            print(color_string((CR, "--key must be hex")))
+            return
+        if len(key) != 16:
+            print(color_string((CR, "--key must be 16 bytes (32 hex chars)")))
+            return
+        n = sum(1 for p in payloads if cli_esb.esb_decrypt_keyboard_frame(key, p) is not None)
+        if not n:
+            print(color_string((CY, "no encrypted-keyboard frames in capture to decrypt")))
+        else:
+            layout = getattr(args, 'layout', 'us')
+            text = cli_esb.esb_type_from_frames(key, payloads, layout)
+            print(color_string((CG, f"decrypted {n} keyboard frame(s) [{layout}]: {text!r}")))
 
 
 def _standalone_render_result(args, mode, raw: bytes):
@@ -6570,6 +6674,8 @@ def _standalone_render_result(args, mode, raw: bytes):
                 if text:
                     print(text)
             print(color_string((CY, cli_esb.UNIFYING_CREDIT)))
+            if args.pairing or args.key:
+                _esb_unifying_analyze([f for _ch, f in recs], args)
         return
 
     if mode == StandaloneMode.ESB_PROMISC:
@@ -6606,6 +6712,10 @@ def _standalone_render_result(args, mode, raw: bytes):
                 if text:
                     print(text)
             print(color_string((CY, cli_esb.UNIFYING_CREDIT)))
+            if args.pairing or args.key:
+                payloads = [c['payload'] for _ch, p, b, f in recs
+                            if (c := cli_esb.esb_crc_best(p, b, f))]
+                _esb_unifying_analyze(payloads, args)
         return
 
     if mode not in (StandaloneMode.AUTHTRACE, StandaloneMode.EMUL_TRACE,
