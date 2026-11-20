@@ -125,5 +125,16 @@ Phreakbyte is built on the work of the
 project and its contributors. Thanks to Iceman and the RRG team. The detachment
 into a standalone project was made with their knowledge.
 
+### Logitech Unifying / ESB research
+
+The Logitech Unifying and ESB tooling in Phreakbyte builds directly on the work
+of **Marcus Mengs ([mame82](https://github.com/mame82))**, who discovered the
+Unifying wireless vulnerabilities (CVE-2019-13052, -13053, -13054, -13055) and
+wrote [LOGITacker](https://github.com/mame82/LOGITacker) and munifying. The
+pairing key derivation, encrypted-keyboard decryption, and HID keymap are ported
+from LOGITacker, and parts of this work were done in close collaboration with
+Marcus. Earlier foundations it rests on: Bastille Research's MouseJack
+(Marc Newlin) and KeyKeriki (Thorsten Schröder and Max Moser).
+
 This project is licensed under the **GNU General Public License v3.0**. Upstream
 copyright notices and `AUTHORS.md` are preserved. See [`LICENSE`](LICENSE).

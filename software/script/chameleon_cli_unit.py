@@ -6569,6 +6569,7 @@ def _standalone_render_result(args, mode, raw: bytes):
                 print(color_string((CG, cli_esb.summarize(recs))))
                 if text:
                     print(text)
+            print(color_string((CY, cli_esb.UNIFYING_CREDIT)))
         return
 
     if mode == StandaloneMode.ESB_PROMISC:
@@ -6604,6 +6605,7 @@ def _standalone_render_result(args, mode, raw: bytes):
                     "count is the signal to trust, not an isolated hit")))
                 if text:
                     print(text)
+            print(color_string((CY, cli_esb.UNIFYING_CREDIT)))
         return
 
     if mode not in (StandaloneMode.AUTHTRACE, StandaloneMode.EMUL_TRACE,

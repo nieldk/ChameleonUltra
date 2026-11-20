@@ -4,6 +4,12 @@ Pure functions, no device access. Frames are raw ESB payloads (the radio's own
 16-bit CRC already stripped); nothing about the higher-layer protocol is
 assumed beyond what's documented for Logitech Unifying specifically. Anything
 not understood is reported as-is (raw hex) rather than guessed.
+
+Credits: the Logitech Unifying analysis here (pairing key derivation, keyboard
+decryption, HID keymap) is ported from LOGITacker by Marcus Mengs (mame82), who
+did the original Unifying vulnerability research (CVE-2019-13052 and related).
+The ESB promiscuous capture and the 5/10/22-byte frame analysis build on
+Bastille Research's MouseJack (Marc Newlin) and the earlier KeyKeriki work.
 """
 
 import struct
@@ -16,6 +22,11 @@ import struct
 # protocol detail that hasn't been looked into yet; this only reports shape,
 # checksum validity and raw bytes.
 UNIFYING_LENS = {6: "short(5)", 11: "short(10)", 23: "long(22)"}
+
+# Printed by commands that surface the Unifying analysis, so the attribution is
+# visible at the point of use. See README "Logitech Unifying / ESB research".
+UNIFYING_CREDIT = ("Unifying/ESB analysis ported from LOGITacker by Marcus Mengs "
+                   "(mame82), original Unifying researcher (CVE-2019-13052).")
 
 
 def parse_records(blob: bytes):
@@ -266,7 +277,8 @@ def esb_crc_best(prefix: int, base: int, raw: bytes):
 
 # --- Unifying pairing capture -> AES link-key derivation (CVE-2019-13052) ---
 #
-# Ported from LOGITacker (RoganDawes/LOGITacker, logitacker_pairing_parser.c).
+# Ported from LOGITacker by Marcus Mengs (mame82), logitacker_pairing_parser.c
+# (via RoganDawes/LOGITacker). Original research and CVE-2019-13052: mame82.
 # A Unifying pairing is a cleartext RF handshake; capturing it recovers the
 # per-device AES-128 link key, which then decrypts keyboard traffic. Frames
 # here are ESB payloads (byte 0 = device index, byte 1 = report type), the same
@@ -372,7 +384,8 @@ def unifying_pairing_key(payloads):
 
 # --- Unifying encrypted-keyboard decryption (step after key recovery) -------
 #
-# Ported from LOGITacker (logitacker_unifying_crypto.c). An encrypted keyboard
+# Ported from LOGITacker by Marcus Mengs (mame82), logitacker_unifying_crypto.c.
+# An encrypted keyboard
 # RF frame is 22 bytes with (data[1] & 0x1f) == 0x13. The per-frame key is
 # AES-128-ECB(device_key, secret) where `secret` is a fixed 16-byte block with
 # the frame's 4-byte counter spliced in at offset 7; the 8 ciphertext bytes
@@ -476,7 +489,8 @@ def esb_decrypt_keyboard_frame(device_key: bytes, payload: bytes):
 # --- HID keyboard report -> text (US layout) --------------------------------
 #
 # USB HID usage IDs (HID Usage Tables, keyboard page, table 12), as enumerated
-# in LOGITacker's logitacker_keyboard_map.h. This is a US (ANSI) layout: other
+# in LOGITacker's logitacker_keyboard_map.h (Marcus Mengs, mame82). This is a
+# US (ANSI) layout: other
 # layouts (e.g. DK) remap the symbol/102nd keys and would need their own table.
 # A decrypted keyboard report is 8 bytes: [modifiers][reserved][keycode x6].
 
