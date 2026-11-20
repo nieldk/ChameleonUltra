@@ -103,6 +103,8 @@ def describe_promisc_hit(ch: int, prefix: int, base: int, raw: bytes) -> str:
            f"dev={dev} {esb_classify(c['payload'])} pl={c['payload_len']} pay={c['payload'].hex()}")
     if c['unifying']:
         tag += f" unifying {UNIFYING_LENS[c['payload_len']]} cksum={'ok' if c['cksum_ok'] else 'BAD'}"
+    else:
+        tag += " unverified(CRC-only)"   # right CRC but not a Unifying shape: likely a noise match
     return line + "  " + tag
 
 
@@ -134,19 +136,21 @@ def esb_classify(payload: bytes) -> str:
 
 def promisc_addresses(recs):
     """Distinct RF addresses recovered from the CRC-valid hits, each with its
-    seen device indices and hit count. These can be handed straight to the
-    known-address `esb` mode (standalone config esb --address <addr>)."""
+    seen device indices, hit count, and whether any hit was Unifying-shaped or
+    checksum-verified. An address that is checksum-verified or seen more than
+    once is trustworthy; a lone bare-CRC address may be a noise match."""
     found = {}
     for ch, p, b, raw in recs:
         c = esb_crc_best(p, b, raw)
         if c is None:
             continue
         a = c['address'].hex().upper()
-        e = found.setdefault(a, {'count': 0, 'devices': set(), 'unifying': False})
+        e = found.setdefault(a, {'count': 0, 'devices': set(), 'unifying': False, 'cksum': False})
         e['count'] += 1
         if c['device'] is not None:
             e['devices'].add(c['device'])
         e['unifying'] = e['unifying'] or c['unifying']
+        e['cksum'] = e['cksum'] or c['cksum_ok']
     return found
 
 
@@ -165,18 +169,28 @@ def summarize_promisc(recs) -> str:
     counts = promisc_hit_counts(recs)
     top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
     top_str = ", ".join(f"prefix={p:#04x}/base={b:#04x}:{n}" for (p, b), n in top)
-    valid = sum(1 for ch, p, b, raw in recs if esb_crc_best(p, b, raw))
-    unif = sum(1 for ch, p, b, raw in recs
-               if (c := esb_crc_best(p, b, raw)) and c['unifying'])
+    valid = unif = ck = 0
+    for ch, p, b, raw in recs:
+        c = esb_crc_best(p, b, raw)
+        if not c:
+            continue
+        valid += 1
+        unif += c['unifying']
+        ck += c['cksum_ok']
     head = f"{len(recs)} hit(s) across {len(counts)} guess(es)"
     if not valid:
-        return f"{head}; 0 CRC-valid (all noise so far); top: {top_str}"
+        return f"{head}; 0 passed CRC; top: {top_str}"
+    # A 16-bit CRC over this many preamble syncs hits on noise now and then, so
+    # bare CRC is not proof. Trust a checksum-verified or repeated address.
     addrs = promisc_addresses(recs)
-    addr_str = "; ".join(
-        f"{a} (x{d['count']}" + (f", dev {','.join(f'{x:#04x}' for x in sorted(d['devices']))}" if d['devices'] else "") + ")"
-        for a, d in sorted(addrs.items(), key=lambda kv: kv[1]['count'], reverse=True))
-    return (f"{head}; {valid} CRC-valid ({unif} Unifying) -- real frames. "
-            f"Addresses: {addr_str}. Feed one to: standalone config esb --address <addr>")
+    trusted = {a: d for a, d in addrs.items() if d['cksum'] or d['count'] > 1}
+    msg = (f"{head}; {valid} passed CRC ({unif} Unifying-shaped, {ck} checksum-verified)")
+    if trusted:
+        ts = "; ".join(
+            f"{a} (x{d['count']}{', cksum ok' if d['cksum'] else ''})"
+            for a, d in sorted(trusted.items(), key=lambda kv: (kv[1]['cksum'], kv[1]['count']), reverse=True))
+        return msg + f". Likely real: {ts}. Feed one to: standalone config esb --address <addr>"
+    return msg + ". None checksum-verified or repeated -- treat as candidates, not confirmed frames."
 
 
 # --- ESB CRC-16 validation of promisc captures ---------------------------
