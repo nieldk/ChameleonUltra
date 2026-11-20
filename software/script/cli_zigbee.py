@@ -6,6 +6,7 @@ Receive only; frames are parsed here, not on the device.
 
 import argparse
 import struct
+import sys
 import time
 from collections import defaultdict
 
@@ -50,16 +51,41 @@ def _group():
 zb = _group()
 
 
-def _collect(cmd, seconds):
-    """Drain the log for `seconds`, return a list of (channel, lqi, frame)."""
+def _collect(cmd, seconds, on_tick=None):
+    """Drain the log for `seconds`, return a list of (channel, lqi, frame).
+    on_tick(total, elapsed, remaining) is called each poll."""
     recs = []
-    end = time.time() + seconds
+    start = time.time()
+    end = start + seconds
     while True:
         recs.extend(zp.parse_records(cmd.standalone_drain_result_for(StandaloneMode.ZIGBEE)))
+        if on_tick is not None:
+            on_tick(len(recs), time.time() - start, max(0.0, end - time.time()))
         if time.time() >= end:
             break
         time.sleep(0.5)
     return recs
+
+
+def _live_status():
+    """A one-line in-place '... Ns left, M frame(s)' status, TTY only.
+    Returns (tick, done): tick(total, elapsed, remaining), done() ends the line."""
+    on = sys.stdout.isatty()
+    drawn = {"v": False}
+
+    def tick(total, elapsed, remaining):
+        if not on:
+            return
+        sys.stdout.write(f"\r\033[2K  scanning... {remaining:4.0f}s left, {total} frame(s)")
+        sys.stdout.flush()
+        drawn["v"] = True
+
+    def done():
+        if on and drawn["v"]:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+    return tick, done
 
 
 def _time_arg(parser, default):
@@ -80,7 +106,10 @@ class ZigbeeScan(DeviceRequiredUnit):
     def on_exec(self, args: argparse.Namespace):
         nets = {}   # (channel, pan) -> info
         total = 0
-        for ch, lqi, f in _collect(self.cmd, args.time):
+        tick, done = _live_status()
+        recs = _collect(self.cmd, args.time, on_tick=tick)
+        done()
+        for ch, lqi, f in recs:
             total += 1
             m = zp.parse_mac(f)
             if not m or not m["ok"]:
@@ -122,7 +151,10 @@ class ZigbeeDevices(DeviceRequiredUnit):
     def on_exec(self, args: argparse.Namespace):
         devs = defaultdict(lambda: {"tx": 0, "lqi": [], "ieee": None})
         total = 0
-        for ch, lqi, f in _collect(self.cmd, args.time):
+        tick, done = _live_status()
+        recs = _collect(self.cmd, args.time, on_tick=tick)
+        done()
+        for ch, lqi, f in recs:
             total += 1
             m = zp.parse_mac(f)
             if not m or not m["ok"] or m["src"] is None:
@@ -190,7 +222,10 @@ class ZigbeeDump(DeviceRequiredUnit):
             keys.append(("ZLL master key", ZLL_MASTER_KEY))
             keys.append(("ZLL certification link key", ZLL_CERT_LINK_KEY))
         count, found_keys = 0, 0
-        for ch, lqi, f in _collect(self.cmd, args.time):
+        tick, done = _live_status()
+        recs = _collect(self.cmd, args.time, on_tick=tick)
+        done()
+        for ch, lqi, f in recs:
             count += 1
             m = zp.parse_mac(f)
             n = zp.parse_nwk(f, m) if m else None
@@ -237,10 +272,10 @@ class ZigbeeDump(DeviceRequiredUnit):
         print(f" {count} frame(s)" + (f", {found_keys} network key(s) recovered via Transport Key" if found_keys else ""))
 
 
-def _poll_channel_arrays(cmd, seconds, poll_interval=1.0):
+def _poll_channel_arrays(cmd, seconds, poll_interval=1.0, on_update=None):
     """Poll standalone_get_status() for `seconds`, return the last-seen
     rx11-26/ed11-26 arrays (16 ints each, channel 11 first), or None for
-    either that never appeared."""
+    either that never appeared. on_update(rx, ed) is called each poll."""
     rx = ed = None
     end = time.time() + seconds
     while True:
@@ -252,11 +287,24 @@ def _poll_channel_arrays(cmd, seconds, poll_interval=1.0):
             rx = [int(x) for x in extra['rx11-26'].split(',')]
         if 'ed11-26' in extra:
             ed = [int(x) for x in extra['ed11-26'].split(',')]
+        if on_update is not None:
+            on_update(rx, ed)
         remaining = end - time.time()
         if remaining <= 0:
             break
         time.sleep(min(poll_interval, remaining))
     return rx, ed
+
+
+def _channel_graph_lines(rx, ed, width=30):
+    """Stable channel-order (11-26) energy-detect bar chart with rx counts.
+    Bars scale to the current max ed so the busiest channel fills the row."""
+    maxed = max(ed) if ed and max(ed) > 0 else 1
+    lines = [f"  {'ch':>3} {'rx':>6} {'ed':>6}  energy"]
+    for i in range(16):
+        n = int(round(width * ed[i] / maxed))
+        lines.append(f"  {11 + i:>3} {rx[i]:>6} {ed[i]:>6}  {'#' * n}")
+    return lines
 
 
 def _zigbee_decode_cfg(cfg):
@@ -319,7 +367,24 @@ class ZigbeeHunt(DeviceRequiredUnit):
             return
 
         print(f"Scanning {args.time:g}s across channels 11-26 ...")
-        rx, ed = _poll_channel_arrays(self.cmd, args.time)
+        # live energy-detect bar graph, redrawn in place each poll (TTY only)
+        live = sys.stdout.isatty()
+        drawn = {"n": 0}
+
+        def _draw(rx_now, ed_now):
+            if not live:
+                return
+            frame = _channel_graph_lines(rx_now or [0] * 16, ed_now or [0] * 16)
+            if drawn["n"]:
+                sys.stdout.write(f"\033[{drawn['n']}A")
+            for ln in frame:
+                sys.stdout.write("\033[2K" + ln + "\n")
+            sys.stdout.flush()
+            drawn["n"] = len(frame)
+
+        rx, ed = _poll_channel_arrays(self.cmd, args.time, on_update=_draw)
+        if live and drawn["n"]:
+            print()  # separate the live graph from the final ranking
         if rx is None and ed is None:
             print(" - No rx11-26/ed11-26 in status -- older firmware, or still on the first hop pass.")
             return
