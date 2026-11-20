@@ -296,17 +296,26 @@ def _poll_channel_arrays(cmd, seconds, poll_interval=1.0, on_update=None):
     return rx, ed
 
 
-def _channel_graph_lines(rx, ed, width=30):
+def _channel_graph_lines(rx, ed, prev_ed=None, width=30):
     """Stable channel-order (11-26) energy-detect bar chart with rx counts,
     rendered in the shared rounded box. Bars scale to the current max ed so
-    the busiest channel fills the row. Fixed min width so the live redraw
-    doesn't jiggle as bar lengths change."""
+    the busiest channel fills the row. Each row is coloured by the change
+    since the previous frame (green + rising, red - falling, plain steady) so
+    small deltas are visible even when the bar length barely moves. Fixed min
+    width so the live redraw doesn't jiggle."""
     maxed = max(ed) if ed and max(ed) > 0 else 1
-    rows = [f"{'ch':>3} {'rx':>6} {'ed':>6}  energy"]
+    rows = [f"{'ch':>3} {'rx':>6} {'ed':>6}    energy"]
     for i in range(16):
         n = int(round(width * ed[i] / maxed))
-        rows.append(f"{11 + i:>3} {rx[i]:>6} {ed[i]:>6}  {CG}{'█' * n}{C0}")
-    return _box("Zigbee channel energy", rows, color=CC, min_width=19 + width)
+        prev = prev_ed[i] if prev_ed else ed[i]
+        if ed[i] > prev:
+            col, mark = CG, f"{CG}+{C0}"
+        elif ed[i] < prev:
+            col, mark = CR, f"{CR}-{C0}"
+        else:
+            col, mark = "", " "
+        rows.append(f"{11 + i:>3} {rx[i]:>6} {ed[i]:>6} {mark}  {col}{'█' * n}{C0}")
+    return _box("Zigbee channel energy", rows, color=CC, min_width=21 + width)
 
 
 def _zigbee_decode_cfg(cfg):
@@ -371,12 +380,14 @@ class ZigbeeHunt(DeviceRequiredUnit):
         print(f"Scanning {args.time:g}s across channels 11-26 ...")
         # live energy-detect bar graph, redrawn in place each poll (TTY only)
         live = sys.stdout.isatty()
-        drawn = {"n": 0}
+        drawn = {"n": 0, "prev": None}
 
         def _draw(rx_now, ed_now):
             if not live:
                 return
-            frame = _channel_graph_lines(rx_now or [0] * 16, ed_now or [0] * 16)
+            ed_cur = ed_now or [0] * 16
+            frame = _channel_graph_lines(rx_now or [0] * 16, ed_cur, prev_ed=drawn["prev"])
+            drawn["prev"] = list(ed_cur)
             if drawn["n"]:
                 sys.stdout.write(f"\033[{drawn['n']}A")
             for ln in frame:
