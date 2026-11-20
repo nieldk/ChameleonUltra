@@ -87,7 +87,7 @@ def describe_promisc_hit(ch: int, prefix: int, base: int, raw: bytes) -> str:
     c = esb_crc_best(prefix, base, raw)
     if c is None:
         return line + "  crc:noise"
-    tag = f"CRC-OK({c['order']}) pl={c['payload_len']} pay={c['payload'].hex()}"
+    tag = f"CRC-OK({c['order']}/{c['bitorder']}) pl={c['payload_len']} pay={c['payload'].hex()}"
     if c['unifying']:
         tag += f" unifying {UNIFYING_LENS[c['payload_len']]} cksum={'ok' if c['cksum_ok'] else 'BAD'}"
     return line + "  " + tag
@@ -153,35 +153,47 @@ def _bits_to_int(bits) -> int:
     return v
 
 
+def _rev_byte(x: int) -> int:
+    return int(f"{x & 0xFF:08b}"[::-1], 2)
+
+
 def esb_crc_candidates(prefix: int, base: int, raw: bytes, addr_bytes: int = 5,
                        max_payload: int = 23):
     """CRC-valid ESB framings in one promisc hit. Fixes the address at
     addr_bytes (5 for Unifying); a 3/4-byte-address frame still validates,
-    just read as a longer payload. Tries both prepend orders; for each,
-    slides the 2-byte CRC boundary over payload lengths and keeps the ones
-    where CRC-16 over the leading bits equals the next 16. Shortest payload
-    first -- longer matches reuse real bytes plus trailing noise."""
+    just read as a longer payload. The nRF52 RADIO stores payload bits
+    LSBit-first, the reverse of the nRF24 on-air order the CRC is computed
+    over, and the promisc capture byte layout is otherwise unverified, so
+    each prepend order is tried with the captured bytes as-is (msb) and
+    bit-reversed (lsb). For each, slides the 2-byte CRC boundary over payload
+    lengths and keeps the ones where CRC-16 over the leading bits equals the
+    next 16. Shortest payload first; the matching 'bitorder' tag pins the
+    real layout once a frame validates."""
     out = []
     hdr = addr_bytes * 8 + 9          # address + 9-bit PCF, before payload
+    raw = bytes(raw)
+    raw_rev = bytes(_rev_byte(x) for x in raw)
     for order in ("pb", "bp"):
-        buf = (bytes([prefix, base]) if order == "pb" else bytes([base, prefix])) + bytes(raw)
-        bits = _bits_msb(buf)
-        n = len(bits)
-        for plen in range(0, max_payload + 1):
-            k = hdr + 8 * plen
-            if k + 16 > n:
-                break
-            if _crc16_ccitt(bits[:k]) == _bits_to_int(bits[k:k + 16]):
-                payload = bytes(_bits_to_int(bits[hdr + 8 * i:hdr + 8 * i + 8]) for i in range(plen))
-                out.append({
-                    'order': order,
-                    'payload_len': plen,
-                    'payload': payload,
-                    'crc': _bits_to_int(bits[k:k + 16]),
-                    'unifying': plen in UNIFYING_LENS,
-                    'cksum_ok': plen in UNIFYING_LENS and unifying_checksum_ok(payload),
-                })
-    out.sort(key=lambda c: (c['payload_len'], c['order'] != "pb"))
+        head = bytes([prefix, base]) if order == "pb" else bytes([base, prefix])
+        for bitorder, body in (("msb", raw), ("lsb", raw_rev)):
+            bits = _bits_msb(head + body)
+            n = len(bits)
+            for plen in range(0, max_payload + 1):
+                k = hdr + 8 * plen
+                if k + 16 > n:
+                    break
+                if _crc16_ccitt(bits[:k]) == _bits_to_int(bits[k:k + 16]):
+                    payload = bytes(_bits_to_int(bits[hdr + 8 * i:hdr + 8 * i + 8]) for i in range(plen))
+                    out.append({
+                        'order': order,
+                        'bitorder': bitorder,
+                        'payload_len': plen,
+                        'payload': payload,
+                        'crc': _bits_to_int(bits[k:k + 16]),
+                        'unifying': plen in UNIFYING_LENS,
+                        'cksum_ok': plen in UNIFYING_LENS and unifying_checksum_ok(payload),
+                    })
+    out.sort(key=lambda c: (c['payload_len'], c['order'] != "pb", c['bitorder'] != "msb"))
     return out
 
 

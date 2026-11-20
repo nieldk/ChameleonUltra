@@ -6579,9 +6579,9 @@ def _standalone_render_result(args, mode, raw: bytes):
                 c = cli_esb.esb_crc_best(p, b, f)
                 if c is None:
                     return None
-                return {"order": c['order'], "payload_len": c['payload_len'],
-                        "payload": c['payload'].hex(), "crc": c['crc'],
-                        "unifying": c['unifying'], "cksum_ok": c['cksum_ok']}
+                return {"order": c['order'], "bitorder": c['bitorder'],
+                        "payload_len": c['payload_len'], "payload": c['payload'].hex(),
+                        "crc": c['crc'], "unifying": c['unifying'], "cksum_ok": c['cksum_ok']}
             out = jsonlib.dumps([
                 {"channel": ch, "prefix_guess": p, "base_guess": b, "hex": f.hex(),
                  "crc_valid": _crc_json(p, b, f)}
