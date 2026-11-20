@@ -2,6 +2,7 @@ import argparse
 import subprocess
 import sys
 import tempfile
+import time
 import os.path
 from pathlib import Path
 
@@ -264,7 +265,33 @@ def tqdm_if_exists(iterator):
 
         return tqdm.tqdm(iterator)
     except ImportError:
-        return iterator
+        return _plain_progress(iterator)
+
+
+def _plain_progress(iterator):
+    """Progress fallback when tqdm isn't installed: one in-place line,
+    throttled to ~1/s. Shows a percentage for a sized iterable, else a count."""
+    try:
+        total = len(iterator)
+    except TypeError:
+        total = None
+    start = last = time.time()
+    i = 0
+    try:
+        for item in iterator:
+            yield item
+            i += 1
+            now = time.time()
+            if now - last >= 1.0 or (total is not None and i == total):
+                last = now
+                rate = i / (now - start) if now > start else 0.0
+                head = f"{100 * i // total:3d}%  {i}/{total}" if total else f"{i}"
+                sys.stdout.write(f"\r    {head}  {rate:.0f}/s   ")
+                sys.stdout.flush()
+    finally:
+        if i:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
 
 
 def expect_response(accepted_responses: Union[int, list[int]]) -> Callable[..., Any]:
