@@ -63,6 +63,40 @@ from cli_core import (
 )
 
 
+def _add_keysave_args(parser):
+    """Shared save options for the single-key commands (darkside/nested/
+    hardnested): append the recovered key to a .dic, like autopwn's keys."""
+    parser.add_argument("-o", "--output", nargs="?", const="", default=None, metavar="<suffix>",
+                        help="Append the found key to <base>-key[-suffix].dic")
+    parser.add_argument("--base", type=str, default=None, metavar="<name>",
+                        help="Output base filename, default hf-mf-<uid>")
+    parser.add_argument("--no-save", action="store_true",
+                        help="Do not append the key to a dictionary file")
+
+
+def _autosave_single_key(cmd, key_hex, args):
+    """Append a recovered key to <base>-key[-suffix].dic (deduped). On by
+    default; --no-save disables it. Base defaults to hf-mf-<uid>."""
+    if getattr(args, "no_save", False) or not key_hex:
+        return
+    try:
+        uid_hex = bytes(cmd.hf14a_scan()[0]["uid"]).hex().upper()
+    except Exception:
+        uid_hex = "UNKNOWN"
+    base = getattr(args, "base", None) or f"hf-mf-{uid_hex}"
+    suffix = f"-{args.output}" if getattr(args, "output", None) else ""
+    path = f"{base}-key{suffix}.dic"
+    k = key_hex.upper()
+    existing = set()
+    if os.path.exists(path):
+        with open(path, encoding="utf-8", errors="ignore") as fh:
+            existing = {l.strip().upper() for l in fh if l.strip()}
+    if k not in existing:
+        with open(path, "a") as fh:
+            fh.write(k + "\n")
+    print(f" {CG}[+]{C0}  Key saved to {path}")
+
+
 @hf_mf.command("nested")
 class HFMFNested(ReaderRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
@@ -1206,40 +1240,6 @@ def _enter_pressed():
     except Exception:
         return False
     return False
-
-
-def _add_keysave_args(parser):
-    """Shared save options for the single-key commands (darkside/nested/
-    hardnested): append the recovered key to a .dic, like autopwn's keys."""
-    parser.add_argument("-o", "--output", nargs="?", const="", default=None, metavar="<suffix>",
-                        help="Append the found key to <base>-key[-suffix].dic")
-    parser.add_argument("--base", type=str, default=None, metavar="<name>",
-                        help="Output base filename, default hf-mf-<uid>")
-    parser.add_argument("--no-save", action="store_true",
-                        help="Do not append the key to a dictionary file")
-
-
-def _autosave_single_key(cmd, key_hex, args):
-    """Append a recovered key to <base>-key[-suffix].dic (deduped). On by
-    default; --no-save disables it. Base defaults to hf-mf-<uid>."""
-    if getattr(args, "no_save", False) or not key_hex:
-        return
-    try:
-        uid_hex = bytes(cmd.hf14a_scan()[0]["uid"]).hex().upper()
-    except Exception:
-        uid_hex = "UNKNOWN"
-    base = getattr(args, "base", None) or f"hf-mf-{uid_hex}"
-    suffix = f"-{args.output}" if getattr(args, "output", None) else ""
-    path = f"{base}-key{suffix}.dic"
-    k = key_hex.upper()
-    existing = set()
-    if os.path.exists(path):
-        with open(path, encoding="utf-8", errors="ignore") as fh:
-            existing = {l.strip().upper() for l in fh if l.strip()}
-    if k not in existing:
-        with open(path, "a") as fh:
-            fh.write(k + "\n")
-    print(f" {CG}[+]{C0}  Key saved to {path}")
 
 
 @hf_mf.command("autopwn")
