@@ -15,13 +15,13 @@ Bastille Research's MouseJack (Marc Newlin) and the earlier KeyKeriki work.
 import struct
 
 # Logitech Unifying payload shapes, from Bastille Research's MouseJack
-# disclosure and SensePost's Logitacker writeup: 5, 10 or 22-byte payload,
-# plus a 1-byte vendor checksum on top of ESB's own CRC -- so 6, 11 or 23
-# bytes as captured here. What each shape actually carries (HID++ short vs.
-# long report, encrypted keyboard frame, etc.) is Logitacker-specific
-# protocol detail that hasn't been looked into yet; this only reports shape,
-# checksum validity and raw bytes.
-UNIFYING_LENS = {6: "short(5)", 11: "short(10)", 23: "long(22)"}
+# disclosure: the ESB payload is 5, 10 or 22 bytes, with a 1-byte vendor
+# checksum as its last byte (the 2-byte ESB CRC is separate, after it). These
+# are the lengths LOGITacker's own code keys on (classify_frame == 22/10,
+# encrypted keyboard == 22), i.e. the payload length esb_crc_candidates
+# reports. What each shape carries (HID++ short/long, encrypted keyboard, etc.)
+# is protocol detail; this only reports shape, checksum validity and raw bytes.
+UNIFYING_LENS = {5: "short(5)", 10: "short(10)", 22: "long(22)"}
 
 # Printed by commands that surface the Unifying analysis, so the attribution is
 # visible at the point of use. See README "Logitech Unifying / ESB research".
@@ -127,7 +127,7 @@ def esb_classify(payload: bytes) -> str:
         return "short"
     rt = payload[1]
     name = _RF_REPORT_TYPES.get(rt, f"type=0x{rt:02x}")
-    if len(payload) == 23:
+    if len(payload) == 22:
         name += " [encrypted-kbd shape]"
     return name
 
