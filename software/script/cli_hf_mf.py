@@ -1493,7 +1493,10 @@ class HFMFAutopwn(ReaderRequiredUnit):
             current_keys_found, self.try_key(bytes.fromhex("FFFFFFFFFFFF"), bytes(10))
         )
         # user-supplied dictionary (--dict): try each key across all still-unknown sectors
-        for dk in getattr(self, "_extra_dict", None) or []:
+        extra = getattr(self, "_extra_dict", None) or []
+        if extra:
+            print(f" {CG}[+]{C0}  Trying {len(extra)} dictionary keys across unknown sectors..")
+        for dk in tqdm_if_exists(extra):
             if len(current_keys_found) >= max_sectors_num * 2:
                 break
             current_keys_found = self.merge_found_sector_keys(
