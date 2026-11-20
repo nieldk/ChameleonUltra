@@ -1171,6 +1171,29 @@ class HFMFStaticEncryptedNested(ReaderRequiredUnit):
         return key_map
 
 
+def _enter_pressed():
+    """Non-blocking check for a pending Enter on stdin, so a long loop can be
+    stopped without killing the CLI. No lingering thread; falls back to False
+    when stdin isn't an interactive console."""
+    try:
+        if not sys.stdin.isatty():
+            return False  # piped/headless: no interactive Enter, and EOF reads as ready
+        if sys.platform == "win32":
+            import msvcrt
+            hit = False
+            while msvcrt.kbhit():
+                if msvcrt.getwch() in ("\r", "\n"):
+                    hit = True
+            return hit
+        import select
+        if select.select([sys.stdin], [], [], 0)[0]:
+            sys.stdin.readline()
+            return True
+    except Exception:
+        return False
+    return False
+
+
 @hf_mf.command("autopwn")
 class HFMFAutopwn(ReaderRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
@@ -1496,19 +1519,26 @@ class HFMFAutopwn(ReaderRequiredUnit):
         # sectors, only if some remain (the FF check above may already have them)
         extra = getattr(self, "_extra_dict", None) or []
         if extra and len(current_keys_found) < max_sectors_num * 2:
-            print(f" {CG}[+]{C0}  Trying {len(extra)} dictionary keys across unknown sectors..")
+            print(f" {CG}[+]{C0}  Trying {len(extra)} dictionary keys across unknown sectors.. "
+                  f"(press Enter or Ctrl-C to skip)")
             nonexistent = set(range(max_sectors_num * 2, 80))
-            for dk in tqdm_if_exists(extra):
-                if len(current_keys_found) >= max_sectors_num * 2:
-                    break
-                # check only still-unknown slots; each found key shrinks the
-                # per-key auth sweep, so the pass speeds up as it progresses
-                _, mask = self.mask_from_keys(
-                    set(current_keys_found.keys()) | nonexistent, total_bits=80
-                )
-                current_keys_found = self.merge_found_sector_keys(
-                    current_keys_found, self.try_key(bytes.fromhex(dk), mask)
-                )
+            try:
+                for dk in tqdm_if_exists(extra):
+                    if len(current_keys_found) >= max_sectors_num * 2:
+                        break
+                    if _enter_pressed():
+                        print(f" {CY}[!]{C0}  Dictionary pass skipped by user")
+                        break
+                    # check only still-unknown slots; each found key shrinks the
+                    # per-key auth sweep, so the pass speeds up as it progresses
+                    _, mask = self.mask_from_keys(
+                        set(current_keys_found.keys()) | nonexistent, total_bits=80
+                    )
+                    current_keys_found = self.merge_found_sector_keys(
+                        current_keys_found, self.try_key(bytes.fromhex(dk), mask)
+                    )
+            except KeyboardInterrupt:
+                print(f"\n {CY}[!]{C0}  Dictionary pass stopped by user")
 
         if not current_keys_found:
             print(f" {CR}[!]{C0}  No keys found yet, trying darkside..")
@@ -2512,18 +2542,32 @@ def _gen1a_raw(cmd, opt, data, bitlen=None, timeout_ms=200):
         return b""
 
 
-def _gen1a_unlock(cmd, opt):
+def _gen1a_unlock(cmd, opt, tries=5):
     """Backdoor stage1 (0x40) + stage2 (0x43) unlock. opt must already have
     activate_rf_field=1, auto_select=0, keep_rf_field=1, append_crc=0 - this
     mutates opt['append_crc']=1 on success, ready for 0x30/0xA0 commands on
-    the same (still-open) RF session. Raises on failure."""
-    r = _gen1a_raw(cmd, opt, [0x40], bitlen=7, timeout_ms=1000)
-    if not r or r[0] != 0x0a:
-        raise Exception("gen1a unlock failed (not a gen1a magic card?)")
-    r = _gen1a_raw(cmd, opt, [0x43], timeout_ms=1000)
-    if not r or r[0] != 0x0a:
-        raise Exception("gen1a unlock failed (stage 2)")
-    opt["append_crc"] = 1
+    the same (still-open) RF session. Retries the wakeup a few times (a single
+    0x40/0x43 can miss on a weak coupling or a slow link). Raises on failure."""
+    for attempt in range(tries):
+        r = _gen1a_raw(cmd, opt, [0x40], bitlen=7, timeout_ms=1000)
+        if r and r[0] == 0x0a:
+            r = _gen1a_raw(cmd, opt, [0x43], timeout_ms=1000)
+            if r and r[0] == 0x0a:
+                opt["append_crc"] = 1
+                return
+        if attempt + 1 < tries:
+            # re-IDLE the card: drop the field so the next 0x40 (activate_rf_field=1)
+            # re-powers it into a clean state for another wakeup
+            drop = dict(opt)
+            drop["keep_rf_field"] = 0
+            drop["wait_response"] = 0
+            try:
+                cmd.hf14a_raw(options=drop, resp_timeout_ms=100, data=[])
+            except Exception:
+                pass
+            opt["append_crc"] = 0
+            time.sleep(0.02)
+    raise Exception(f"gen1a unlock failed after {tries} tries (card present and centered on the antenna?)")
 
 
 def _gen1a_drop_field(cmd, opt):
