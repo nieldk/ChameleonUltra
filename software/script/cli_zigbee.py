@@ -348,7 +348,8 @@ class ZigbeeHunt(DeviceRequiredUnit):
             "onto the result. --lock locks a single channel (--rank N picks "
             "the Nth busiest, default 1 = busiest); --lock-top N instead hops "
             "only over the N busiest channels (less dwell time per channel "
-            "than a single lock, but covers more than one).\n\n"
+            "than a single lock, but covers more than one). --lock-top acts on "
+            "its own; it does not need --lock.\n\n"
             "Requires zigbee already armed and hopping: "
             "`standalone config zigbee --channel 0` (or --channels) then "
             "`standalone trigger`."
@@ -361,8 +362,8 @@ class ZigbeeHunt(DeviceRequiredUnit):
         lock_grp.add_argument("--rank", type=int, default=1, metavar="<N>",
                               help="with --lock, lock onto the Nth busiest channel (default 1 = busiest)")
         lock_grp.add_argument("--lock-top", type=int, default=None, metavar="<N>",
-                              help="with --lock, hop only over the N busiest channels "
-                                   "instead of locking a single one")
+                              help="hop only over the N busiest channels instead of "
+                                   "locking a single one (acts on its own, no --lock needed)")
         return p
 
     def on_exec(self, args: argparse.Namespace):
@@ -425,7 +426,7 @@ class ZigbeeHunt(DeviceRequiredUnit):
                 f"re-run with --lock-top {len(active)} to hop only over those, "
                 f"or --lock --rank N to pick one.")))
 
-        if args.lock and args.lock_top is not None:
+        if args.lock_top is not None:
             if not (1 <= args.lock_top <= 16):
                 print(" - --lock-top must be 1..16")
                 return
