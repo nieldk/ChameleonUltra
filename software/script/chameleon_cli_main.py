@@ -264,7 +264,7 @@ class ChameleonCLI:
         except Exception:
             print(f"CLI exception: {color_string((CR, traceback.format_exc()))}")
 
-    def startCLI(self):
+    def startCLI(self, startup_port=None, auto_connect=True):
         """
             start listen input.
 
@@ -284,6 +284,9 @@ class ChameleonCLI:
         )
 
         self.print_banner()
+        if auto_connect:
+            # same path as 'hw connect'; no port -> USB serial auto-detect
+            self.exec_cmd("hw connect" + (f" -p {startup_port}" if startup_port else ""))
         cmd_strs = []
         while True:
             if cmd_strs:
@@ -308,4 +311,12 @@ if __name__ == "__main__":
         raise Exception("This script requires at least Python 3.9")
     colorama.init(autoreset=True)
     chameleon_cli_unit.check_tools()
-    ChameleonCLI().startCLI()
+    ap = argparse.ArgumentParser(description="ChameleonUltra CLI")
+    ap.add_argument(
+        "-p", "--port", default=None,
+        help="Connect at startup to this port/transport (e.g. /dev/ttyACM0, ble, "
+             "tcp:host:port); omit to auto-detect a USB serial Chameleon",
+    )
+    ap.add_argument("--no-connect", action="store_true", help="Skip auto-connect at startup")
+    cli_args = ap.parse_args()
+    ChameleonCLI().startCLI(startup_port=cli_args.port, auto_connect=not cli_args.no_connect)
