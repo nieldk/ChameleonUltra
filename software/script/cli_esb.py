@@ -159,43 +159,40 @@ def _rev_byte(x: int) -> int:
 
 def esb_crc_candidates(prefix: int, base: int, raw: bytes, addr_bytes: int = 5,
                        max_payload: int = 23):
-    """CRC-valid ESB framings in one promisc hit. Fixes the address at
-    addr_bytes (5 for Unifying); a 3/4-byte-address frame still validates,
-    just read as a longer payload. Preamble-sync captures begin at the real
-    address, so the bytes are tried with nothing prepended ('none'); the older
-    brute-force path consumed two address bytes first, so [prefix,base] ('pb')
-    and [base,prefix] ('bp') are tried too. The nRF52 RADIO stores payload bits
-    LSBit-first, the reverse of the nRF24 on-air order the CRC is computed over,
-    so each is also tried bit-reversed (lsb). For each, slides the 2-byte CRC
-    boundary over payload lengths and keeps the ones where CRC-16 over the
-    leading bits equals the next 16. Shortest payload first; the 'order' and
-    'bitorder' tags pin the real layout once a frame validates."""
+    """CRC-valid ESB framings in one promisc hit. The preamble-sync capture
+    begins at the real address, so the bytes are validated as-is -- nothing is
+    prepended. Fixes the address at addr_bytes (5 for Unifying); a 3/4-byte-
+    address frame still validates, just read as a longer payload. The nRF52
+    RADIO stores payload bits LSBit-first, the reverse of the nRF24 on-air
+    order the CRC is computed over, so the bytes are tried as captured (msb)
+    and bit-reversed (lsb). For each, slides the 2-byte CRC boundary over
+    payload lengths and keeps the ones where CRC-16 over the leading bits
+    equals the next 16. Shortest payload first; the 'bitorder' tag pins the
+    real layout once a frame validates. (prefix/base are the preamble marker,
+    not address bytes, so they are not used in the reconstruction.)"""
     out = []
     hdr = addr_bytes * 8 + 9          # address + 9-bit PCF, before payload
     raw = bytes(raw)
     raw_rev = bytes(_rev_byte(x) for x in raw)
-    heads = {"none": b"", "pb": bytes([prefix, base]), "bp": bytes([base, prefix])}
-    for order, head in heads.items():
-        for bitorder, body in (("msb", raw), ("lsb", raw_rev)):
-            bits = _bits_msb(head + body)
-            n = len(bits)
-            for plen in range(0, max_payload + 1):
-                k = hdr + 8 * plen
-                if k + 16 > n:
-                    break
-                if _crc16_ccitt(bits[:k]) == _bits_to_int(bits[k:k + 16]):
-                    payload = bytes(_bits_to_int(bits[hdr + 8 * i:hdr + 8 * i + 8]) for i in range(plen))
-                    out.append({
-                        'order': order,
-                        'bitorder': bitorder,
-                        'payload_len': plen,
-                        'payload': payload,
-                        'crc': _bits_to_int(bits[k:k + 16]),
-                        'unifying': plen in UNIFYING_LENS,
-                        'cksum_ok': plen in UNIFYING_LENS and unifying_checksum_ok(payload),
-                    })
-    order_rank = {"none": 0, "pb": 1, "bp": 2}
-    out.sort(key=lambda c: (c['payload_len'], order_rank[c['order']], c['bitorder'] != "msb"))
+    for bitorder, body in (("msb", raw), ("lsb", raw_rev)):
+        bits = _bits_msb(body)
+        n = len(bits)
+        for plen in range(0, max_payload + 1):
+            k = hdr + 8 * plen
+            if k + 16 > n:
+                break
+            if _crc16_ccitt(bits[:k]) == _bits_to_int(bits[k:k + 16]):
+                payload = bytes(_bits_to_int(bits[hdr + 8 * i:hdr + 8 * i + 8]) for i in range(plen))
+                out.append({
+                    'order': "none",
+                    'bitorder': bitorder,
+                    'payload_len': plen,
+                    'payload': payload,
+                    'crc': _bits_to_int(bits[k:k + 16]),
+                    'unifying': plen in UNIFYING_LENS,
+                    'cksum_ok': plen in UNIFYING_LENS and unifying_checksum_ok(payload),
+                })
+    out.sort(key=lambda c: (c['payload_len'], c['bitorder'] != "msb"))
     return out
 
 
