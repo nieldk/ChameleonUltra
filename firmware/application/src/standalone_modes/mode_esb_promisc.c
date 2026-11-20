@@ -45,7 +45,48 @@ static uint32_t m_log_words[(LOG_SZ + 3) / 4];
 #define m_log ((uint8_t *)m_log_words)
 static size_t   m_used, m_cursor;
 static uint32_t m_overflow;
+static uint32_t m_filtered;      /* preamble matches dropped: no valid ESB CRC */
 static bool     m_loaded, m_dirty;
+
+/* ESB 2-byte CRC-16/CCITT-FALSE check, mirroring cli_esb's host validation so
+ * only real frames reach the log. The capture starts at the address, so the
+ * CRC covers address(5) + PCF(9 bits) + payload with the 16-bit CRC after it.
+ * The nRF52 RADIO stores payload bits LSBit-first, the reverse of the on-air
+ * order the CRC runs over, so the bytes are tried as captured and bit-reversed.
+ * Main context only (called from on_tick), not the radio callback. */
+static uint16_t crc16_over_bits(const uint8_t *b, int nbits) {
+    uint16_t crc = 0xFFFF;
+    for (int i = 0; i < nbits; i++) {
+        uint16_t bit = (b[i >> 3] >> (7 - (i & 7))) & 1u;
+        crc ^= bit << 15;
+        crc = (crc & 0x8000u) ? (uint16_t)((crc << 1) ^ 0x1021u) : (uint16_t)(crc << 1);
+    }
+    return crc;
+}
+
+static bool esb_crc_valid(const uint8_t *raw, size_t len) {
+    uint8_t rev[ESB_PROMISC_CAP_LEN];
+    for (size_t i = 0; i < len; i++) {
+        uint8_t x = raw[i], r = 0;
+        for (int j = 0; j < 8; j++) r = (uint8_t)(r | (((x >> j) & 1u) << (7 - j)));
+        rev[i] = r;
+    }
+    const uint8_t *variants[2] = { raw, rev };
+    const int total = (int)(len * 8);
+    const int hdr = 5 * 8 + 9;                      /* address + 9-bit PCF */
+    for (int v = 0; v < 2; v++) {
+        const uint8_t *b = variants[v];
+        for (int plen = 0; plen <= 23; plen++) {
+            int k = hdr + 8 * plen;
+            if (k + 16 > total) break;
+            uint16_t got = 0;
+            for (int i = 0; i < 16; i++)
+                got = (uint16_t)((got << 1) | ((b[(k + i) >> 3] >> (7 - ((k + i) & 7))) & 1u));
+            if (crc16_over_bits(b, k) == got) return true;
+        }
+    }
+    return false;
+}
 
 static void cfg_parse(const uint8_t *cfg, size_t cfg_len) {
     m_channel   = DEFAULT_CHANNEL;
@@ -99,6 +140,7 @@ static void log_flush(void) {
 static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len) {
     cfg_parse(cfg, cfg_len);
     m_overflow = 0;
+    m_filtered = 0;
     log_ensure_loaded();
     if (!esb_promisc_radio_start(m_channel, m_prefix_lo, m_prefix_hi)) return STANDALONE_RC_INTERNAL;
     NRF_LOG_INFO("esb-promisc: preamble-sync ch=%u polarity=%u", m_channel, m_prefix_lo);
@@ -132,7 +174,10 @@ static standalone_rc_t on_tick(uint32_t now_ms) {
     (void)now_ms;
     esb_promisc_frame_t f;
     esb_promisc_radio_poll();
-    while (esb_promisc_radio_pop(&f)) log_add(&f);
+    while (esb_promisc_radio_pop(&f)) {
+        if (esb_crc_valid(f.raw, ESB_PROMISC_CAP_LEN)) log_add(&f);
+        else m_filtered++;        /* preamble match on noise: never logged */
+    }
     return STANDALONE_RC_OK;
 }
 
@@ -180,6 +225,7 @@ static size_t get_status(char *out, size_t out_max) {
               (unsigned long)s.sig_radio, (unsigned long)s.sig_timer0, (unsigned long)s.idle,
               (unsigned long)s.ready_ok, (unsigned long)s.ready_timeout, (unsigned long)s.last_rc);
     STATUS_KV(out, out_max, len, "hits=%lu dropped=%lu\n", (unsigned long)s.hits, (unsigned long)s.dropped);
+    STATUS_KV(out, out_max, len, "filtered=%lu (noise, not logged)\n", (unsigned long)m_filtered);
     STATUS_KV(out, out_max, len, "log pending=%u overflow=%lu\n", (unsigned)(m_used - m_cursor),
               (unsigned long)m_overflow);
     return len;

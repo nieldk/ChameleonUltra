@@ -70,15 +70,12 @@ static void radio_rx_begin(void) {
     m_slot_ch            = m_channel;
     NRF_RADIO->FREQUENCY = 5UL * (m_slot_ch - 10u);      /* 2405 MHz + 5 * (ch - 11) */
     NRF_RADIO->PACKETPTR = (uint32_t)m_pkt;
-    /* MODECNF0 intentionally left at its reset value (RU_Default, DTX=Center).
-     * RU_Fast was tried here and reverted: Nordic's own MODECNF0.RU docs say fast
-     * ramp-up disables hardware-enforced TIFS and hands that control to software,
-     * which this code never took over. Matches the regression signature exactly --
-     * ready_ok/ed_ok stayed healthy (state-machine and RSSI, unaffected by RU) while
-     * FRAMESTART never fired even with confirmed real traffic on-channel. */
-    /* Read every write straight back before trusting any of it -- the one
-     * thing not yet checked in this regression: that the register actually
-     * holds what the code just wrote, not just what the code assumes. */
+    /* MODECNF0 left at its reset value (RU_Default, DTX=Center). RU_Fast was
+     * tried and reverted: Nordic's MODECNF0.RU docs say fast ramp-up disables
+     * hardware-enforced TIFS and hands that to software, which this code never
+     * took over. Default ramp is correct for RX. */
+    /* Read the key writes straight back so a stuck or ignored write shows up in
+     * `standalone status` instead of being assumed correct. */
     m_st.rb_mode   = NRF_RADIO->MODE;
     m_st.rb_pcnf0  = NRF_RADIO->PCNF0;
     m_st.rb_crccnf = NRF_RADIO->CRCCNF;
@@ -95,12 +92,10 @@ static void radio_rx_begin(void) {
     NRF_TIMER0->EVENTS_COMPARE[0] = 0;
     NRF_TIMER0->INTENSET          = TIMER_INTENSET_COMPARE0_Msk;
 
-    /* The slot signals only arrive with these IRQs enabled (Nordic timeslot guide).
-     * Armed before TASKS_RXEN: previously this was armed after the EVENTS_READY
-     * busy-wait below, which left a window -- from TASKS_RXEN until NVIC_EnableIRQ --
-     * where the shortcut could already auto-start RX and a FRAMESTART/END landing in
-     * that window would set its EVENTS bit but never reach radio_cb(RADIO). Too narrow
-     * to explain a 100% miss rate by itself, but it was a real gap and is now closed. */
+    /* The slot signals only arrive with these IRQs enabled (Nordic timeslot
+     * guide). Armed before TASKS_RXEN so a FRAMESTART/END cannot land in the gap
+     * between RXEN and the enable -- the RXREADY->START shortcut can begin RX
+     * immediately -- and set its EVENTS bit without ever reaching radio_cb. */
     NVIC_ClearPendingIRQ(RADIO_IRQn);
     NVIC_ClearPendingIRQ(TIMER0_IRQn);
     NVIC_EnableIRQ(RADIO_IRQn);
