@@ -38,7 +38,7 @@ APS_JOIN_KEYS = [
     ("ZLL master key", ZLL_MASTER_KEY),
     ("ZLL certification link key", ZLL_CERT_LINK_KEY),
 ]
-from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, standalone, color_string, CG, CR, CY
+from cli_core import ArgumentParserNoExit, DeviceRequiredUnit, standalone, color_string, CG, CR, CY, CC, C0, _box
 
 
 def _group():
@@ -297,14 +297,16 @@ def _poll_channel_arrays(cmd, seconds, poll_interval=1.0, on_update=None):
 
 
 def _channel_graph_lines(rx, ed, width=30):
-    """Stable channel-order (11-26) energy-detect bar chart with rx counts.
-    Bars scale to the current max ed so the busiest channel fills the row."""
+    """Stable channel-order (11-26) energy-detect bar chart with rx counts,
+    rendered in the shared rounded box. Bars scale to the current max ed so
+    the busiest channel fills the row. Fixed min width so the live redraw
+    doesn't jiggle as bar lengths change."""
     maxed = max(ed) if ed and max(ed) > 0 else 1
-    lines = [f"  {'ch':>3} {'rx':>6} {'ed':>6}  energy"]
+    rows = [f"{'ch':>3} {'rx':>6} {'ed':>6}  energy"]
     for i in range(16):
         n = int(round(width * ed[i] / maxed))
-        lines.append(f"  {11 + i:>3} {rx[i]:>6} {ed[i]:>6}  {'#' * n}")
-    return lines
+        rows.append(f"{11 + i:>3} {rx[i]:>6} {ed[i]:>6}  {CG}{'█' * n}{C0}")
+    return _box("Zigbee channel energy", rows, color=CC, min_width=19 + width)
 
 
 def _zigbee_decode_cfg(cfg):
