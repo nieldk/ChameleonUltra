@@ -274,9 +274,10 @@ class ZigbeeDump(DeviceRequiredUnit):
 
 def _poll_channel_arrays(cmd, seconds, poll_interval=1.0, on_update=None):
     """Poll standalone_get_status() for `seconds`, return the last-seen
-    rx11-26/ed11-26 arrays (16 ints each, channel 11 first), or None for
-    either that never appeared. on_update(rx, ed) is called each poll."""
-    rx = ed = None
+    rx11-26/cca11-26/ed11-26 arrays (16 ints each, channel 11 first), or None
+    for any that never appeared (cca11-26 only on firmware with CarrierMode CCA).
+    on_update(rx, ed, cca, remaining) is called each poll."""
+    rx = ed = cca = None
     end = time.time() + seconds
     while True:
         try:
@@ -285,42 +286,48 @@ def _poll_channel_arrays(cmd, seconds, poll_interval=1.0, on_update=None):
             extra = {}
         if 'rx11-26' in extra:
             rx = [int(x) for x in extra['rx11-26'].split(',')]
+        if 'cca11-26' in extra:
+            cca = [int(x) for x in extra['cca11-26'].split(',')]
         if 'ed11-26' in extra:
             ed = [int(x) for x in extra['ed11-26'].split(',')]
         remaining = max(0.0, end - time.time())
         if on_update is not None:
-            on_update(rx, ed, remaining)
+            on_update(rx, ed, cca, remaining)
         if remaining <= 0:
             break
         time.sleep(min(poll_interval, remaining))
-    return rx, ed
+    return rx, ed, cca
 
 
-def _channel_graph_lines(rx, ed, prev_ed=None, elapsed=None, total=None, width=30):
-    """Stable channel-order (11-26) energy-detect bar chart with rx counts,
-    rendered in the shared rounded box. Bars scale to the current max ed so
-    the busiest channel fills the row. Each row is coloured by the change
-    since the previous frame (green + rising, red - falling, plain steady) so
-    small deltas are visible even when the bar length barely moves. Fixed min
-    width so the live redraw doesn't jiggle."""
+def _channel_graph_lines(rx, ed, cca=None, prev_ed=None, elapsed=None, total=None, width=30):
+    """Stable channel-order (11-26) bar chart in the shared rounded box, with
+    rx frame counts, CarrierMode CCA hits (real 802.15.4 carrier, noise
+    rejected) and energy-detect peaks. The bar scales to the current max ed so
+    the busiest channel fills the row. A channel with cca>0 is flagged cyan with
+    a diamond -- that is an actual 802.15.4 carrier, not band noise -- overriding
+    the energy delta colour (green + rising, red - falling) used otherwise. Fixed
+    min width so the live redraw doesn't jiggle."""
+    cca = cca or [0] * 16
     maxed = max(ed) if ed and max(ed) > 0 else 1
-    rows = [f"{'ch':>3} {'rx':>6} {'ed':>6}    energy"]
+    rows = [f"{'ch':>3} {'rx':>5} {'cca':>5} {'ed':>5}    energy"]
     for i in range(16):
         n = int(round(width * ed[i] / maxed))
         prev = prev_ed[i] if prev_ed else ed[i]
-        if ed[i] > prev:
+        if cca[i] > 0:
+            col, mark = CC, f"{CC}◆{C0}"  # real carrier: headline over noise
+        elif ed[i] > prev:
             col, mark = CG, f"{CG}+{C0}"
         elif ed[i] < prev:
             col, mark = CR, f"{CR}-{C0}"
         else:
             col, mark = CG, " "  # steady: green base, never white
-        rows.append(f"{11 + i:>3} {rx[i]:>6} {ed[i]:>6} {mark}  {col}{'█' * n}{C0}")
+        rows.append(f"{11 + i:>3} {rx[i]:>5} {cca[i]:>5} {ed[i]:>5} {mark}  {col}{'█' * n}{C0}")
     if total:
         done = int(round(width * min(elapsed or 0, total) / total))
         rows.append("")
         rows.append(f"{'scan':>14} {elapsed or 0:4.0f}/{total:.0f}s  "
                     f"{CC}{'█' * done}{C0}{'·' * (width - done)}")
-    return _box("Zigbee channel energy", rows, color=CC, min_width=21 + width)
+    return _box("Zigbee channel activity", rows, color=CC, min_width=27 + width)
 
 
 def _zigbee_decode_cfg(cfg):
@@ -388,12 +395,12 @@ class ZigbeeHunt(DeviceRequiredUnit):
         live = sys.stdout.isatty()
         drawn = {"n": 0, "prev": None}
 
-        def _draw(rx_now, ed_now, remaining):
+        def _draw(rx_now, ed_now, cca_now, remaining):
             if not live:
                 return
             ed_cur = ed_now or [0] * 16
             frame = _channel_graph_lines(
-                rx_now or [0] * 16, ed_cur, prev_ed=drawn["prev"],
+                rx_now or [0] * 16, ed_cur, cca=cca_now, prev_ed=drawn["prev"],
                 elapsed=args.time - remaining, total=args.time)
             drawn["prev"] = list(ed_cur)
             if drawn["n"]:
@@ -403,7 +410,7 @@ class ZigbeeHunt(DeviceRequiredUnit):
             sys.stdout.flush()
             drawn["n"] = len(frame)
 
-        rx, ed = _poll_channel_arrays(self.cmd, args.time, on_update=_draw)
+        rx, ed, cca = _poll_channel_arrays(self.cmd, args.time, on_update=_draw)
         if live and drawn["n"]:
             print()  # separate the live graph from the final ranking
         if rx is None and ed is None:
@@ -411,15 +418,23 @@ class ZigbeeHunt(DeviceRequiredUnit):
             return
         rx = rx or [0] * 16
         ed = ed or [0] * 16
+        have_cca = cca is not None
+        cca = cca or [0] * 16
 
-        ranking = sorted(range(16), key=lambda i: (rx[i], ed[i]), reverse=True)
-        print(f"  {'ch':>3} {'rx':>6} {'ed':>6}")
+        # Rank carrier (real 802.15.4) above energy (band noise); frames win outright.
+        ranking = sorted(range(16), key=lambda i: (rx[i], cca[i], ed[i]), reverse=True)
+        print(f"  {'ch':>3} {'rx':>6} {'cca':>6} {'ed':>6}")
         for i in ranking:
             ch = 11 + i
-            quiet = "  (quiet)" if not rx[i] and not ed[i] else ""
-            print(f"  {ch:>3} {rx[i]:>6} {ed[i]:>6}{quiet}")
+            quiet = "  (quiet)" if not rx[i] and not cca[i] and not ed[i] else ""
+            carrier = f"  {CC}<- 802.15.4 carrier{C0}" if cca[i] else ""
+            print(f"  {ch:>3} {rx[i]:>6} {cca[i]:>6} {ed[i]:>6}{quiet}{carrier}")
+        if not have_cca:
+            print(color_string((CY,
+                " - No cca11-26 in status: carrier detect needs the updated firmware; "
+                "ranking fell back to energy.")))
 
-        active = [11 + i for i in ranking if rx[i] or ed[i]]
+        active = [11 + i for i in ranking if rx[i] or cca[i] or ed[i]]
         if len(active) > 1 and args.lock_top is None:
             print(color_string((CY,
                 f" {len(active)} channels show activity ({', '.join(map(str, active))}); "
@@ -435,7 +450,7 @@ class ZigbeeHunt(DeviceRequiredUnit):
             for i in top_idxs:
                 new_mask |= 1 << i
             chans = ','.join(str(11 + i) for i in top_idxs)
-            if not any(rx[i] or ed[i] for i in top_idxs):
+            if not any(rx[i] or cca[i] or ed[i] for i in top_idxs):
                 print(color_string((CY, f" - None of {{{chans}}} showed activity; locking anyway.")))
             resp = self.cmd.standalone_set_config(mode, struct.pack('<BBHH', 2, 0, dwell, new_mask))
             if resp.status == Status.SUCCESS:
@@ -450,7 +465,7 @@ class ZigbeeHunt(DeviceRequiredUnit):
                 return
             idx = ranking[args.rank - 1]
             target = 11 + idx
-            if not rx[idx] and not ed[idx]:
+            if not rx[idx] and not cca[idx] and not ed[idx]:
                 print(color_string((CY,
                     f" - Channel {target} (rank {args.rank}) showed no activity; locking anyway.")))
             resp = self.cmd.standalone_set_config(mode, struct.pack('<BBH', 1, target, dwell))

@@ -114,6 +114,33 @@ static void radio_rx_begin(void) {
     m_st.state_after = (uint8_t)NRF_RADIO->STATE;
 }
 
+/* One CCA in CarrierMode: the 802.15.4 correlator reports BUSY only on a real
+ * 802.15.4 carrier, not on plain band energy, so this rejects the WiFi/microwave
+ * noise that ED cannot tell from a signal. Runs at slot end while the radio is
+ * still in RX; read-modify-write leaves the reset correlator threshold/count in
+ * place. Independent of the FRAMESTART path (see cca_busy in zb_radio.h). */
+static void cca_sample(void) {
+    NRF_RADIO->CCACTRL = (NRF_RADIO->CCACTRL & ~RADIO_CCACTRL_CCAMODE_Msk) |
+                         ((uint32_t)RADIO_CCACTRL_CCAMODE_CarrierMode << RADIO_CCACTRL_CCAMODE_Pos);
+    NRF_RADIO->EVENTS_CCAIDLE = 0;
+    NRF_RADIO->EVENTS_CCABUSY = 0;
+    NRF_RADIO->TASKS_CCASTART = 1;
+    for (uint32_t i = 0; i < 20000 && !NRF_RADIO->EVENTS_CCAIDLE && !NRF_RADIO->EVENTS_CCABUSY; i++) {
+        __NOP();
+    }
+    if (NRF_RADIO->EVENTS_CCABUSY) {
+        m_st.cca_run++;
+        m_st.cca_busy[m_slot_ch - 11u]++;
+    } else if (NRF_RADIO->EVENTS_CCAIDLE) {
+        m_st.cca_run++;
+    } else {
+        m_st.cca_timeout++;
+        NRF_RADIO->TASKS_CCASTOP = 1;
+    }
+    NRF_RADIO->EVENTS_CCAIDLE = 0;
+    NRF_RADIO->EVENTS_CCABUSY = 0;
+}
+
 /* One energy-detect sample (Nordic PS, IEEE 802.15.4 ED); bounded wait, raw value. */
 static void ed_sample(void) {
     m_st.state_end = (uint8_t)NRF_RADIO->STATE;
@@ -138,6 +165,7 @@ static void ed_sample(void) {
         NRF_RADIO->TASKS_EDSTOP = 1;
     }
     NRF_RADIO->EVENTS_EDEND = 0;
+    cca_sample();   /* after ED: radio is in RXIDLE, a valid CCA start state */
 }
 
 static void radio_off(void) {

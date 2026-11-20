@@ -34,6 +34,12 @@ typedef struct {
                                                 * nonzero while sig_radio stays 0) from a true
                                                 * demod miss (these stay 0 too) */
     uint8_t  ed_max[16];                    /* per channel 11..26: max EDSAMPLE at slot end, raw */
+    uint32_t cca_run, cca_timeout;          /* CCA CarrierMode checks completed / not completed */
+    uint32_t cca_busy[16];                  /* per channel 11..26: CarrierMode BUSY, i.e. a real
+                                               * 802.15.4 carrier correlated. Noise on the band
+                                               * (WiFi, microwave) does not trip it; FRAMESTART is
+                                               * not involved, so BUSY with fs still 0 means the RF
+                                               * is there and the frame path is the miss. */
     uint32_t slot_us;               /* length requested for the next slot */
     uint32_t rb_mode, rb_pcnf0, rb_crccnf, rb_freq;  /* registers read straight back after the
                                                         * write, not the values the code assumes */

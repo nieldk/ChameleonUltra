@@ -277,6 +277,10 @@ static size_t get_status(char *out, size_t out_max) {
      * never triggers. */
     STATUS_KV(out, out_max, len, "raw end=%lu fs=%lu\n",
               (unsigned long)s.evt_end_raw, (unsigned long)s.evt_fs_raw);
+    /* CarrierMode CCA: run=checks done, to=timed out. Per-channel BUSY counts
+     * (real 802.15.4 carrier, noise rejected) are in cca=/cca11-26= below. */
+    STATUS_KV(out, out_max, len, "cca run=%lu to=%lu\n",
+              (unsigned long)s.cca_run, (unsigned long)s.cca_timeout);
     STATUS_KV(out, out_max, len, "frames ok=%lu bad_fcs=%lu dropped=%lu\n",
               (unsigned long)s.rx_ok, (unsigned long)s.rx_crc, (unsigned long)s.dropped);
     /* Expect mode=15 pcnf0=06000008 crccnf=00000202 sfd=a7 freq=5*(ch-10) --
@@ -307,11 +311,14 @@ static size_t get_status(char *out, size_t out_max) {
         }
         STATUS_KV(out, out_max, len, "rx11-26=");
         for (int i = 0; i < 16; i++) STATUS_KV(out, out_max, len, "%s%lu", i ? "," : "", (unsigned long)m_chan_rx[i]);
+        STATUS_KV(out, out_max, len, "\ncca11-26=");
+        for (int i = 0; i < 16; i++) STATUS_KV(out, out_max, len, "%s%lu", i ? "," : "", (unsigned long)s.cca_busy[i]);
         STATUS_KV(out, out_max, len, "\ned11-26=");
         for (int i = 0; i < 16; i++) STATUS_KV(out, out_max, len, "%s%u", i ? "," : "", (unsigned)s.ed_max[i]);
         STATUS_KV(out, out_max, len, "\n");
     } else if (m_cur >= 11 && m_cur <= 26) {
         STATUS_KV(out, out_max, len, "ed=%u\n", (unsigned)s.ed_max[m_cur - 11]);
+        STATUS_KV(out, out_max, len, "cca=%lu\n", (unsigned long)s.cca_busy[m_cur - 11]);
     }
     STATUS_KV(out, out_max, len, "last len=%u lqi_raw=%u\n", m_last_len, (unsigned)s.last_lqi);
     return len;
