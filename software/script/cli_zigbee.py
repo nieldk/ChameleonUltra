@@ -313,7 +313,7 @@ def _channel_graph_lines(rx, ed, prev_ed=None, width=30):
         elif ed[i] < prev:
             col, mark = CR, f"{CR}-{C0}"
         else:
-            col, mark = "", " "
+            col, mark = CG, " "  # steady: green base, never white
         rows.append(f"{11 + i:>3} {rx[i]:>6} {ed[i]:>6} {mark}  {col}{'█' * n}{C0}")
     return _box("Zigbee channel energy", rows, color=CC, min_width=21 + width)
 
