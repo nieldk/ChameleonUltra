@@ -1497,11 +1497,17 @@ class HFMFAutopwn(ReaderRequiredUnit):
         extra = getattr(self, "_extra_dict", None) or []
         if extra and len(current_keys_found) < max_sectors_num * 2:
             print(f" {CG}[+]{C0}  Trying {len(extra)} dictionary keys across unknown sectors..")
+            nonexistent = set(range(max_sectors_num * 2, 80))
             for dk in tqdm_if_exists(extra):
                 if len(current_keys_found) >= max_sectors_num * 2:
                     break
+                # check only still-unknown slots; each found key shrinks the
+                # per-key auth sweep, so the pass speeds up as it progresses
+                _, mask = self.mask_from_keys(
+                    set(current_keys_found.keys()) | nonexistent, total_bits=80
+                )
                 current_keys_found = self.merge_found_sector_keys(
-                    current_keys_found, self.try_key(bytes.fromhex(dk), full_mask)
+                    current_keys_found, self.try_key(bytes.fromhex(dk), mask)
                 )
 
         if not current_keys_found:
