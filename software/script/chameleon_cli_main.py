@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import shutil
 import sys
 import traceback
 import chameleon_com
@@ -272,8 +273,13 @@ class ChameleonCLI:
         self.completer = chameleon_utils.CustomNestedCompleter.from_clitree(
             chameleon_cli_unit.root
         )
+        # Cap the completion dropdown's reserved rows to terminal height so a
+        # short window keeps most of its space; the default 8 halves a ~25-row
+        # terminal. Scales back up to 8 on taller terminals.
+        menu_rows = max(3, min(8, shutil.get_terminal_size().lines // 5))
         self.session = prompt_toolkit.PromptSession(
             completer=self.completer,
+            reserve_space_for_menu=menu_rows,
             history=FileHistory(str(pathlib.Path.home() / ".chameleon_history")),
         )
 
