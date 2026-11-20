@@ -983,6 +983,16 @@ class HFMFStaticEncryptedNested(ReaderRequiredUnit):
             metavar="<dec>",
             help="Start recovery from this sector",
         )
+        parser.add_argument(
+            "-o", "--output", nargs="?", const="", metavar="<suffix>",
+            help="Save keys + dump PM3-style: hf-mf-<uid>-key[-suffix].(dic|key) "
+            "and hf-mf-<uid>-dump[-suffix].json. Bare -o uses no suffix",
+        )
+        parser.add_argument(
+            "--slot", type=int, metavar="<dec>", help="Load the recovered dump into this emulation slot",
+        )
+        parser.add_argument("--bin", action="store_true", help="With -o, also write the raw .bin dump")
+        parser.add_argument("--no-dump", action="store_true", help="Recover keys only, do not read/dump the card")
         parser.set_defaults(sectors=16)
         parser.set_defaults(starting_sector=0)
         parser.set_defaults(key="A396EFA4E24F")
@@ -993,6 +1003,39 @@ class HFMFStaticEncryptedNested(ReaderRequiredUnit):
             args.key, args.starting_sector, args.sectors, args.sectors
         )
         print_key_table(key_map)
+        if not key_map["A"] and not key_map["B"]:
+            return
+
+        # reuse autopwn's save/dump machinery (keys are only printed otherwise)
+        extracted = {}
+        for s, k in key_map["A"].items():
+            extracted[s * 2] = bytes.fromhex(k)
+        for s, k in key_map["B"].items():
+            extracted[s * 2 + 1] = bytes.fromhex(k)
+        dumper = HFMFAutopwn()
+        dumper.device_com = self.device_com
+        sectors = args.sectors
+
+        if args.output is not None or args.slot:
+            if args.output is not None:
+                uid = dumper.getuid()
+                uid_hex = uid.hex().upper() if isinstance(uid, (bytes, bytearray)) else "UNKNOWN"
+                suffix = f"-{args.output}" if args.output else ""
+                dumper._save_keys(extracted, sectors, f"hf-mf-{uid_hex}-key{suffix}")
+                if not args.no_dump:
+                    blocks, raw = dumper.read_all_blocks(extracted, sectors)
+                    dumper.write_dump(blocks, raw, f"hf-mf-{uid_hex}-dump{suffix}.json")
+                    if args.bin:
+                        dumper.write_dump(blocks, raw, f"hf-mf-{uid_hex}-dump{suffix}.bin")
+                    if args.slot:
+                        dumper.load_into_slot(raw, args.slot)
+            elif args.slot and not args.no_dump:
+                blocks, raw = dumper.read_all_blocks(extracted, sectors)
+                dumper.load_into_slot(raw, args.slot)
+        else:
+            dumper.save_keys_to_file(extracted, sectors)
+            if not args.no_dump:
+                dumper.dump_card_to_file(extracted, sectors)
 
     def senested(self, key, starting_sector, stopping_sector, sectors):
         acquire_datas = self.cmd.mf1_static_encrypted_nested_acquire(
