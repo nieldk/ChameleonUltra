@@ -1034,23 +1034,22 @@ class HFMFStaticEncryptedNested(ReaderRequiredUnit):
             )
             a_key_dic = f"keys_{uid}_{sector_name}_{format(acquire_datas['nts']['a'][sector]['nt'], 'x').zfill(8)}.dic"
             b_key_dic = f"keys_{uid}_{sector_name}_{format(acquire_datas['nts']['b'][sector]['nt'], 'x').zfill(8)}.dic"
-            # 2x1nt_rf08s cross-reduces two different nonces; when this sector's
-            # A and B keys share one, the filenames collide. Recovering it needs
-            # cross-sector nonce pairing (not implemented), so skip it.
-            if a_key_dic == b_key_dic:
-                print(f"Sector {sector}: A and B share a static nonce, skipping (cross-sector pairing not implemented)")
-                continue
-            try:
-                execute_tool("staticnested_2x1nt_rf08s", [a_key_dic, b_key_dic])
-            except Exception as e:
-                print(f"Sector {sector}: {e}, skipping")
-                continue
+            # 2x1nt_rf08s needs two different nonces (keyA != keyB). When the
+            # sector's A and B nonces match, keyA == keyB: brute the single-nonce
+            # 1nt dictionary directly, and that key is both A and B.
+            same_key = a_key_dic == b_key_dic
+            if same_key:
+                print(f"Sector {sector}: A and B share a nonce (same key), using single-nonce dictionary")
+                b_candidates = b_key_dic
+            else:
+                try:
+                    execute_tool("staticnested_2x1nt_rf08s", [a_key_dic, b_key_dic])
+                except Exception as e:
+                    print(f"Sector {sector}: {e}, skipping")
+                    continue
+                b_candidates = b_key_dic.replace(".dic", "_filtered.dic")
 
-            keys = open(
-                os.path.join(
-                    tempfile.gettempdir(), b_key_dic.replace(".dic", "_filtered.dic")
-                )
-            ).readlines()
+            keys = open(os.path.join(tempfile.gettempdir(), b_candidates)).readlines()
             keys_bytes = []
             for key in keys:
                 keys_bytes.append(bytes.fromhex(key.strip()))
@@ -1073,6 +1072,12 @@ class HFMFStaticEncryptedNested(ReaderRequiredUnit):
                     key_map["B"][sector] = key
                     print("Found B key", key)
                     break
+
+            if key and same_key:
+                # keyA == keyB, the one key just found covers both
+                key_map["A"][sector] = key
+                print("Found A key", key)
+                continue
 
             if key:
                 a_key = execute_tool(
