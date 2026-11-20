@@ -287,16 +287,16 @@ def _poll_channel_arrays(cmd, seconds, poll_interval=1.0, on_update=None):
             rx = [int(x) for x in extra['rx11-26'].split(',')]
         if 'ed11-26' in extra:
             ed = [int(x) for x in extra['ed11-26'].split(',')]
+        remaining = max(0.0, end - time.time())
         if on_update is not None:
-            on_update(rx, ed)
-        remaining = end - time.time()
+            on_update(rx, ed, remaining)
         if remaining <= 0:
             break
         time.sleep(min(poll_interval, remaining))
     return rx, ed
 
 
-def _channel_graph_lines(rx, ed, prev_ed=None, width=30):
+def _channel_graph_lines(rx, ed, prev_ed=None, elapsed=None, total=None, width=30):
     """Stable channel-order (11-26) energy-detect bar chart with rx counts,
     rendered in the shared rounded box. Bars scale to the current max ed so
     the busiest channel fills the row. Each row is coloured by the change
@@ -315,6 +315,11 @@ def _channel_graph_lines(rx, ed, prev_ed=None, width=30):
         else:
             col, mark = CG, " "  # steady: green base, never white
         rows.append(f"{11 + i:>3} {rx[i]:>6} {ed[i]:>6} {mark}  {col}{'█' * n}{C0}")
+    if total:
+        done = int(round(width * min(elapsed or 0, total) / total))
+        rows.append("")
+        rows.append(f"{'scan':>14} {elapsed or 0:4.0f}/{total:.0f}s  "
+                    f"{CC}{'█' * done}{C0}{'·' * (width - done)}")
     return _box("Zigbee channel energy", rows, color=CC, min_width=21 + width)
 
 
@@ -382,11 +387,13 @@ class ZigbeeHunt(DeviceRequiredUnit):
         live = sys.stdout.isatty()
         drawn = {"n": 0, "prev": None}
 
-        def _draw(rx_now, ed_now):
+        def _draw(rx_now, ed_now, remaining):
             if not live:
                 return
             ed_cur = ed_now or [0] * 16
-            frame = _channel_graph_lines(rx_now or [0] * 16, ed_cur, prev_ed=drawn["prev"])
+            frame = _channel_graph_lines(
+                rx_now or [0] * 16, ed_cur, prev_ed=drawn["prev"],
+                elapsed=args.time - remaining, total=args.time)
             drawn["prev"] = list(ed_cur)
             if drawn["n"]:
                 sys.stdout.write(f"\033[{drawn['n']}A")
