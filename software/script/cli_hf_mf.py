@@ -1492,16 +1492,17 @@ class HFMFAutopwn(ReaderRequiredUnit):
         current_keys_found = self.merge_found_sector_keys(
             current_keys_found, self.try_key(bytes.fromhex("FFFFFFFFFFFF"), bytes(10))
         )
-        # user-supplied dictionary (--dict): try each key across all still-unknown sectors
+        # user-supplied dictionary (--dict): try each key across all still-unknown
+        # sectors, only if some remain (the FF check above may already have them)
         extra = getattr(self, "_extra_dict", None) or []
-        if extra:
+        if extra and len(current_keys_found) < max_sectors_num * 2:
             print(f" {CG}[+]{C0}  Trying {len(extra)} dictionary keys across unknown sectors..")
-        for dk in tqdm_if_exists(extra):
-            if len(current_keys_found) >= max_sectors_num * 2:
-                break
-            current_keys_found = self.merge_found_sector_keys(
-                current_keys_found, self.try_key(bytes.fromhex(dk), full_mask)
-            )
+            for dk in tqdm_if_exists(extra):
+                if len(current_keys_found) >= max_sectors_num * 2:
+                    break
+                current_keys_found = self.merge_found_sector_keys(
+                    current_keys_found, self.try_key(bytes.fromhex(dk), full_mask)
+                )
 
         if not current_keys_found:
             print(f" {CR}[!]{C0}  No keys found yet, trying darkside..")
