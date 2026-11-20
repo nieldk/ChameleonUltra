@@ -128,7 +128,7 @@ class HFMFNested(ReaderRequiredUnit):
         # check nt level, we can run static or nested auto...
         nt_level = self.cmd.mf1_detect_prng()
         print(
-            f" - NT vulnerable: {color_string((CY, self.from_nt_level_code_to_str(nt_level)))}"
+            f" {CG}[+]{C0}  NT vulnerable: {color_string((CY, self.from_nt_level_code_to_str(nt_level)))}"
         )
         if nt_level == 2:
             print(" [!] Use hf mf hardnested")
@@ -160,13 +160,13 @@ class HFMFNested(ReaderRequiredUnit):
         else:
             cmd_recover = f"./{tool_name} {cmd_param}"
 
-        print(f"   Executing {cmd_recover}")
+        print(f" {CG}[+]{C0}  Executing {cmd_recover}")
         # start a decrypt process
         process = self.sub_process(cmd_recover)
 
         # wait end
         while process.is_running():
-            msg = f"   [ Time elapsed {process.get_time_distance()/1000:#.1f}s ]\r"
+            msg = f"    [ Time elapsed {process.get_time_distance()/1000:#.1f}s ]\r"
             print(msg, end="")
             time.sleep(0.1)
         # clear \r
@@ -181,7 +181,7 @@ class HFMFNested(ReaderRequiredUnit):
                     key_list.append(sea_obj[1])
             # Here you have to verify the password first, and then get the one that is successfully verified
             # If there is no verified password, it means that the recovery failed, you can try again
-            print(f" - [{len(key_list)} candidate key(s) found ]")
+            print(f" {CG}[+]{C0}  {len(key_list)} candidate key(s) found")
             for key in key_list:
                 key_bytes = bytearray.fromhex(key)
                 if self.cmd.mf1_auth_one_key_block(
@@ -207,7 +207,7 @@ class HFMFNested(ReaderRequiredUnit):
         if block_known == block_target and type_known == type_target:
             print(color_string((CR, "Target key already known")))
             return
-        print(" - Nested recover one key running...")
+        print(f" {CG}[+]{C0}  Nested recover one key running...")
         key = self.recover_a_key(
             block_known, type_known, key_known_bytes, block_target, type_target
         )
@@ -392,7 +392,7 @@ class HFMFHardNested(ReaderRequiredUnit):
         :param max_attempts: Maximum number of full acquisition attempts.
         :return: Recovered key as a hex string, or None if not found.
         """
-        print(" - Starting HardNested attack...")
+        print(f" {CG}[+]{C0}  Starting HardNested attack...")
         nonces_buffer = bytearray()  # This will hold the final data for the file
         uid_bytes = b""  # To store UID from the successful attempt
 
@@ -400,7 +400,7 @@ class HFMFHardNested(ReaderRequiredUnit):
         acquisition_success = False  # Flag to indicate if any attempt was successful
         for attempt in range(max_attempts):
             print(
-                f"\n--- Starting Acquisition Attempt {attempt + 1}/{max_attempts} ---"
+                f"\n {CC}--- Acquisition attempt {attempt + 1}/{max_attempts} ---{C0}"
             )
             total_raw_nonces_bytes = (
                 bytearray()
@@ -417,7 +417,7 @@ class HFMFHardNested(ReaderRequiredUnit):
             acquisition_goal_met = False
 
             # 1. Scan for the tag to get UID and prepare file header (Done ONCE per attempt)
-            print("   Scanning for tag...")
+            print(f" {CG}[+]{C0}  Scanning for tag...")
             try:
                 scan_resp = self.cmd.hf14a_scan()
             except Exception as e:
@@ -476,21 +476,24 @@ class HFMFHardNested(ReaderRequiredUnit):
                     )
                 )
                 return None  # Fail if UID length is unexpected
-            print(f"   Tag found with UID: {uid_bytes.hex().upper()}")
+            print(f" {CG}[+]{C0}  Tag found with UID: {uid_bytes.hex().upper()}")
             # Prepare header in the main buffer for this attempt
             nonces_buffer.extend(uid_for_file)
             nonces_buffer.extend(
                 struct.pack("!BB", block_target, type_target.value & 0x01)
             )
-            print(f"   Nonce file header prepared: {nonces_buffer.hex().upper()}")
+            print(f" {CG}[+]{C0}  Nonce file header prepared: {nonces_buffer.hex().upper()}")
 
             # 2. Acquire nonces dynamically based on MSB criteria (Inner loop for runs)
             print(
-                f"   Acquiring nonces (slow mode: {slow_mode}, max runs: {max_runs}). This may take a while..."
+                f" {CG}[+]{C0}  Acquiring nonces (slow mode: {slow_mode}, max runs: {max_runs}). This may take a while..."
             )
             while run_count < max_runs:
                 run_count += 1
-                print(f"   Starting acquisition run {run_count}/{max_runs}...")
+                if _enter_pressed():
+                    print(f" {CY}[!]{C0}  Acquisition stopped by user")
+                    break
+                print(f" {CG}[+]{C0}  Starting acquisition run {run_count}/{max_runs}...")
                 try:
                     # Check if tag is still present before each run
                     current_scan = self.cmd.hf14a_scan()
@@ -538,7 +541,7 @@ class HFMFHardNested(ReaderRequiredUnit):
                     # --- Process acquired nonces for MSB tracking ---
                     num_pairs_this_run = len(raw_nonces_bytes_this_run) // 9
                     print(
-                        f"   Run {run_count}: Acquired {num_pairs_this_run * 2} nonces ({len(raw_nonces_bytes_this_run)} bytes raw). Processing MSBs..."
+                        f" {CG}[+]{C0}  Run {run_count}: acquired {num_pairs_this_run * 2} nonces ({len(raw_nonces_bytes_this_run)} bytes raw). Processing MSBs..."
                     )
 
                     new_msbs_found_this_run = 0
