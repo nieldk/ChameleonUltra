@@ -998,8 +998,11 @@ class HFMFStaticEncryptedNested(ReaderRequiredUnit):
         parser.add_argument(
             "--slot", type=int, metavar="<dec>", help="Load the recovered dump into this emulation slot",
         )
-        parser.add_argument("--bin", action="store_true", help="With -o, also write the raw .bin dump")
+        parser.add_argument("--bin", action="store_true", help="Also write the raw .bin dump")
         parser.add_argument("--no-dump", action="store_true", help="Recover keys only, do not read/dump the card")
+        parser.add_argument("--base", type=str, default=None, metavar="<name>",
+                            help="Output base filename, default hf-mf-<uid>")
+        parser.add_argument("--no-save", action="store_true", help="Do not write any key/dump files")
         parser.set_defaults(sectors=16)
         parser.set_defaults(starting_sector=0)
         parser.set_defaults(key="A396EFA4E24F")
@@ -1023,26 +1026,24 @@ class HFMFStaticEncryptedNested(ReaderRequiredUnit):
         dumper.device_com = self.device_com
         sectors = args.sectors
 
-        if args.output is not None or args.slot:
-            if args.output is not None:
-                uid = dumper.getuid()
-                uid_hex = uid.hex().upper() if isinstance(uid, (bytes, bytearray)) else "UNKNOWN"
-                suffix = f"-{args.output}" if args.output else ""
-                dumper._save_keys(extracted, sectors, f"hf-mf-{uid_hex}-key{suffix}")
-                if not args.no_dump:
-                    blocks, raw = dumper.read_all_blocks(extracted, sectors)
-                    dumper.write_dump(blocks, raw, f"hf-mf-{uid_hex}-dump{suffix}.json")
-                    if args.bin:
-                        dumper.write_dump(blocks, raw, f"hf-mf-{uid_hex}-dump{suffix}.bin")
-                    if args.slot:
-                        dumper.load_into_slot(raw, args.slot)
-            elif args.slot and not args.no_dump:
+        # Auto-save by default (PM3-style), same as autopwn
+        if args.no_save:
+            if args.slot and not args.no_dump:
                 blocks, raw = dumper.read_all_blocks(extracted, sectors)
                 dumper.load_into_slot(raw, args.slot)
-        else:
-            dumper.save_keys_to_file(extracted, sectors)
-            if not args.no_dump:
-                dumper.dump_card_to_file(extracted, sectors)
+            return
+        uid = dumper.getuid()
+        uid_hex = uid.hex().upper() if isinstance(uid, (bytes, bytearray)) else "UNKNOWN"
+        base = args.base or f"hf-mf-{uid_hex}"
+        suffix = f"-{args.output}" if args.output else ""
+        dumper._save_keys(extracted, sectors, f"{base}-key{suffix}")
+        if not args.no_dump:
+            blocks, raw = dumper.read_all_blocks(extracted, sectors)
+            dumper.write_dump(blocks, raw, f"{base}-dump{suffix}.json")
+            if args.bin:
+                dumper.write_dump(blocks, raw, f"{base}-dump{suffix}.bin")
+            if args.slot:
+                dumper.load_into_slot(raw, args.slot)
 
     def senested(self, key, starting_sector, stopping_sector, sectors):
         acquire_datas = self.cmd.mf1_static_encrypted_nested_acquire(
@@ -1208,9 +1209,10 @@ class HFMFAutopwn(ReaderRequiredUnit):
         parser.description = (
             "MIFARE Classic auto recovery (PM3-style): detect PRNG, check known "
             "keys, then escalate darkside -> nested -> hardnested -> staticnested, "
-            "propagating each recovered key. Flags follow Proxmark3: -f is the key "
-            "dictionary, -o is the output suffix (hf-mf-<uid>-dump[-suffix].json). "
-            "-s/--slot additionally loads the card into an emulation slot."
+            "propagating each recovered key. Keys and a dump are saved "
+            "automatically as hf-mf-<uid>-key.(dic|key) and hf-mf-<uid>-dump.json; "
+            "-o adds a suffix, --base sets the name, --no-save disables it. -f is "
+            "the key dictionary, -s/--slot also loads the card into a slot."
         )
         parser.add_argument(
             "-k",
@@ -1276,6 +1278,19 @@ class HFMFAutopwn(ReaderRequiredUnit):
             "--no-dump",
             action="store_true",
             help="Recover keys only; skip the card dump.",
+        )
+        parser.add_argument(
+            "--base",
+            type=str,
+            default=None,
+            metavar="<name>",
+            help="Output base filename, default hf-mf-<uid>. Files are "
+            "<base>-key.(dic|key) and <base>-dump.json.",
+        )
+        parser.add_argument(
+            "--no-save",
+            action="store_true",
+            help="Do not write any key/dump files.",
         )
         return parser
 
@@ -1695,31 +1710,6 @@ class HFMFAutopwn(ReaderRequiredUnit):
             print(f" {CG}[+]{C0}  All keys found")
         return current_keys_found, max_sectors_num
 
-    def save_keys_to_file(self, extracted_keys, max_sectors_num):
-        if input(f" {CY}[?]{C0}  Save keys to file? [y/n]: ").lower() != "y":
-            return
-        filename = input(
-            f" {C0}[+]{C0}  Enter base filename (without extension): "
-        ).strip()
-        if not filename:
-            print(f" {CR}[!]{C0}  No filename provided, skipping.")
-            return
-        dic_path = filename + ".dic"
-        uniq_keys = set(
-            v for v in extracted_keys.values() if isinstance(v, (bytes, bytearray))
-        )
-        with open(dic_path, "w") as f:
-            for key in uniq_keys:
-                f.write(key.hex().upper() + "\n")
-        print(f" {CG}[+]{C0}  Keys saved to {dic_path} (as .dic format)")
-        key_path = filename + ".key"
-        unknownkey = bytes(6)
-        with open(key_path, "wb") as f:
-            for sector_no in range(max_sectors_num):
-                f.write(extracted_keys.get(sector_no * 2, unknownkey))
-                f.write(extracted_keys.get(sector_no * 2 + 1, unknownkey))
-        print(f" {CG}[+]{C0}  Keys saved to {key_path} (as .key format)")
-
     def read_all_blocks(self, extracted_keys, max_sectors_num):
         """Read every block with the recovered keys -> {block_num: 16 bytes}."""
         blocks = {}
@@ -1821,24 +1811,6 @@ class HFMFAutopwn(ReaderRequiredUnit):
                 fh.write(extracted_keys.get(s * 2 + 1, bytes(6)))
         print(f" {CG}[+]{C0}  Keys saved to {base}.dic and {base}.key")
 
-    def dump_card_to_file(self, extracted_keys, max_sectors_num):
-        # interactive path (bare `autopwn`, no -f/-s)
-        if input(f" {CY}[?]{C0}  Dump card to file? [y/n]: ").lower() != "y":
-            return
-        filename = input(
-            f" {C0}[+]{C0}  Enter dump filename (base, or name.json / name.bin): "
-        ).strip()
-        if not filename:
-            print(f" {CR}[!]{C0}  No filename provided, skipping.")
-            return
-        path = (
-            filename
-            if filename.lower().endswith((".json", ".bin"))
-            else filename + ".bin"
-        )
-        blocks, raw = self.read_all_blocks(extracted_keys, max_sectors_num)
-        self.write_dump(blocks, raw, path)
-
     def on_exec(self, args: argparse.Namespace):
         key_known: str = args.key
         if key_known is not None and not re.match(r"^[a-fA-F0-9]{12}$", key_known):
@@ -1864,36 +1836,26 @@ class HFMFAutopwn(ReaderRequiredUnit):
         extracted_keys, max_sectors_num = self.autopwn(key_known)
         self.print_key_table(extracted_keys, max_sectors_num)
 
-        non_interactive = args.output is not None or args.slot
-        if non_interactive:
-            if args.output is not None:
-                # PM3-style auto-naming: hf-mf-<uid>-{dump,key}[-suffix].*
-                uid = self.getuid()
-                uid_hex = (
-                    uid.hex().upper()
-                    if isinstance(uid, (bytes, bytearray))
-                    else "UNKNOWN"
-                )
-                suffix = f"-{args.output}" if args.output else ""
-                key_base = f"hf-mf-{uid_hex}-key{suffix}"
-                dump_json = f"hf-mf-{uid_hex}-dump{suffix}.json"
-                dump_bin = f"hf-mf-{uid_hex}-dump{suffix}.bin"
-                self._save_keys(extracted_keys, max_sectors_num, key_base)
-                if not args.no_dump:
-                    blocks, raw = self.read_all_blocks(extracted_keys, max_sectors_num)
-                    self.write_dump(blocks, raw, dump_json)
-                    if args.bin:
-                        self.write_dump(blocks, raw, dump_bin)
-                    if args.slot:
-                        self.load_into_slot(raw, args.slot)
-            elif args.slot:
-                if not args.no_dump:
-                    blocks, raw = self.read_all_blocks(extracted_keys, max_sectors_num)
-                    self.load_into_slot(raw, args.slot)
-        else:
-            self.save_keys_to_file(extracted_keys, max_sectors_num)
-            if not args.no_dump:
-                self.dump_card_to_file(extracted_keys, max_sectors_num)
+        # Auto-save by default (PM3-style). --base sets the name, -o adds a
+        # suffix, --no-save disables it, --no-dump writes keys only.
+        if args.no_save:
+            if args.slot and not args.no_dump:
+                blocks, raw = self.read_all_blocks(extracted_keys, max_sectors_num)
+                self.load_into_slot(raw, args.slot)
+            return
+
+        uid = self.getuid()
+        uid_hex = uid.hex().upper() if isinstance(uid, (bytes, bytearray)) else "UNKNOWN"
+        base = args.base or f"hf-mf-{uid_hex}"
+        suffix = f"-{args.output}" if args.output else ""
+        self._save_keys(extracted_keys, max_sectors_num, f"{base}-key{suffix}")
+        if not args.no_dump:
+            blocks, raw = self.read_all_blocks(extracted_keys, max_sectors_num)
+            self.write_dump(blocks, raw, f"{base}-dump{suffix}.json")
+            if args.bin:
+                self.write_dump(blocks, raw, f"{base}-dump{suffix}.bin")
+            if args.slot:
+                self.load_into_slot(raw, args.slot)
 
 
 @hf_mf.command("sim")
