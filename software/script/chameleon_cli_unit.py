@@ -774,6 +774,17 @@ class HF14AScan(ReaderRequiredUnit):
         self.scan()
 
 
+@hf.command("search")
+class HFSearch(HF14AScan):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Search for a supported HF tag and identify it (PM3-style full identify). The firmware is ISO14443-A only"
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        self.scan(deep=True)
+
+
 @hf_14a.command("info")
 class HF14AInfo(ReaderRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:

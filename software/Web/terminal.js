@@ -1138,6 +1138,13 @@ hf14a.command("scan", "Scan 14a tag, print UID/ATQA/SAK/ATS (see `hf 14a info` f
   return lines;
 });
 
+// PM3-style top-level search; firmware is ISO14443-A only, full identify like hf 14a info.
+hf.command("search", "Search for a supported HF tag and identify it (ISO14443-A, PM3-style full identify)", [], async () => {
+  await needReader();
+  if(typeof Hf14aInfo === "undefined") throw new Error("hf14ainfo.js did not load (check it is deployed next to phreakbyte.html)");
+  return await Hf14aInfo.infoReport();
+});
+
 // Full report from hf14a_info.js (port of hf14a_info.py + HF14AScan.scan(deep=True)).
 hf14a.command("info", "Scan 14a tag, print detail information", [], async () => {
   await needReader();
