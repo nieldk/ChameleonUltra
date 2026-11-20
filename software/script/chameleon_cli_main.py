@@ -264,6 +264,20 @@ class ChameleonCLI:
         except Exception:
             print(f"CLI exception: {color_string((CR, traceback.format_exc()))}")
 
+    @staticmethod
+    def _split_commands(line):
+        """Split one input line into commands. Newlines always separate; ';'
+        separates too, except a line that itself starts with a ';'/'#'/'%'
+        comment is kept whole so it stays a single rem."""
+        out = []
+        for part in line.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            s = part.strip()
+            if s[:1] in (";", "#", "%"):
+                out.append(s)
+            else:
+                out.extend(p.strip() for p in s.split(";"))
+        return [c for c in out if c != ""]
+
     def startCLI(self, startup_port=None, auto_connect=True):
         """
             start listen input.
@@ -294,11 +308,8 @@ class ChameleonCLI:
             else:
                 # wait user input
                 try:
-                    cmd_str = self.session.prompt(self.get_prompt()).strip()
-                    cmd_strs = (
-                        cmd_str.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-                    )
-                    cmd_str = cmd_strs.pop(0)
+                    cmd_strs = self._split_commands(self.session.prompt(self.get_prompt()))
+                    cmd_str = cmd_strs.pop(0) if cmd_strs else ""
                 except EOFError:
                     cmd_str = "exit"
                 except KeyboardInterrupt:
