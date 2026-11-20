@@ -161,20 +161,21 @@ def esb_crc_candidates(prefix: int, base: int, raw: bytes, addr_bytes: int = 5,
                        max_payload: int = 23):
     """CRC-valid ESB framings in one promisc hit. Fixes the address at
     addr_bytes (5 for Unifying); a 3/4-byte-address frame still validates,
-    just read as a longer payload. The nRF52 RADIO stores payload bits
-    LSBit-first, the reverse of the nRF24 on-air order the CRC is computed
-    over, and the promisc capture byte layout is otherwise unverified, so
-    each prepend order is tried with the captured bytes as-is (msb) and
-    bit-reversed (lsb). For each, slides the 2-byte CRC boundary over payload
-    lengths and keeps the ones where CRC-16 over the leading bits equals the
-    next 16. Shortest payload first; the matching 'bitorder' tag pins the
-    real layout once a frame validates."""
+    just read as a longer payload. Preamble-sync captures begin at the real
+    address, so the bytes are tried with nothing prepended ('none'); the older
+    brute-force path consumed two address bytes first, so [prefix,base] ('pb')
+    and [base,prefix] ('bp') are tried too. The nRF52 RADIO stores payload bits
+    LSBit-first, the reverse of the nRF24 on-air order the CRC is computed over,
+    so each is also tried bit-reversed (lsb). For each, slides the 2-byte CRC
+    boundary over payload lengths and keeps the ones where CRC-16 over the
+    leading bits equals the next 16. Shortest payload first; the 'order' and
+    'bitorder' tags pin the real layout once a frame validates."""
     out = []
     hdr = addr_bytes * 8 + 9          # address + 9-bit PCF, before payload
     raw = bytes(raw)
     raw_rev = bytes(_rev_byte(x) for x in raw)
-    for order in ("pb", "bp"):
-        head = bytes([prefix, base]) if order == "pb" else bytes([base, prefix])
+    heads = {"none": b"", "pb": bytes([prefix, base]), "bp": bytes([base, prefix])}
+    for order, head in heads.items():
         for bitorder, body in (("msb", raw), ("lsb", raw_rev)):
             bits = _bits_msb(head + body)
             n = len(bits)
@@ -193,7 +194,8 @@ def esb_crc_candidates(prefix: int, base: int, raw: bytes, addr_bytes: int = 5,
                         'unifying': plen in UNIFYING_LENS,
                         'cksum_ok': plen in UNIFYING_LENS and unifying_checksum_ok(payload),
                     })
-    out.sort(key=lambda c: (c['payload_len'], c['order'] != "pb", c['bitorder'] != "msb"))
+    order_rank = {"none": 0, "pb": 1, "bp": 2}
+    out.sort(key=lambda c: (c['payload_len'], order_rank[c['order']], c['bitorder'] != "msb"))
     return out
 
 

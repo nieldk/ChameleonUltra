@@ -23,14 +23,22 @@
 #define STOP_GUARD_US  2000u
 #define RING_SZ        16u
 
+/* Preamble-sync capture: every ESB packet starts with a 1-byte preamble
+ * (0xAA if the first address bit is 0, else 0x55 -- nRF52840 PS, RADIO), so
+ * matching on that preamble instead of guessing the address catches every
+ * on-air frame. BALEN below the legal 2..4 shortens the match to the
+ * preamble; 0 = prefix only (the 8 preamble bits). The captured bytes then
+ * begin at the real address, which the host CRC-checks. Guessing the address
+ * one value per 30 ms slot (the old path) armed the right bytes for 30 ms out
+ * of a multi-minute sweep and effectively never caught a real device. */
+#define PROMISC_BALEN  0u          /* 0 = match the preamble byte only; try 1 if silent */
+
 static nrf_radio_request_t                      m_req;
 static nrf_radio_signal_callback_return_param_t m_ret;
 static volatile bool    m_run;
 static volatile bool    m_open;
 static uint8_t           m_channel;
-static uint8_t           m_prefix_lo, m_prefix_hi;
-static uint8_t           m_cur_prefix;
-static uint8_t           m_cur_base;        /* single guessed BASE byte */
+static uint8_t           m_preamble;        /* preamble byte matched this session: 0xAA or 0x55 */
 static uint8_t           m_pkt[ESB_PROMISC_CAP_LEN];
 static esb_promisc_frame_t m_ring[RING_SZ];
 static volatile uint8_t  m_head, m_tail;
@@ -46,26 +54,6 @@ static void fill_request(void) {
     m_req.params.earliest.timeout_us = TIMEOUT_US;
 }
 
-/* Same bit-reverse-then-byte-reverse conversion esb_radio.c uses for the
- * known-address path (Zephyr esb.c's addr_conv()) -- applied here to a
- * single guessed byte so it lands in the same hardware convention. */
-static uint32_t addr_conv(uint32_t inp) {
-    inp = (inp & 0xF0F0F0F0UL) >> 4 | (inp & 0x0F0F0F0FUL) << 4;
-    inp = (inp & 0xCCCCCCCCUL) >> 2 | (inp & 0x33333333UL) << 2;
-    inp = (inp & 0xAAAAAAAAUL) >> 1 | (inp & 0x55555555UL) << 1;
-    return __REV(inp);
-}
-
-static void advance_guess(void) {
-    m_st.guesses_tried++;
-    if (m_cur_base < 0xFFu) {
-        m_cur_base++;
-        return;
-    }
-    m_cur_base = 0;
-    m_cur_prefix = (m_cur_prefix >= m_prefix_hi) ? m_prefix_lo : (uint8_t)(m_cur_prefix + 1);
-}
-
 static void radio_rx_begin(void) {
     NRF_RADIO->POWER = 1;
     NRF_RADIO->MODE  = RADIO_MODE_MODE_Nrf_2Mbit << RADIO_MODE_MODE_Pos;
@@ -76,13 +64,17 @@ static void radio_rx_begin(void) {
     NRF_RADIO->PCNF0 = 0;
     NRF_RADIO->PCNF1 = (RADIO_PCNF1_WHITEEN_Disabled << RADIO_PCNF1_WHITEEN_Pos) |
                        (RADIO_PCNF1_ENDIAN_Big        << RADIO_PCNF1_ENDIAN_Pos) |
-                       (1UL                           << RADIO_PCNF1_BALEN_Pos) |   /* short match: prefix + 1 base byte */
+                       (PROMISC_BALEN                 << RADIO_PCNF1_BALEN_Pos) |   /* match the preamble, not an address */
                        (ESB_PROMISC_CAP_LEN           << RADIO_PCNF1_STATLEN_Pos) |
                        (ESB_PROMISC_CAP_LEN           << RADIO_PCNF1_MAXLEN_Pos);
     NRF_RADIO->CRCCNF = RADIO_CRCCNF_LEN_Disabled << RADIO_CRCCNF_LEN_Pos;   /* no way to validate an unknown frame */
 
-    NRF_RADIO->BASE0   = addr_conv((uint32_t)m_cur_base);
-    NRF_RADIO->PREFIX0 = addr_conv((uint32_t)m_cur_prefix);
+    /* Match on the preamble byte (0xAA/0x55) so every packet syncs. An
+     * alternating byte stays alternating whatever the on-air bit order, so no
+     * addr_conv is needed; only the phase matters, and that is the runtime
+     * polarity. BASE0 fills all four bytes in case PROMISC_BALEN is raised. */
+    NRF_RADIO->BASE0   = (uint32_t)m_preamble * 0x01010101UL;
+    NRF_RADIO->PREFIX0 = m_preamble;
     NRF_RADIO->RXADDRESSES = RADIO_RXADDRESSES_ADDR0_Enabled << RADIO_RXADDRESSES_ADDR0_Pos;
 
     NRF_RADIO->FREQUENCY = m_channel;
@@ -130,8 +122,8 @@ static void radio_hit(void) {
     } else {
         esb_promisc_frame_t *f = &m_ring[m_head];
         f->channel      = m_channel;
-        f->prefix_guess  = m_cur_prefix;
-        f->base_guess    = m_cur_base;
+        f->prefix_guess  = m_preamble;   /* preamble matched; raw[] begins at the real address */
+        f->base_guess    = 0;
         memcpy(f->raw, m_pkt, ESB_PROMISC_CAP_LEN);
         m_head = next;
         m_st.hits++;
@@ -152,7 +144,6 @@ static nrf_radio_signal_callback_return_param_t *radio_cb(uint8_t sig) {
         case NRF_RADIO_CALLBACK_SIGNAL_TYPE_TIMER0:
             m_st.sig_timer0++;
             radio_off();
-            advance_guess();
             if (m_run) {
                 fill_request();
                 m_ret.params.request.p_next = &m_req;
@@ -203,10 +194,10 @@ bool esb_promisc_radio_start(uint8_t channel, uint8_t prefix_lo, uint8_t prefix_
     m_slot_us = SLOT_US;
     m_head = m_tail = 0;
     m_channel   = channel;
-    m_prefix_lo = prefix_lo;
-    m_prefix_hi = prefix_hi;
-    m_cur_prefix = prefix_lo;
-    m_cur_base   = 0;
+    /* prefix_lo is repurposed as a polarity selector for preamble-sync:
+     * 0 matches the 0xAA preamble, non-zero the 0x55 one. prefix_hi is kept
+     * in the API for config compatibility but no longer brute-forced. */
+    m_preamble  = (prefix_lo != 0) ? 0x55u : 0xAAu;
     m_run = true;
     if (sd_radio_session_open(radio_cb) != NRF_SUCCESS) {
         m_run = false;

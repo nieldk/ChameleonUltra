@@ -1,20 +1,18 @@
 /*
  * mode_esb_promisc.c
  *
- * Standalone mode: brute-force partial-address ESB sniff for an UNKNOWN
- * address (e.g. finding a Logitech Unifying dongle's address with no prior
- * knowledge of it) -- see esb_promisc_radio.h for exactly what's grounded
- * vs. a genuinely unverified port of a technique built for a different
- * chip generation. Every capture here is a CANDIDATE, not a confirmed
- * frame: CRC is off in this mode (there's nothing to validate an unknown
- * address against), so hits include noise. A sustained hit rate at one
- * (prefix, base-byte) guess is the signal to trust, not an isolated hit.
+ * Standalone mode: preamble-sync ESB sniff for an UNKNOWN address (e.g.
+ * finding a Logitech Unifying device with no prior knowledge of it) -- see
+ * esb_promisc_radio.h. The radio matches on the ESB preamble, so every
+ * on-air frame is captured. CRC is off here (nothing validates an unknown
+ * address on-chip), so captures include many preamble matches on noise; the
+ * host CRC-checks each capture (cli_esb) to pick out the real frames.
  *
  * Config (4 bytes): u8 version=1, u8 channel (0-100, no hop -- point this
- * at a channel you already suspect is active, e.g. via the spectrum mode),
- * u8 prefix_lo, u8 prefix_hi (inclusive device-ID guess range, default
- * 0..7 -- Unifying's documented device-ID space is small, not the full
- * 0-255 a fully generic ESB target would need).
+ * at a channel you suspect is active, e.g. via the spectrum mode), u8
+ * polarity (prefix_lo: 0 = 0xAA preamble, non-zero = 0x55; flip it if a
+ * known-active channel stays silent), u8 prefix_hi (kept for config-blob
+ * compatibility, no longer a guess range).
  *
  * Log record: u8 channel, u8 prefix_guess, u8 base_guess, u8 len,
  * u8 raw[len] (len is always ESB_PROMISC_CAP_LEN here; stored explicitly
@@ -103,7 +101,7 @@ static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len) {
     m_overflow = 0;
     log_ensure_loaded();
     if (!esb_promisc_radio_start(m_channel, m_prefix_lo, m_prefix_hi)) return STANDALONE_RC_INTERNAL;
-    NRF_LOG_INFO("esb-promisc: guessing ch=%u prefix=%u..%u", m_channel, m_prefix_lo, m_prefix_hi);
+    NRF_LOG_INFO("esb-promisc: preamble-sync ch=%u polarity=%u", m_channel, m_prefix_lo);
     return STANDALONE_RC_OK;
 }
 
@@ -173,11 +171,11 @@ static size_t get_status(char *out, size_t out_max) {
     size_t len = 0;
     esb_promisc_stats_t s;
     esb_promisc_radio_get_stats(&s);
-    STATUS_KV(out, out_max, len, "radio=%s ch=%u prefix=%u-%u\n",
-              esb_promisc_radio_running() ? "rx" : "off", m_channel, m_prefix_lo, m_prefix_hi);
-    STATUS_KV(out, out_max, len, "slots=%lu blocked=%lu canceled=%lu us=%lu guesses=%lu\n",
+    STATUS_KV(out, out_max, len, "radio=%s ch=%u preamble=0x%02x\n",
+              esb_promisc_radio_running() ? "rx" : "off", m_channel, m_prefix_lo ? 0x55u : 0xAAu);
+    STATUS_KV(out, out_max, len, "slots=%lu blocked=%lu canceled=%lu us=%lu\n",
               (unsigned long)s.slots, (unsigned long)s.blocked, (unsigned long)s.canceled,
-              (unsigned long)s.slot_us, (unsigned long)s.guesses_tried);
+              (unsigned long)s.slot_us);
     STATUS_KV(out, out_max, len, "diag radio=%lu timer0=%lu idle=%lu rxen=%lu/%lu rc=%lu\n",
               (unsigned long)s.sig_radio, (unsigned long)s.sig_timer0, (unsigned long)s.idle,
               (unsigned long)s.ready_ok, (unsigned long)s.ready_timeout, (unsigned long)s.last_rc);
