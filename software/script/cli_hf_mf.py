@@ -393,6 +393,7 @@ class HFMFHardNested(ReaderRequiredUnit):
         :return: Recovered key as a hex string, or None if not found.
         """
         print(f" {CG}[+]{C0}  Starting HardNested attack...")
+        self._user_stopped = False
         nonces_buffer = bytearray()  # This will hold the final data for the file
         uid_bytes = b""  # To store UID from the successful attempt
 
@@ -491,7 +492,7 @@ class HFMFHardNested(ReaderRequiredUnit):
             while run_count < max_runs:
                 run_count += 1
                 if _enter_pressed():
-                    print(f" {CY}[!]{C0}  Acquisition stopped by user")
+                    self._user_stopped = True
                     break
                 print(f" {CG}[+]{C0}  Starting acquisition run {run_count}/{max_runs}...")
                 try:
@@ -672,6 +673,9 @@ class HFMFHardNested(ReaderRequiredUnit):
             # --- End of inner run loop (while run_count < max_runs) ---
 
             # --- Post-Acquisition Summary for this attempt ---
+            if self._user_stopped:
+                print(f" {CY}[!]{C0}  Hardnested stopped by user")
+                return None
             print(f"\n   Finished acquisition phase for attempt {attempt + 1}.")
             if acquisition_success:
                 print(
@@ -1383,6 +1387,15 @@ class HFMFAutopwn(ReaderRequiredUnit):
         return bstr, bytes(int(bstr[i : i + 8], 2) for i in range(0, total_bits, 8))
 
     def run_senested(self, current_keys_found, max_sectors_num):
+        # static nested (rf08s) needs a static-nonce backdoor card; on anything
+        # else the acquire just returns HF tag auth fail
+        try:
+            is_static = self.cmd.mf1_detect_prng() == 0
+        except Exception:
+            is_static = False
+        if not is_static:
+            print(f" {CY}[!]{C0}  Static nested needs a static-nonce backdoor card (e.g. FM11RF08S); this card isn't one, skipping")
+            return current_keys_found
         print(
             f" {CY}[+]{C0}  This card could be cracked using static nested attack (May take a few minutes)"
         )
@@ -1597,6 +1610,9 @@ class HFMFAutopwn(ReaderRequiredUnit):
                     200,
                     3,
                 )
+                if getattr(hardnested, "_user_stopped", False):
+                    print(f" {CY}[!]{C0}  Hardnested phase stopped by user")
+                    break
                 if hn_key is None:
                     continue
                 print(f" {CG}[+]{C0}  Found key {missing_key_num}: {hn_key.upper()}")
@@ -1607,7 +1623,7 @@ class HFMFAutopwn(ReaderRequiredUnit):
                     current_keys_found,
                     self.try_key(bytes.fromhex(hn_key), self.neg_bytes(mask_bytes)),
                 )
-            if len(current_keys_found) < total:
+            if len(current_keys_found) < total and not getattr(hardnested, "_user_stopped", False):
                 current_keys_found = self.run_senested(
                     current_keys_found, max_sectors_num
                 )
@@ -1649,6 +1665,9 @@ class HFMFAutopwn(ReaderRequiredUnit):
                         200,
                         3,
                     )
+                    if getattr(hardnested, "_user_stopped", False):
+                        print(f" {CY}[!]{C0}  Hardnested phase stopped by user")
+                        break
                     if hn_key is None:
                         continue
                     current_keys_found[missing_key_num] = bytes.fromhex(hn_key)
@@ -1667,7 +1686,7 @@ class HFMFAutopwn(ReaderRequiredUnit):
                     current_keys_found,
                     self.try_key(new_key, self.neg_bytes(mask_bytes)),
                 )
-            if len(current_keys_found) < total:
+            if len(current_keys_found) < total and not getattr(hardnested, "_user_stopped", False):
                 current_keys_found = self.run_senested(
                     current_keys_found, max_sectors_num
                 )
