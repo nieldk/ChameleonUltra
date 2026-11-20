@@ -1790,7 +1790,7 @@ class HFMFAutopwn(ReaderRequiredUnit):
         self._slow = bool(getattr(args, "slow", False))
         if args.dict:
             try:
-                with open(args.dict) as fh:
+                with open(args.dict, encoding="utf-8", errors="ignore") as fh:
                     self._extra_dict = [
                         k.strip()
                         for k in fh

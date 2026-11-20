@@ -296,7 +296,7 @@ def load_dic_file(import_dic, keys):
     Load dictionary file and append its content to the provided set of keys.
     Each key is a 12-char hex string on a new line.
     """
-    with open(import_dic.name, "r") as file:
+    with open(import_dic.name, "r", encoding="utf-8", errors="ignore") as file:
         for line in file:
             # tolerate pm3-style dicts: comments, inline comments, blanks
             line = line.split("#", 1)[0].strip()
