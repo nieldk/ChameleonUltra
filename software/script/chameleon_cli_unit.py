@@ -6575,8 +6575,16 @@ def _standalone_render_result(args, mode, raw: bytes):
         import cli_esb
         recs = cli_esb.parse_promisc_records(raw)
         if args.json:
+            def _crc_json(p, b, f):
+                c = cli_esb.esb_crc_best(p, b, f)
+                if c is None:
+                    return None
+                return {"order": c['order'], "payload_len": c['payload_len'],
+                        "payload": c['payload'].hex(), "crc": c['crc'],
+                        "unifying": c['unifying'], "cksum_ok": c['cksum_ok']}
             out = jsonlib.dumps([
-                {"channel": ch, "prefix_guess": p, "base_guess": b, "hex": f.hex()}
+                {"channel": ch, "prefix_guess": p, "base_guess": b, "hex": f.hex(),
+                 "crc_valid": _crc_json(p, b, f)}
                 for ch, p, b, f in recs
             ], indent=2)
             if args.file:

@@ -83,7 +83,14 @@ def parse_promisc_records(blob: bytes):
 
 
 def describe_promisc_hit(ch: int, prefix: int, base: int, raw: bytes) -> str:
-    return f"ch={ch:3d} prefix={prefix:#04x} base={base:#04x}  {raw.hex()}"
+    line = f"ch={ch:3d} prefix={prefix:#04x} base={base:#04x}  {raw.hex()}"
+    c = esb_crc_best(prefix, base, raw)
+    if c is None:
+        return line + "  crc:noise"
+    tag = f"CRC-OK({c['order']}) pl={c['payload_len']} pay={c['payload'].hex()}"
+    if c['unifying']:
+        tag += f" unifying {UNIFYING_LENS[c['payload_len']]} cksum={'ok' if c['cksum_ok'] else 'BAD'}"
+    return line + "  " + tag
 
 
 def promisc_hit_counts(recs):
@@ -101,4 +108,93 @@ def summarize_promisc(recs) -> str:
     counts = promisc_hit_counts(recs)
     top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
     top_str = ", ".join(f"prefix={p:#04x}/base={b:#04x}:{n}" for (p, b), n in top)
-    return f"{len(recs)} hit(s) across {len(counts)} guess(es); top: {top_str}"
+    valid = sum(1 for ch, p, b, raw in recs if esb_crc_best(p, b, raw))
+    unif = sum(1 for ch, p, b, raw in recs
+               if (c := esb_crc_best(p, b, raw)) and c['unifying'])
+    head = f"{len(recs)} hit(s) across {len(counts)} guess(es)"
+    if valid:
+        return (f"{head}; {valid} CRC-valid ({unif} Unifying) -- these are real frames, "
+                f"the rest are noise; top guesses: {top_str}")
+    return f"{head}; 0 CRC-valid (all noise so far); top: {top_str}"
+
+
+# --- ESB CRC-16 validation of promisc captures ---------------------------
+#
+# A promisc hit is raw bits with CRC off (see esb_promisc_radio.h), so real
+# frames and noise matches look alike. nRF24/Nordic ESB appends a 2-byte
+# CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) computed MSB-first over the
+# contiguous on-air bitstream {address, 9-bit PCF, payload}. Prepending the
+# two matched address bytes to raw[] reconstructs that bitstream from its
+# start, so sliding the CRC boundary and checking for a match tells a real
+# frame from noise -- a false match is ~1/65536 per boundary. A match also
+# fixes the address byte order the capture leaves open (header unknown #1):
+# whichever prepend order validates is the on-air order.
+
+def _bits_msb(data: bytes):
+    out = []
+    for byte in data:
+        for i in range(7, -1, -1):
+            out.append((byte >> i) & 1)
+    return out
+
+
+def _crc16_ccitt(bits) -> int:
+    crc = 0xFFFF
+    for b in bits:
+        crc ^= (b & 1) << 15
+        crc = ((crc << 1) ^ 0x1021) & 0xFFFF if (crc & 0x8000) else (crc << 1) & 0xFFFF
+    return crc
+
+
+def _bits_to_int(bits) -> int:
+    v = 0
+    for b in bits:
+        v = (v << 1) | b
+    return v
+
+
+def esb_crc_candidates(prefix: int, base: int, raw: bytes, addr_bytes: int = 5,
+                       max_payload: int = 23):
+    """CRC-valid ESB framings in one promisc hit. Fixes the address at
+    addr_bytes (5 for Unifying); a 3/4-byte-address frame still validates,
+    just read as a longer payload. Tries both prepend orders; for each,
+    slides the 2-byte CRC boundary over payload lengths and keeps the ones
+    where CRC-16 over the leading bits equals the next 16. Shortest payload
+    first -- longer matches reuse real bytes plus trailing noise."""
+    out = []
+    hdr = addr_bytes * 8 + 9          # address + 9-bit PCF, before payload
+    for order in ("pb", "bp"):
+        buf = (bytes([prefix, base]) if order == "pb" else bytes([base, prefix])) + bytes(raw)
+        bits = _bits_msb(buf)
+        n = len(bits)
+        for plen in range(0, max_payload + 1):
+            k = hdr + 8 * plen
+            if k + 16 > n:
+                break
+            if _crc16_ccitt(bits[:k]) == _bits_to_int(bits[k:k + 16]):
+                payload = bytes(_bits_to_int(bits[hdr + 8 * i:hdr + 8 * i + 8]) for i in range(plen))
+                out.append({
+                    'order': order,
+                    'payload_len': plen,
+                    'payload': payload,
+                    'crc': _bits_to_int(bits[k:k + 16]),
+                    'unifying': plen in UNIFYING_LENS,
+                    'cksum_ok': plen in UNIFYING_LENS and unifying_checksum_ok(payload),
+                })
+    out.sort(key=lambda c: (c['payload_len'], c['order'] != "pb"))
+    return out
+
+
+def esb_crc_best(prefix: int, base: int, raw: bytes):
+    """Best CRC-valid framing for a hit, or None. Prefers a Unifying-shaped
+    payload whose vendor checksum also passes, else the shortest valid one."""
+    cands = esb_crc_candidates(prefix, base, raw)
+    if not cands:
+        return None
+    for c in cands:
+        if c['cksum_ok']:
+            return c
+    for c in cands:
+        if c['unifying']:
+            return c
+    return cands[0]
