@@ -102,6 +102,7 @@ class HFMFNested(ReaderRequiredUnit):
         dsttype_group.add_argument(
             "--tb", "--tB", action="store_true", help="Target B key"
         )
+        _add_keysave_args(parser)
         return parser
 
     def from_nt_level_code_to_str(self, nt_level):
@@ -217,6 +218,7 @@ class HFMFNested(ReaderRequiredUnit):
             print(
                 f"\n - Block {block_target} Type {type_target.name} Key Found: {color_string((CG, key))}"
             )
+            _autosave_single_key(self.cmd, key, args)
         return
 
 
@@ -229,6 +231,7 @@ class HFMFDarkside(ReaderRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:
         parser = ArgumentParserNoExit()
         parser.description = "Mifare Classic darkside recover key"
+        _add_keysave_args(parser)
         return parser
 
     def recover_key(self, block_target, type_target):
@@ -296,6 +299,7 @@ class HFMFDarkside(ReaderRequiredUnit):
         key = self.recover_key(0x03, MfcKeyType.A)
         if key is not None:
             print(f" - Key Found: {key}")
+            _autosave_single_key(self.cmd, key, args)
         else:
             print(" - Key recover fail.")
         return
@@ -364,6 +368,7 @@ class HFMFHardNested(ReaderRequiredUnit):
             metavar="<dec>",
             help="Maximum acquisition attempts if MSB sum is invalid (default: 3)",
         )
+        _add_keysave_args(parser)
         return parser
 
     def recover_key(
@@ -965,6 +970,7 @@ class HFMFHardNested(ReaderRequiredUnit):
             print(
                 f" - Key Found: Block {block_target} Type {type_target.name} Key = {color_string((CG, recovered_key.upper()))}"
             )
+            _autosave_single_key(self.cmd, recovered_key, args)
         else:
             print(color_string((CR, " - HardNested attack failed to recover the key.")))
 
@@ -1200,6 +1206,40 @@ def _enter_pressed():
     except Exception:
         return False
     return False
+
+
+def _add_keysave_args(parser):
+    """Shared save options for the single-key commands (darkside/nested/
+    hardnested): append the recovered key to a .dic, like autopwn's keys."""
+    parser.add_argument("-o", "--output", nargs="?", const="", default=None, metavar="<suffix>",
+                        help="Append the found key to <base>-key[-suffix].dic")
+    parser.add_argument("--base", type=str, default=None, metavar="<name>",
+                        help="Output base filename, default hf-mf-<uid>")
+    parser.add_argument("--no-save", action="store_true",
+                        help="Do not append the key to a dictionary file")
+
+
+def _autosave_single_key(cmd, key_hex, args):
+    """Append a recovered key to <base>-key[-suffix].dic (deduped). On by
+    default; --no-save disables it. Base defaults to hf-mf-<uid>."""
+    if getattr(args, "no_save", False) or not key_hex:
+        return
+    try:
+        uid_hex = bytes(cmd.hf14a_scan()[0]["uid"]).hex().upper()
+    except Exception:
+        uid_hex = "UNKNOWN"
+    base = getattr(args, "base", None) or f"hf-mf-{uid_hex}"
+    suffix = f"-{args.output}" if getattr(args, "output", None) else ""
+    path = f"{base}-key{suffix}.dic"
+    k = key_hex.upper()
+    existing = set()
+    if os.path.exists(path):
+        with open(path, encoding="utf-8", errors="ignore") as fh:
+            existing = {l.strip().upper() for l in fh if l.strip()}
+    if k not in existing:
+        with open(path, "a") as fh:
+            fh.write(k + "\n")
+    print(f" {CG}[+]{C0}  Key saved to {path}")
 
 
 @hf_mf.command("autopwn")
