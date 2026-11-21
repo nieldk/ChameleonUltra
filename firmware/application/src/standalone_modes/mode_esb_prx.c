@@ -20,7 +20,7 @@
  */
 
 #include "app_standalone.h"
-#include "esb_radio.h"
+#include "esb_prx_radio.h"
 #include "esb_unifying.h"
 
 #include <string.h>
@@ -28,6 +28,7 @@
 
 #define CFG_FLAG_1MBIT   (1u << 0)
 #define CFG_FLAG_HOP     (1u << 1)
+#define CFG_FLAG_NOACK   (1u << 2)   /* set to disable the ESB ACK (RX only) */
 #define HOP_DWELL_TICKS  5
 #define TEXT_MAX         512
 
@@ -41,6 +42,7 @@ static uint8_t  m_addr[5];
 static uint8_t  m_key[16];
 static bool     m_2mbit = true;
 static bool     m_hop;
+static bool     m_ack = true;        /* ACK received frames (emulate a real receiver) */
 static uint8_t  m_channel = 5;
 static uint8_t  m_hop_idx, m_hop_tick;
 
@@ -54,12 +56,14 @@ static void cfg_parse(const uint8_t *cfg, size_t cfg_len) {
     memset(m_key, 0, 16);
     m_2mbit = true;
     m_hop = false;
+    m_ack = true;
     m_channel = 5;
     if (cfg == NULL || cfg_len < 22 || cfg[0] != 1) return;
     memcpy(m_addr, &cfg[1], 5);
     memcpy(m_key, &cfg[6], 16);
     m_2mbit = (cfg[22] & CFG_FLAG_1MBIT) == 0;
     m_hop   = (cfg[22] & CFG_FLAG_HOP) != 0;
+    m_ack   = (cfg[22] & CFG_FLAG_NOACK) == 0;
     if (cfg_len >= 24 && cfg[23] <= 100) m_channel = cfg[23];
 }
 
@@ -70,14 +74,14 @@ static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len) {
     m_hop_idx = m_hop_tick = 0;
     memset(m_prev, 0, 6);
     uint8_t ch = m_hop ? UNIFYING_CH[0] : m_channel;
-    if (!esb_radio_start(m_addr, ch, m_2mbit)) return STANDALONE_RC_INTERNAL;
-    NRF_LOG_INFO("esb-prx: receiver on %02x%02x%02x%02x%02x ch=%u hop=%u",
-                 m_addr[0], m_addr[1], m_addr[2], m_addr[3], m_addr[4], ch, m_hop);
+    if (!esb_prx_radio_start(m_addr, ch, m_2mbit, m_ack)) return STANDALONE_RC_INTERNAL;
+    NRF_LOG_INFO("esb-prx: receiver on %02x%02x%02x%02x%02x ch=%u hop=%u ack=%u",
+                 m_addr[0], m_addr[1], m_addr[2], m_addr[3], m_addr[4], ch, m_hop, m_ack);
     return STANDALONE_RC_OK;
 }
 
 static standalone_rc_t on_exit(void) {
-    esb_radio_stop();
+    esb_prx_radio_stop();
     return STANDALONE_RC_OK;
 }
 
@@ -110,12 +114,12 @@ static void ingest(const esb_frame_t *f) {
 static standalone_rc_t on_tick(uint32_t now_ms) {
     (void)now_ms;
     esb_frame_t f;
-    esb_radio_poll();
-    while (esb_radio_pop(&f)) { m_rx++; ingest(&f); }
+    esb_prx_radio_poll();
+    while (esb_prx_radio_pop(&f)) { m_rx++; ingest(&f); }
     if (m_hop && ++m_hop_tick >= HOP_DWELL_TICKS) {
         m_hop_tick = 0;
         m_hop_idx = (uint8_t)((m_hop_idx + 1u) % UNIFYING_CH_N);
-        esb_radio_set_channel(UNIFYING_CH[m_hop_idx]);
+        esb_prx_radio_set_channel(UNIFYING_CH[m_hop_idx]);
     }
     return STANDALONE_RC_OK;
 }
@@ -141,12 +145,15 @@ static void clear_result(void) {
 
 static size_t get_status(char *out, size_t out_max) {
     size_t len = 0;
+    esb_prx_stats_t s;
+    esb_prx_radio_get_stats(&s);
     uint8_t cur_ch = m_hop ? UNIFYING_CH[m_hop_idx] : m_channel;
-    STATUS_KV(out, out_max, len, "addr=%02x%02x%02x%02x%02x bitrate=%s ch=%u hop=%u\n",
+    STATUS_KV(out, out_max, len, "addr=%02x%02x%02x%02x%02x bitrate=%s ch=%u hop=%u ack=%u\n",
               m_addr[0], m_addr[1], m_addr[2], m_addr[3], m_addr[4],
-              m_2mbit ? "2m" : "1m", cur_ch, m_hop);
-    STATUS_KV(out, out_max, len, "rx=%lu keyboard=%lu chars=%u\n",
-              (unsigned long)m_rx, (unsigned long)m_kbd, (unsigned)m_tlen);
+              m_2mbit ? "2m" : "1m", cur_ch, m_hop, m_ack);
+    STATUS_KV(out, out_max, len, "rx=%lu keyboard=%lu chars=%u acks=%lu\n",
+              (unsigned long)m_rx, (unsigned long)m_kbd, (unsigned)m_tlen,
+              (unsigned long)s.acks);
     return len;
 }
 

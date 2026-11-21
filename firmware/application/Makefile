@@ -332,11 +332,11 @@ INC_FOLDERS += $(PROJ_DIR)/esb
 endif
 ifeq ($(strip $(STANDALONE_ESB_PRX)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_esb_prx.c
+SRC_FILES += $(PROJ_DIR)/esb/esb_prx_radio.c
 SRC_FILES += $(PROJ_DIR)/esb/esb_unifying.c
 INC_FOLDERS += $(PROJ_DIR)/esb
 endif
-# esb_radio.c (addressed RX) is shared by the esb and esb-prx modes; add once
-ifneq ($(filter 1,$(STANDALONE_ESB) $(STANDALONE_ESB_PRX)),)
+ifeq ($(strip $(STANDALONE_ESB)),1)
 SRC_FILES += $(PROJ_DIR)/esb/esb_radio.c
 endif
 ifeq ($(strip $(STANDALONE_U2F)),1)

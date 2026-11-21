@@ -6610,6 +6610,8 @@ class StandaloneEsbPrx(DeviceRequiredUnit):
                             help='fixed channel 0..100 (default 5); esb-inject sweeps, so any works')
         parser.add_argument('--hop', choices=['on', 'off'], default='off',
                             help='hop the Unifying channel set instead of a fixed channel')
+        parser.add_argument('--ack', choices=['on', 'off'], default='on',
+                            help='ACK received frames like a real receiver (needed to answer esb-enum)')
         parser.add_argument('--bitrate', choices=['1m', '2m'], default='2m',
                             help='PHY bitrate (default 2m)')
         return parser
@@ -6635,7 +6637,9 @@ class StandaloneEsbPrx(DeviceRequiredUnit):
         if hasattr(resp, 'status') and resp.status != Status.SUCCESS:
             print(color_string((CR, f"set-mode failed: status={resp.status}")))
             return
-        flags = (0x01 if args.bitrate == '1m' else 0x00) | (0x02 if args.hop == 'on' else 0x00)
+        flags = ((0x01 if args.bitrate == '1m' else 0x00) |
+                 (0x02 if args.hop == 'on' else 0x00) |
+                 (0x04 if args.ack == 'off' else 0x00))
         cfg = struct.pack('<B5s16sBB', 1, addr, key, flags, args.channel)
         resp = self.cmd.standalone_set_config(StandaloneMode.ESB_PRX, cfg)
         if resp.status != Status.SUCCESS:

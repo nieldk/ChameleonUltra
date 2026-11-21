@@ -870,6 +870,43 @@ standalone esb-inject --addr E2C7A1B93F --key 0244AA..4044 --text "x" --counter 
 - `--counter` should be at or ahead of the receiver's last-seen value (from a
   captured encrypted-keyboard frame); the firmware transmits verbatim.
 
+### `esb-prx` ,  emulate a receiver, for a two-CU test rig  *(needs `STANDALONE_ESB_PRX=1`)*
+
+Turns a second CU into a Unifying receiver (sink): it listens on a target
+address, decrypts the keystrokes on-device with the shared key, and logs the
+typed text. With two CUs you can validate the whole chain with no real dongle or
+keyboard:
+
+```
+# CU-B (the receiver):
+standalone esb-prx --addr E2C7A1B93F --key 0244AA..4044
+# CU-A (the injector):
+standalone esb-inject --addr E2C7A1B93F --key 0244AA..4044 --text "hi"
+# CU-B:
+standalone esb-prx get-result            ->  typed: 'hi'
+```
+
+To exercise the **capture** path instead, run the injector as a continuous
+emulated keyboard (`--repeat`) and capture on the other CU:
+
+```
+# CU-B (emulated keyboard):   standalone esb-inject --addr <X> --key <K> --text "test" --repeat 500
+# CU-A (capture):             standalone esb-promisc get-result --key <K>   ->  "test"
+```
+
+`esb-prx` also ACKs received frames by default (`--ack on`), emulating a real
+receiver, so it answers `esb-enum` too -- a second CU on the dongle's base
+address lights up the device prefix:
+
+```
+# CU-B:  standalone esb-prx  --addr E2C7A1B93F --key <K>
+# CU-A:  standalone esb-enum --base E2C7A1B9              ->  device E2C7A1B93F
+```
+
+The ACK is a DISABLED-driven RX->TX turnaround (one ramp after each frame); if a
+bench shows enum not seeing the ACK, `--ack off` falls back to pure RX+decrypt
+(inject still fully testable, since it transmits blind). US keymap on-device.
+
 ### Host-side analysis (no mode needed to parse)
 
 Recover the key from a captured pairing, decrypt captured keystrokes, or build
