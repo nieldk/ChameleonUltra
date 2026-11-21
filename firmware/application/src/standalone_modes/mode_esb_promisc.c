@@ -108,10 +108,13 @@ static bool esb_crc_valid(const uint8_t *raw, size_t len) {
 }
 
 /* Strict Unifying filter: a frame passes only if a CRC-valid boundary also
- * yields a Unifying-shaped payload (5/10/22 bytes) whose vendor checksum is
- * valid (byte-sum of the payload including its checksum byte == 0 mod 256,
- * mirroring cli_esb's unifying_checksum_ok). Drops the CRC false positives a
- * quiet channel produces. Same bit-order sweep as esb_crc_valid. */
+ * yields a Unifying-shaped payload (len 0/5/10/22) whose vendor checksum is
+ * valid. Mirrors mame82's LOGITECH_FILTER (nrf_esb_validate_promiscuous_frame
+ * + logiteacker_unifying_payload_validate_checksum): length 0 (keepalives,
+ * emitted every ~8ms and the clearest live-device signal) passes on CRC alone;
+ * for a payload, the last byte must equal the Logitech checksum or its
+ * even-masked value (the low bit is sometimes wrong). Same bit-order sweep as
+ * esb_crc_valid. */
 static bool esb_unifying_strict_ok(const uint8_t *raw, size_t len) {
     uint8_t rev[ESB_PROMISC_CAP_LEN];
     for (size_t i = 0; i < len; i++) {
@@ -122,10 +125,10 @@ static bool esb_unifying_strict_ok(const uint8_t *raw, size_t len) {
     const uint8_t *variants[2] = { raw, rev };
     const int total = (int)(len * 8);
     const int hdr = 5 * 8 + 9;
-    const int shapes[3] = { 5, 10, 22 };
+    const int shapes[4] = { 0, 5, 10, 22 };
     for (int v = 0; v < 2; v++) {
         const uint8_t *b = variants[v];
-        for (int s = 0; s < 3; s++) {
+        for (int s = 0; s < 4; s++) {
             int plen = shapes[s];
             int k = hdr + 8 * plen;
             if (k + 16 > total) continue;
@@ -133,16 +136,19 @@ static bool esb_unifying_strict_ok(const uint8_t *raw, size_t len) {
             for (int i = 0; i < 16; i++)
                 got = (uint16_t)((got << 1) | ((b[(k + i) >> 3] >> (7 - ((k + i) & 7))) & 1u));
             if (crc16_over_bits(b, k) != got) continue;
-            uint8_t sum = 0;
+            if (plen == 0) return true;                 /* keepalive: CRC-valid, no checksum */
+            uint8_t pay[22];
             for (int j = 0; j < plen; j++) {
                 uint8_t pb = 0;
                 for (int i = 0; i < 8; i++) {
                     int bit = hdr + j * 8 + i;
                     pb = (uint8_t)((pb << 1) | ((b[bit >> 3] >> (7 - (bit & 7))) & 1u));
                 }
-                sum = (uint8_t)(sum + pb);
+                pay[j] = pb;
             }
-            if (sum == 0) return true;
+            uint8_t chk = 0;                            /* Logitech checksum over the first plen-1 bytes */
+            for (int j = 0; j < plen - 1; j++) chk = (uint8_t)(chk - pay[j]);
+            if (pay[plen - 1] == chk || pay[plen - 1] == (uint8_t)(chk & 0xFE)) return true;
         }
     }
     return false;

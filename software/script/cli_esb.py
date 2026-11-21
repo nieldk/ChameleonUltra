@@ -42,13 +42,16 @@ def parse_records(blob: bytes):
 
 
 def unifying_checksum_ok(f: bytes) -> bool:
-    """Logitech Unifying's documented vendor checksum: byte-wise sum of the
-    whole frame (payload + checksum byte) is 0 mod 256. Documented in the
-    Bastille/MouseJack and Logitacker write-ups; not Nordic/ESB's own CRC,
+    """Logitech Unifying's documented vendor checksum: the last byte is the
+    negated byte-sum of the rest (so the whole frame sums to 0 mod 256).
+    Mirrors mame82's logiteacker_unifying_payload_validate_checksum, including
+    its tolerance of a wrong low bit (last == chk or chk & 0xfe). Documented in
+    the Bastille/MouseJack and Logitacker write-ups; not Nordic/ESB's own CRC,
     which the radio has already checked and stripped before this."""
     if not f:
         return False
-    return (sum(f) & 0xFF) == 0
+    chk = (-sum(f[:-1])) & 0xFF
+    return f[-1] == chk or f[-1] == (chk & 0xFE)
 
 
 def describe_frame(ch: int, f: bytes) -> str:

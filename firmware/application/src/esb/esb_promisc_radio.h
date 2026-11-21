@@ -4,7 +4,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define ESB_PROMISC_CAP_LEN  26u   /* fixed raw-capture length, see esb_promisc_radio.c */
+#define ESB_PROMISC_CAP_LEN  32u   /* fixed raw-capture length, see esb_promisc_radio.c. Must cover a
+                                    * full 22-byte Unifying frame: addr(5)+PCF(2)+22+CRC(2) = 31 bytes,
+                                    * so 26 truncated encrypted-keyboard and pairing frames below their CRC. */
 
 typedef struct {
     uint8_t channel;
