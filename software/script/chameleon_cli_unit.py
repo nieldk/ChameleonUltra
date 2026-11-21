@@ -6583,6 +6583,73 @@ class StandaloneEsbEnum(DeviceRequiredUnit):
                                 "or capture its pairing")))
 
 
+@standalone.command('esb-prx')
+class StandaloneEsbPrx(DeviceRequiredUnit):
+    """
+    Emulate a Logitech Unifying receiver on a second CU: listen on a target
+    address, decrypt the keystrokes with the shared device key, and log the
+    typed text. Arms the receiver; inject from the first CU with esb-inject
+    (same --addr and --key), then read the text with `standalone esb-prx
+    get-result`. US keymap on-device.
+
+    Example:
+        # CU-B:
+        standalone esb-prx --addr E2C7A1B93F --key 0244AA..4044
+        # CU-A:  standalone esb-inject --addr E2C7A1B93F --key 0244AA..4044 --text "hi"
+        # CU-B:  standalone esb-prx get-result        ->  typed: 'hi'
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Emulate a Unifying receiver: RX + decrypt keystrokes (test peer)'
+        parser.add_argument('--addr', required=True, metavar='<hex>',
+                            help='address to listen on, 10 hex chars base-first')
+        parser.add_argument('--key', required=True, metavar='<hex>',
+                            help='16-byte device key (hex), shared with the injector')
+        parser.add_argument('--channel', type=int, default=5, metavar='<n>',
+                            help='fixed channel 0..100 (default 5); esb-inject sweeps, so any works')
+        parser.add_argument('--hop', choices=['on', 'off'], default='off',
+                            help='hop the Unifying channel set instead of a fixed channel')
+        parser.add_argument('--bitrate', choices=['1m', '2m'], default='2m',
+                            help='PHY bitrate (default 2m)')
+        return parser
+
+    def on_exec(self, args):
+        try:
+            addr = bytes.fromhex(args.addr)
+            key = bytes.fromhex(args.key)
+        except ValueError:
+            print(color_string((CR, "--addr and --key must be hex")))
+            return
+        if len(addr) != 5:
+            print(color_string((CR, "--addr must be 5 bytes (10 hex chars)")))
+            return
+        if len(key) != 16:
+            print(color_string((CR, "--key must be 16 bytes (32 hex chars)")))
+            return
+        if not (0 <= args.channel <= 100):
+            print(color_string((CR, "--channel must be 0..100")))
+            return
+
+        resp = self.cmd.standalone_set_mode(StandaloneMode.ESB_PRX)
+        if hasattr(resp, 'status') and resp.status != Status.SUCCESS:
+            print(color_string((CR, f"set-mode failed: status={resp.status}")))
+            return
+        flags = (0x01 if args.bitrate == '1m' else 0x00) | (0x02 if args.hop == 'on' else 0x00)
+        cfg = struct.pack('<B5s16sBB', 1, addr, key, flags, args.channel)
+        resp = self.cmd.standalone_set_config(StandaloneMode.ESB_PRX, cfg)
+        if resp.status != Status.SUCCESS:
+            print(color_string((CR, f"set-config failed: status={resp.status}")))
+            return
+        resp = self.cmd.standalone_trigger()
+        if resp.status != Status.SUCCESS:
+            print(color_string((CR, f"trigger failed: status={resp.status}")))
+            return
+        where = "hopping the Unifying set" if args.hop == 'on' else f"channel {args.channel}"
+        print(color_string((CG, f"receiver listening on {addr.hex().upper()} ({where}). "
+                                "Inject from the other CU, then `standalone esb-prx get-result`.")))
+
+
 @standalone.command('disarm')
 class StandaloneDisarm(DeviceRequiredUnit):
     """
@@ -6887,6 +6954,22 @@ def _standalone_render_result(args, mode, raw: bytes):
                 print(out)
         else:
             print(color_string((CG, cli_spectrum.summarize(freqs, vals))))
+        return
+
+    if mode == StandaloneMode.ESB_PRX:
+        text = raw.decode('utf-8', 'replace')
+        if args.json:
+            out = jsonlib.dumps({"typed": text}, indent=2)
+            if args.file:
+                Path(args.file).write_text(out)
+                print(color_string((CG, f"-> {args.file}")))
+            else:
+                print(out)
+        elif not text:
+            print(color_string((CY, "no keystrokes decrypted yet -- inject on the other CU, "
+                                     "then re-run get-result")))
+        else:
+            print(color_string((CG, f"typed: {text!r}")))
         return
 
     if mode == StandaloneMode.ESB:

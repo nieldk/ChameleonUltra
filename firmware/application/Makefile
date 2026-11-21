@@ -37,6 +37,7 @@ STANDALONE_ESB             ?= 0   # disabled by default (passive ESB-framed RX, 
 STANDALONE_ESB_PROMISC     ?= 0   # disabled by default (brute-force partial-address ESB sniff, unknown address -- experimental)
 STANDALONE_ESB_INJECT      ?= 0   # disabled by default (transmit host-built ESB frames, e.g. Unifying keystrokes -- experimental)
 STANDALONE_ESB_ENUM        ?= 0   # disabled by default (active enumeration of a Unifying dongle via ESB ACK -- experimental)
+STANDALONE_ESB_PRX         ?= 0   # disabled by default (emulate a Unifying receiver: RX + decrypt, two-CU test peer -- experimental)
 LF_IA_DEBUG                ?= 0   # disabled by default (interactive LF engine's trace ring + envelope capture, ~10KB RAM; bring-up only)
 
 CFLAGS += -DCONFIG_STANDALONE_AUTHTRACE=$(STANDALONE_AUTHTRACE)
@@ -57,6 +58,7 @@ CFLAGS += -DCONFIG_STANDALONE_ESB=$(STANDALONE_ESB)
 CFLAGS += -DCONFIG_STANDALONE_ESB_PROMISC=$(STANDALONE_ESB_PROMISC)
 CFLAGS += -DCONFIG_STANDALONE_ESB_INJECT=$(STANDALONE_ESB_INJECT)
 CFLAGS += -DCONFIG_STANDALONE_ESB_ENUM=$(STANDALONE_ESB_ENUM)
+CFLAGS += -DCONFIG_STANDALONE_ESB_PRX=$(STANDALONE_ESB_PRX)
 CFLAGS += -DCONFIG_GDB_GATEWAY_EXEC=$(GDB_GATEWAY_EXEC)
 CFLAGS += -DCONFIG_GDB_GATEWAY_PKT=$(GDB_GATEWAY_PKT)
 CFLAGS += -DLF_IA_DEBUG=$(LF_IA_DEBUG)
@@ -311,7 +313,6 @@ INC_FOLDERS += $(PROJ_DIR)/spectrum
 endif
 ifeq ($(strip $(STANDALONE_ESB)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_esb.c
-SRC_FILES += $(PROJ_DIR)/esb/esb_radio.c
 INC_FOLDERS += $(PROJ_DIR)/esb
 endif
 ifeq ($(strip $(STANDALONE_ESB_PROMISC)),1)
@@ -328,6 +329,15 @@ ifeq ($(strip $(STANDALONE_ESB_ENUM)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_esb_enum.c
 SRC_FILES += $(PROJ_DIR)/esb/esb_enum_radio.c
 INC_FOLDERS += $(PROJ_DIR)/esb
+endif
+ifeq ($(strip $(STANDALONE_ESB_PRX)),1)
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_esb_prx.c
+SRC_FILES += $(PROJ_DIR)/esb/esb_unifying.c
+INC_FOLDERS += $(PROJ_DIR)/esb
+endif
+# esb_radio.c (addressed RX) is shared by the esb and esb-prx modes; add once
+ifneq ($(filter 1,$(STANDALONE_ESB) $(STANDALONE_ESB_PRX)),)
+SRC_FILES += $(PROJ_DIR)/esb/esb_radio.c
 endif
 ifeq ($(strip $(STANDALONE_U2F)),1)
 SRC_FILES   += $(PROJ_DIR)/standalone_modes/mode_u2f.c

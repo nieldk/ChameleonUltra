@@ -915,6 +915,7 @@ class StandaloneMode(enum.IntEnum):
     ESB_PROMISC = 0x10   # brute-force partial-address ESB sniff, unknown address (experimental)
     ESB_INJECT  = 0x11   # transmit host-built ESB frames, e.g. Logitech Unifying keystrokes (experimental)
     ESB_ENUM    = 0x12   # active enumeration of a Unifying dongle via ESB ACK (experimental)
+    ESB_PRX     = 0x13   # emulate a Unifying receiver: RX + decrypt keystrokes (two-CU test peer, experimental)
 
     @classmethod
     def from_name(cls, name: str) -> "StandaloneMode":
