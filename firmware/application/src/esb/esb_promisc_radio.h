@@ -44,6 +44,7 @@ typedef struct {
  */
 bool esb_promisc_radio_start(uint8_t channel, uint8_t prefix_lo, uint8_t prefix_hi);
 void esb_promisc_radio_stop(void);
+void esb_promisc_radio_set_channel(uint8_t channel);   /* takes effect at the next timeslot */
 bool esb_promisc_radio_running(void);
 bool esb_promisc_radio_pop(esb_promisc_frame_t *out);
 void esb_promisc_radio_poll(void);

@@ -8,11 +8,14 @@
  * address on-chip), so captures include many preamble matches on noise; the
  * host CRC-checks each capture (cli_esb) to pick out the real frames.
  *
- * Config (4 bytes): u8 version=1, u8 channel (0-100, no hop -- point this
- * at a channel you suspect is active, e.g. via the spectrum mode), u8
- * polarity (prefix_lo: 0 = 0xAA preamble, non-zero = 0x55; flip it if a
- * known-active channel stays silent), u8 prefix_hi (kept for config-blob
- * compatibility, no longer a guess range).
+ * Config (4-5 bytes): u8 version=1, u8 channel (0-100; the fixed channel when
+ * not hopping, else the sweep's start), u8 polarity (prefix_lo: 0 = 0xAA
+ * preamble, non-zero = 0x55; flip it if a known-active channel stays silent),
+ * u8 prefix_hi (kept for config-blob compatibility, no longer a guess range),
+ * and an optional u8 flags: bit0 = hop the Unifying channel set (a device
+ * hops, so a fixed channel catches it ~4% of the time), bit1 = strict
+ * (only log Unifying-shaped frames, len 5/10/22, whose vendor checksum is
+ * valid -- drops the CRC false positives a quiet channel produces).
  *
  * Log record: u8 channel, u8 prefix_guess, u8 base_guess, u8 len,
  * u8 raw[len] (len is always ESB_PROMISC_CAP_LEN here; stored explicitly
@@ -31,6 +34,18 @@
 #define DEFAULT_PREFIX_HI  0x07
 #define REC_HDR            4
 
+#define CFG_FLAG_HOP       (1u << 0)
+#define CFG_FLAG_STRICT    (1u << 1)
+#define HOP_DWELL_TICKS    5          /* ticks per channel; tick is 20ms -> ~100ms dwell */
+
+/* Logitech Unifying hop set (MHz offsets from 2400), from nRF ESB
+ * nrf_esb_update_channel_frequency_table_unifying (mame82). */
+static const uint8_t UNIFYING_CH[] = {
+    5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35, 38, 41,
+    44, 47, 50, 53, 56, 59, 62, 65, 68, 71, 74, 77,
+};
+#define UNIFYING_CH_N  (sizeof(UNIFYING_CH) / sizeof(UNIFYING_CH[0]))
+
 #define LOG_SZ          2048
 _Static_assert(LOG_SZ + 4 <= STANDALONE_RESULT_PERSIST_MAX,
                "esb-promisc log must fit the framework's persisted result record");
@@ -40,6 +55,10 @@ _Static_assert(REC_HDR + ESB_PROMISC_CAP_LEN <= LOG_SZ,
 static uint8_t m_channel   = DEFAULT_CHANNEL;
 static uint8_t m_prefix_lo = DEFAULT_PREFIX_LO;
 static uint8_t m_prefix_hi = DEFAULT_PREFIX_HI;
+static bool    m_hop;                  /* sweep the Unifying channel set */
+static bool    m_strict;               /* only log checksum-valid Unifying frames */
+static uint8_t m_hop_idx;              /* index into UNIFYING_CH when hopping */
+static uint8_t m_hop_tick;             /* ticks spent on the current channel */
 
 static uint32_t m_log_words[(LOG_SZ + 3) / 4];
 #define m_log ((uint8_t *)m_log_words)
@@ -88,15 +107,62 @@ static bool esb_crc_valid(const uint8_t *raw, size_t len) {
     return false;
 }
 
+/* Strict Unifying filter: a frame passes only if a CRC-valid boundary also
+ * yields a Unifying-shaped payload (5/10/22 bytes) whose vendor checksum is
+ * valid (byte-sum of the payload including its checksum byte == 0 mod 256,
+ * mirroring cli_esb's unifying_checksum_ok). Drops the CRC false positives a
+ * quiet channel produces. Same bit-order sweep as esb_crc_valid. */
+static bool esb_unifying_strict_ok(const uint8_t *raw, size_t len) {
+    uint8_t rev[ESB_PROMISC_CAP_LEN];
+    for (size_t i = 0; i < len; i++) {
+        uint8_t x = raw[i], r = 0;
+        for (int j = 0; j < 8; j++) r = (uint8_t)(r | (((x >> j) & 1u) << (7 - j)));
+        rev[i] = r;
+    }
+    const uint8_t *variants[2] = { raw, rev };
+    const int total = (int)(len * 8);
+    const int hdr = 5 * 8 + 9;
+    const int shapes[3] = { 5, 10, 22 };
+    for (int v = 0; v < 2; v++) {
+        const uint8_t *b = variants[v];
+        for (int s = 0; s < 3; s++) {
+            int plen = shapes[s];
+            int k = hdr + 8 * plen;
+            if (k + 16 > total) continue;
+            uint16_t got = 0;
+            for (int i = 0; i < 16; i++)
+                got = (uint16_t)((got << 1) | ((b[(k + i) >> 3] >> (7 - ((k + i) & 7))) & 1u));
+            if (crc16_over_bits(b, k) != got) continue;
+            uint8_t sum = 0;
+            for (int j = 0; j < plen; j++) {
+                uint8_t pb = 0;
+                for (int i = 0; i < 8; i++) {
+                    int bit = hdr + j * 8 + i;
+                    pb = (uint8_t)((pb << 1) | ((b[bit >> 3] >> (7 - (bit & 7))) & 1u));
+                }
+                sum = (uint8_t)(sum + pb);
+            }
+            if (sum == 0) return true;
+        }
+    }
+    return false;
+}
+
 static void cfg_parse(const uint8_t *cfg, size_t cfg_len) {
     m_channel   = DEFAULT_CHANNEL;
     m_prefix_lo = DEFAULT_PREFIX_LO;
     m_prefix_hi = DEFAULT_PREFIX_HI;
+    m_hop = false;
+    m_strict = false;
     if (cfg == NULL || cfg_len < 2 || cfg[0] != 1) return;
     if (cfg[1] <= 100) m_channel = cfg[1];
     if (cfg_len >= 4 && cfg[2] <= cfg[3]) {
         m_prefix_lo = cfg[2];
         m_prefix_hi = cfg[3];
+    }
+    if (cfg_len >= 5) {
+        m_hop    = (cfg[4] & CFG_FLAG_HOP) != 0;
+        m_strict = (cfg[4] & CFG_FLAG_STRICT) != 0;
     }
 }
 
@@ -141,9 +207,12 @@ static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len) {
     cfg_parse(cfg, cfg_len);
     m_overflow = 0;
     m_filtered = 0;
+    m_hop_idx  = 0;
+    m_hop_tick = 0;
+    uint8_t start_ch = m_hop ? UNIFYING_CH[0] : m_channel;
+    if (!esb_promisc_radio_start(start_ch, m_prefix_lo, m_prefix_hi)) return STANDALONE_RC_INTERNAL;
     log_ensure_loaded();
-    if (!esb_promisc_radio_start(m_channel, m_prefix_lo, m_prefix_hi)) return STANDALONE_RC_INTERNAL;
-    NRF_LOG_INFO("esb-promisc: preamble-sync ch=%u polarity=%u", m_channel, m_prefix_lo);
+    NRF_LOG_INFO("esb-promisc: preamble-sync ch=%u hop=%u strict=%u", start_ch, m_hop, m_strict);
     return STANDALONE_RC_OK;
 }
 
@@ -175,8 +244,15 @@ static standalone_rc_t on_tick(uint32_t now_ms) {
     esb_promisc_frame_t f;
     esb_promisc_radio_poll();
     while (esb_promisc_radio_pop(&f)) {
-        if (esb_crc_valid(f.raw, ESB_PROMISC_CAP_LEN)) log_add(&f);
-        else m_filtered++;        /* preamble match on noise: never logged */
+        bool keep = m_strict ? esb_unifying_strict_ok(f.raw, ESB_PROMISC_CAP_LEN)
+                             : esb_crc_valid(f.raw, ESB_PROMISC_CAP_LEN);
+        if (keep) log_add(&f);
+        else m_filtered++;        /* noise or non-Unifying (strict): never logged */
+    }
+    if (m_hop && ++m_hop_tick >= HOP_DWELL_TICKS) {
+        m_hop_tick = 0;
+        m_hop_idx = (uint8_t)((m_hop_idx + 1u) % UNIFYING_CH_N);
+        esb_promisc_radio_set_channel(UNIFYING_CH[m_hop_idx]);
     }
     return STANDALONE_RC_OK;
 }
@@ -216,8 +292,10 @@ static size_t get_status(char *out, size_t out_max) {
     size_t len = 0;
     esb_promisc_stats_t s;
     esb_promisc_radio_get_stats(&s);
-    STATUS_KV(out, out_max, len, "radio=%s ch=%u preamble=0x%02x\n",
-              esb_promisc_radio_running() ? "rx" : "off", m_channel, m_prefix_lo ? 0x55u : 0xAAu);
+    uint8_t cur_ch = m_hop ? UNIFYING_CH[m_hop_idx] : m_channel;
+    STATUS_KV(out, out_max, len, "radio=%s ch=%u preamble=0x%02x hop=%u strict=%u\n",
+              esb_promisc_radio_running() ? "rx" : "off", cur_ch, m_prefix_lo ? 0x55u : 0xAAu,
+              m_hop, m_strict);
     STATUS_KV(out, out_max, len, "slots=%lu blocked=%lu canceled=%lu us=%lu\n",
               (unsigned long)s.slots, (unsigned long)s.blocked, (unsigned long)s.canceled,
               (unsigned long)s.slot_us);

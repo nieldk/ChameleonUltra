@@ -37,7 +37,7 @@ static nrf_radio_request_t                      m_req;
 static nrf_radio_signal_callback_return_param_t m_ret;
 static volatile bool    m_run;
 static volatile bool    m_open;
-static uint8_t           m_channel;
+static volatile uint8_t  m_channel;            /* read at each slot begin; set_channel takes effect next slot */
 static uint8_t           m_preamble;        /* preamble byte matched this session: 0xAA or 0x55 */
 static uint8_t           m_pkt[ESB_PROMISC_CAP_LEN];
 static esb_promisc_frame_t m_ring[RING_SZ];
@@ -216,6 +216,10 @@ bool esb_promisc_radio_start(uint8_t channel, uint8_t prefix_lo, uint8_t prefix_
 void esb_promisc_radio_stop(void) {
     m_run = false;
     if (m_open) (void)sd_radio_session_close();
+}
+
+void esb_promisc_radio_set_channel(uint8_t channel) {
+    if (channel <= 100) m_channel = channel;   /* applied at the next timeslot begin */
 }
 
 bool esb_promisc_radio_running(void) {

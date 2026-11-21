@@ -7125,6 +7125,10 @@ class StandaloneConfig(DeviceRequiredUnit):
                             help='[esb-promisc] low end of the device-ID guess range (0-255, default 0)')
         parser.add_argument('--prefix-hi', type=int, default=None,
                             help='[esb-promisc] high end of the device-ID guess range, inclusive (0-255, default 7)')
+        parser.add_argument('--hop', choices=['on', 'off'], default=None,
+                            help='[esb-promisc] sweep the Unifying channel set instead of one fixed channel')
+        parser.add_argument('--strict', choices=['on', 'off'], default=None,
+                            help='[esb-promisc] only log Unifying frames with a valid vendor checksum')
         parser.add_argument('--start', type=int, default=None,
                             help='[spectrum] sweep start MHz (2400-2483, default 2400)')
         parser.add_argument('--end', type=int, default=None,
@@ -7435,38 +7439,49 @@ class StandaloneConfig(DeviceRequiredUnit):
             if any(v is not None for v in (args.block, args.key_type, args.key, args.timeout,
                                             args.address, args.bitrate, args.dwell)):
                 print(color_string((CR,
-                    "esb-promisc config uses only --channel, --prefix-lo and --prefix-hi")))
+                    "esb-promisc config uses only --channel, --prefix-lo, --prefix-hi, --hop and --strict")))
                 return
-            if any(v is not None for v in (args.channel, args.prefix_lo, args.prefix_hi)):
+            if any(v is not None for v in (args.channel, args.prefix_lo, args.prefix_hi,
+                                            args.hop, args.strict)):
                 cur = self.cmd.standalone_get_config(mode)
                 cur_ch  = cur[1] if cur and len(cur) >= 2 else 5
                 cur_lo  = cur[2] if cur and len(cur) >= 4 else 0
                 cur_hi  = cur[3] if cur and len(cur) >= 4 else 7
+                cur_fl  = cur[4] if cur and len(cur) >= 5 else 0
 
                 ch = args.channel if args.channel is not None else cur_ch
                 if not (0 <= ch <= 100):
-                    print(color_string((CR, "channel must be 0..100 (no hop in esb-promisc)")))
+                    print(color_string((CR, "channel must be 0..100")))
                     return
                 lo = args.prefix_lo if args.prefix_lo is not None else cur_lo
                 hi = args.prefix_hi if args.prefix_hi is not None else cur_hi
                 if not (0 <= lo <= 255 and 0 <= hi <= 255 and lo <= hi):
                     print(color_string((CR, "--prefix-lo must be 0..255 and <= --prefix-hi")))
                     return
+                flags = cur_fl
+                if args.hop is not None:
+                    flags = (flags | 0x01) if args.hop == 'on' else (flags & ~0x01)
+                if args.strict is not None:
+                    flags = (flags | 0x02) if args.strict == 'on' else (flags & ~0x02)
 
-                resp = self.cmd.standalone_set_config(mode, struct.pack('<BBBB', 1, ch, lo, hi))
+                resp = self.cmd.standalone_set_config(mode, struct.pack('<BBBBB', 1, ch, lo, hi, flags))
                 if resp.status == Status.SUCCESS:
+                    where = "hopping the Unifying set" if (flags & 0x01) else f"channel {ch}"
+                    strict = ", strict Unifying-checksum filter" if (flags & 0x02) else ""
                     print(color_string((CG,
-                        f"esb-promisc set to channel {ch}, guessing prefix {lo}-{hi} x 256 base bytes "
-                        f"(takes effect on next trigger)")))
+                        f"esb-promisc set to {where}{strict} (takes effect on next trigger)")))
                 else:
                     print(color_string((CR, f"set-config failed: status={resp.status}")))
                 return
             blob = self.cmd.standalone_get_config(mode)
             if blob and len(blob) >= 4 and blob[0] == 1:
+                fl = blob[4] if len(blob) >= 5 else 0
                 lines = [
-                    f"channel:    {blob[1]}",
+                    f"channel:    {blob[1]}" + ("  (hop: Unifying set)" if (fl & 0x01) else ""),
                     f"prefix-lo:  {blob[2]}",
                     f"prefix-hi:  {blob[3]}",
+                    f"hop:        {'on' if (fl & 0x01) else 'off'}",
+                    f"strict:     {'on' if (fl & 0x02) else 'off'}",
                     "",
                     color_string((CY, "experimental -- see docs; captures are "
                                        "candidates, not confirmed frames")),
