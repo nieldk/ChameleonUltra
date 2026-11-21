@@ -26,8 +26,14 @@
 #define SLOT_US        50000u
 #define TIMEOUT_US     200000u
 #define STOP_GUARD_US  3000u
-#define TX_SPIN_MAX    20000u       /* bounded wait for the TX END */
-#define ACK_SPIN_MAX   1200u        /* bounded wait for the ACK RX END (retransmit window) */
+#define TX_SPIN_MAX    20000u       /* bounded wait for the TX END (deterministic, fast) */
+/* ACK wait, in real microseconds off the 1MHz timeslot TIMER0. From Nordic ESB
+ * (nrf_esb_illegalmod): RX wait-for-ack is 50us at 2Mbit, 73us at 1Mbit, timed
+ * from RX-ready; their retransmit_delay-130 implies a ~130us RX ramp. We wait
+ * ramp + window from the TX END. */
+#define RX_RAMP_US     140u
+#define ACK_WAIT_US_2M 50u
+#define ACK_WAIT_US_1M 73u
 
 static nrf_radio_request_t                      m_req;
 static nrf_radio_signal_callback_return_param_t m_ret;
@@ -57,6 +63,8 @@ static void fill_request(void) {
     m_req.params.earliest.length_us  = m_slot_us;
     m_req.params.earliest.timeout_us = TIMEOUT_US;
 }
+
+static uint32_t elapsed_us(void);   /* defined below; microseconds since slot start */
 
 static uint32_t addr_conv(uint32_t inp) {
     inp = (inp & 0xF0F0F0F0UL) >> 4 | (inp & 0x0F0F0F0FUL) << 4;
@@ -110,10 +118,11 @@ static bool ping_ack(uint8_t prefix, uint8_t ch) {
     if (!NRF_RADIO->EVENTS_END) { m_st.tx_timeout++; goto off; }
     NRF_RADIO->EVENTS_END = 0;
     /* TX END has disabled and DISABLED_RXEN has ramped to RX. Drop the
-     * turnaround short so the ACK RX stops after it, then wait for its END. */
+     * turnaround short so the ACK RX stops after it, then wait its END for the
+     * RX ramp plus the bitrate's ack window (real us off TIMER0). */
     NRF_RADIO->SHORTS = RADIO_SHORTS_READY_START_Msk | RADIO_SHORTS_END_DISABLE_Msk;
-    i = 0;
-    while (!NRF_RADIO->EVENTS_END && i < ACK_SPIN_MAX) { __NOP(); i++; }
+    uint32_t deadline = elapsed_us() + RX_RAMP_US + (m_2mbit ? ACK_WAIT_US_2M : ACK_WAIT_US_1M);
+    while (!NRF_RADIO->EVENTS_END && elapsed_us() < deadline) { __NOP(); }
     bool ack = NRF_RADIO->EVENTS_END &&
                (NRF_RADIO->CRCSTATUS == RADIO_CRCSTATUS_CRCSTATUS_CRCOk);
     if (ack) m_st.acks++;
