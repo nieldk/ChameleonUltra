@@ -379,6 +379,48 @@ class UnifyingPairing:
         return bytes(k)
 
 
+def _pair_checksum(buf: bytearray) -> None:
+    """Set the last byte so the whole frame sums to 0 mod 256 (vendor checksum)."""
+    buf[-1] = (-sum(buf[:-1])) & 0xFF
+
+
+def unifying_build_pairing(device_rf_address: bytes, device_wpid: bytes, dongle_wpid: bytes,
+                           device_nonce: bytes, dongle_nonce: bytes, device_name: str = "CU-TEST",
+                           device_type: int = 0x01, device_caps: int = 0x00,
+                           device_serial: bytes = b"\x11\x22\x33\x44"):
+    """Build a Unifying pairing handshake (req1/req2/req3/rsp1/rsp2/rsp_final) as
+    ESB payloads carrying the given key material, with valid vendor checksums.
+    The inverse of the classify/ingest parser: feeding the result back through
+    unifying_pairing_key() returns the key these fields derive. For the two-CU
+    rig -- transmit these, capture with esb-promisc, recover with --pairing."""
+    name = device_name.encode("latin1", "replace")[:16]
+
+    req1 = bytearray(22); req1[1] = 0x5f; req1[2] = 0x01
+    req1[9:11] = device_wpid; req1[13] = device_type & 0xFF; req1[14] = device_caps & 0xFF
+    _pair_checksum(req1)
+
+    req2 = bytearray(22); req2[1] = 0x5f; req2[2] = 0x02
+    req2[3:7] = device_nonce; req2[7:11] = device_serial
+    _pair_checksum(req2)
+
+    req3 = bytearray(22); req3[1] = 0x5f; req3[2] = 0x03
+    req3[4] = len(name); req3[5:5 + len(name)] = name
+    _pair_checksum(req3)
+
+    rsp1 = bytearray(22); rsp1[1] = 0x1f; rsp1[2] = 0x01
+    rsp1[3:8] = device_rf_address[:5]; rsp1[9:11] = dongle_wpid
+    _pair_checksum(rsp1)
+
+    rsp2 = bytearray(22); rsp2[1] = 0x1f; rsp2[2] = 0x02
+    rsp2[3:7] = dongle_nonce
+    _pair_checksum(rsp2)
+
+    rsp_final = bytearray(10); rsp_final[1] = 0x0f
+    _pair_checksum(rsp_final)
+
+    return [bytes(x) for x in (req1, req2, req3, rsp1, rsp2, rsp_final)]
+
+
 def unifying_pairing_key(payloads):
     """Parse a captured pairing (iterable of ESB payloads) and return the
     recovered key, or None if the key-material frames weren't all captured."""

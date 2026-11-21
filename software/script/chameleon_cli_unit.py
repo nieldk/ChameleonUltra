@@ -6654,6 +6654,90 @@ class StandaloneEsbPrx(DeviceRequiredUnit):
                                 "Inject from the other CU, then `standalone esb-prx get-result`.")))
 
 
+@standalone.command('esb-pair')
+class StandaloneEsbPair(DeviceRequiredUnit):
+    """
+    Transmit a Logitech Unifying pairing handshake on the global pairing address,
+    so a second CU running esb-promisc can capture it and recover the key with
+    `get-result --pairing`. Tests the key-grab path end to end: this prints the
+    key the handshake derives to, which is what --pairing on the other CU should
+    report. Key material is random each run unless pinned with --device-addr.
+
+    Example:
+        # CU-B (this one):
+        standalone esb-pair --name M510x
+        # -> expected key: <hex>
+        # CU-A (capturer):
+        standalone esb-promisc --strict on ; set-mode esb-promisc ; trigger
+        standalone esb-promisc get-result --pairing     ->  key <same hex>
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Transmit a Unifying pairing handshake (key-recovery test source)'
+        parser.add_argument('--device-addr', default=None, metavar='<hex>',
+                            help='assigned device RF address, 10 hex chars (default random)')
+        parser.add_argument('--name', default='CU-TEST', help="device name (default CU-TEST)")
+        parser.add_argument('--repeat', type=int, default=5, metavar='<n>',
+                            help='retransmit the handshake N times so capture catches it (default 5)')
+        parser.add_argument('--bitrate', choices=['1m', '2m'], default='2m',
+                            help='PHY bitrate (default 2m)')
+        return parser
+
+    def on_exec(self, args):
+        import os
+        import cli_esb
+        if args.device_addr is not None:
+            try:
+                dev_addr = bytes.fromhex(args.device_addr)
+            except ValueError:
+                print(color_string((CR, "--device-addr must be hex")))
+                return
+            if len(dev_addr) != 5:
+                print(color_string((CR, "--device-addr must be 5 bytes (10 hex chars)")))
+                return
+        else:
+            dev_addr = os.urandom(5)
+
+        frames = cli_esb.unifying_build_pairing(
+            dev_addr, os.urandom(2), os.urandom(2), os.urandom(4), os.urandom(4),
+            device_name=args.name)
+        res = cli_esb.unifying_pairing_key(frames)
+        print(color_string((CG, f"pairing for device {dev_addr.hex().upper()} name {args.name!r}")))
+        print(color_string((CY, f"expected key: {res['device_key'].hex()}  "
+                                "(what `get-result --pairing` should recover)")))
+
+        pair_addr = cli_esb.UNIFYING_GLOBAL_PAIRING_ADDRESS          # BB:0A:DC:A5:75
+        resp = self.cmd.standalone_set_mode(StandaloneMode.ESB_INJECT)
+        if hasattr(resp, 'status') and resp.status != Status.SUCCESS:
+            print(color_string((CR, f"set-mode failed: status={resp.status}")))
+            return
+        flags = 0x01 if args.bitrate == '1m' else 0x00
+        cfg = struct.pack('<B5sBBB', 1, pair_addr, flags, 8, max(1, args.repeat) & 0xFF)
+        resp = self.cmd.standalone_set_config(StandaloneMode.ESB_INJECT, cfg)
+        if resp.status != Status.SUCCESS:
+            print(color_string((CR, f"set-config failed: status={resp.status}")))
+            return
+        resp = self.cmd.standalone_esb_inject_load(0)               # reset buffer
+        if resp.status != Status.SUCCESS:
+            print(color_string((CR, f"load reset failed: status={resp.status}")))
+            return
+        chunk = bytearray()
+        for f in frames:
+            chunk += bytes([len(f)]) + f
+        resp = self.cmd.standalone_esb_inject_load(1, bytes(chunk))
+        if resp.status != Status.SUCCESS:
+            print(color_string((CR, f"load failed: status={resp.status}")))
+            return
+        resp = self.cmd.standalone_trigger()
+        if resp.status == Status.SUCCESS:
+            print(color_string((CG, f"transmitting pairing on {pair_addr.hex().upper()} "
+                                    f"x{max(1, args.repeat)}. Capture on the other CU, then "
+                                    "`standalone esb-promisc get-result --pairing`.")))
+        else:
+            print(color_string((CR, f"trigger failed: status={resp.status}")))
+
+
 @standalone.command('disarm')
 class StandaloneDisarm(DeviceRequiredUnit):
     """

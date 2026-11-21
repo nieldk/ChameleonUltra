@@ -907,6 +907,30 @@ The ACK is a DISABLED-driven RX->TX turnaround (one ramp after each frame); if a
 bench shows enum not seeing the ACK, `--ack off` falls back to pure RX+decrypt
 (inject still fully testable, since it transmits blind). US keymap on-device.
 
+### `esb-pair` ,  test the key-recovery path  *(needs `STANDALONE_ESB_INJECT=1`)*
+
+The point of `esb-promisc` is to **recover the key** from a captured pairing, not
+to be handed one. `esb-pair` transmits a Unifying pairing handshake on the global
+pairing address so the other CU can capture it and derive the key with
+`get-result --pairing` -- and it prints the key the handshake derives to, so you
+can check the recovery:
+
+```
+# CU-B (this one):
+standalone esb-pair --name M510x
+# -> expected key: c51872df...
+# CU-A (capturer):
+standalone esb-promisc --strict on ; set-mode esb-promisc ; trigger
+standalone esb-promisc get-result --pairing     ->  key c51872df...   (matches)
+```
+
+The handshake is built host-side (`cli_esb.unifying_build_pairing`, the inverse
+of the `--pairing` parser) and transmitted through the `esb-inject` frame path,
+so no extra firmware mode is needed. Key material is random each run unless
+pinned with `--device-addr`. Once recovered, feed the key to `esb-inject` /
+`esb-prx` to run the rest of the chain against a key you grabbed rather than one
+you set.
+
 ### Host-side analysis (no mode needed to parse)
 
 Recover the key from a captured pairing, decrypt captured keystrokes, or build
