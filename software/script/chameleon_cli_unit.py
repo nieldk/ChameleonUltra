@@ -6500,6 +6500,89 @@ class StandaloneEsbInject(DeviceRequiredUnit):
             print(color_string((CR, f"trigger failed: status={resp.status}")))
 
 
+@standalone.command('esb-enum')
+class StandaloneEsbEnum(DeviceRequiredUnit):
+    """
+    Active enumeration of a Unifying dongle: for a 4-byte base address, ping
+    every prefix and use the ESB ACK as the detector. Prefixes the dongle
+    answers on are its paired device addresses -- discovered without the input
+    devices transmitting. Seed --base from a captured address (the first 4 of
+    the 5 address bytes shown by `standalone esb_promisc get-result`).
+
+    Example:
+        standalone esb-enum --base E2C7A1B9
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Enumerate a Unifying dongle by pinging prefixes (ACK = device)'
+        parser.add_argument('--base', required=True, metavar='<hex>',
+                            help='4-byte dongle base address (8 hex chars)')
+        parser.add_argument('--prefix-lo', type=lambda s: int(s, 0), default=0, metavar='<n>',
+                            help='first prefix to probe (default 0x00)')
+        parser.add_argument('--prefix-hi', type=lambda s: int(s, 0), default=0xFF, metavar='<n>',
+                            help='last prefix to probe, inclusive (default 0xFF)')
+        parser.add_argument('--bitrate', choices=['1m', '2m'], default='2m',
+                            help='PHY bitrate (default 2m)')
+        parser.add_argument('--timeout', type=int, default=60, metavar='<s>',
+                            help='seconds to wait for the sweep (default 60)')
+        return parser
+
+    def on_exec(self, args):
+        try:
+            base = bytes.fromhex(args.base)
+        except ValueError:
+            print(color_string((CR, "--base must be hex")))
+            return
+        if len(base) != 4:
+            print(color_string((CR, "--base must be 4 bytes (8 hex chars)")))
+            return
+        if not (0 <= args.prefix_lo <= args.prefix_hi <= 0xFF):
+            print(color_string((CR, "prefix range must be 0..255 and lo <= hi")))
+            return
+
+        resp = self.cmd.standalone_set_mode(StandaloneMode.ESB_ENUM)
+        if hasattr(resp, 'status') and resp.status != Status.SUCCESS:
+            print(color_string((CR, f"set-mode failed: status={resp.status}")))
+            return
+        flags = 0x01 if args.bitrate == '1m' else 0x00
+        cfg = struct.pack('<B4sBBB', 1, base, flags, args.prefix_lo, args.prefix_hi)
+        resp = self.cmd.standalone_set_config(StandaloneMode.ESB_ENUM, cfg)
+        if resp.status != Status.SUCCESS:
+            print(color_string((CR, f"set-config failed: status={resp.status}")))
+            return
+        resp = self.cmd.standalone_trigger()
+        if resp.status != Status.SUCCESS:
+            print(color_string((CR, f"trigger failed: status={resp.status}")))
+            return
+
+        print(color_string((CY, f"enumerating base {base.hex().upper()} "
+                                f"prefixes {args.prefix_lo:#04x}..{args.prefix_hi:#04x} ...")))
+        deadline = time.perf_counter() + args.timeout
+        data = b''
+        while time.perf_counter() < deadline:
+            time.sleep(0.5)
+            data = self.cmd.standalone_drain_result()
+            if data:
+                break
+        if not data or len(data) < 5:
+            print(color_string((CY, "no result yet (sweep still running or nothing answered). "
+                                    "Re-run `standalone get-result` to poll.")))
+            return
+        rbase, n = data[:4], data[4]
+        prefixes = list(data[5:5 + n])
+        if not prefixes:
+            print(color_string((CY, f"no prefixes answered on base {rbase.hex().upper()} "
+                                    "(dongle out of range, wrong base, or not Unifying)")))
+            return
+        print(color_string((CG, f"{n} device address(es) on dongle {rbase.hex().upper()}:")))
+        for p in prefixes:
+            tag = " (dongle)" if p == 0x00 else ""
+            print(color_string((CG, f"  {rbase.hex().upper()}{p:02X}{tag}")))
+        print(color_string((CY, "feed an address to `standalone esb-inject --addr <10hex>` "
+                                "or capture its pairing")))
+
+
 @standalone.command('disarm')
 class StandaloneDisarm(DeviceRequiredUnit):
     """
