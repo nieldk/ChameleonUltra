@@ -100,7 +100,10 @@ static void radio_cfg(void) {
 
 /* Ping base+prefix on ch, return true if an ACK (CRCOK) came back. */
 static bool ping_ack(uint8_t prefix, uint8_t ch) {
-    NRF_RADIO->PREFIX0   = addr_conv((uint32_t)prefix);
+    /* addr_conv()'s __REV() is only correct for a 4-byte value (BASE0); for
+     * a lone prefix byte it lands in bits[31:24] instead of AP0's bits[7:0].
+     * Shift back down -- see esb_radio.c for the full explanation. */
+    NRF_RADIO->PREFIX0   = addr_conv((uint32_t)prefix) >> 24;
     NRF_RADIO->FREQUENCY = ch;
     m_ping[0] = 1;                       /* LENGTH */
     m_ping[1] = (uint8_t)((prefix & 0x03u) << 1);   /* S1: PID, no_ack=0 */

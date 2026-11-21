@@ -109,7 +109,14 @@ static void radio_rx_begin(void) {
     /* addr is base-first [base0..3, prefix], the order a capture shows it. */
     NRF_RADIO->BASE0   = addr_conv(((uint32_t)m_addr[0] << 24) | ((uint32_t)m_addr[1] << 16) |
                                     ((uint32_t)m_addr[2] << 8)  |  (uint32_t)m_addr[3]);
-    NRF_RADIO->PREFIX0 = addr_conv((uint32_t)m_addr[4]);   /* pipe 0's prefix byte */
+    /* addr_conv() = bytewise bit-swap + __REV(); the __REV() byte-order
+     * reverse is only correct for a 4-byte value (BASE0). For a lone prefix
+     * byte it shoves the bit-reversed result into bits[31:24] (AP3's lane)
+     * instead of bits[7:0] (AP0, pipe 0 -- the only pipe RXADDRESSES enables
+     * below). Nordic's own nrf_esb.c uses bytewise_bit_swap() alone for
+     * PREFIX0/1, with no __REV(); shifting addr_conv()'s result back down
+     * 24 bits here has the same effect without a second helper. */
+    NRF_RADIO->PREFIX0 = addr_conv((uint32_t)m_addr[4]) >> 24;   /* pipe 0's prefix byte */
     NRF_RADIO->RXADDRESSES = RADIO_RXADDRESSES_ADDR0_Enabled << RADIO_RXADDRESSES_ADDR0_Pos;
 
     m_slot_ch            = m_channel;

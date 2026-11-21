@@ -82,7 +82,10 @@ static void radio_cfg_common(void) {
     NRF_RADIO->CRCINIT = 0xFFFFUL;
     NRF_RADIO->BASE0   = addr_conv(((uint32_t)m_addr[0] << 24) | ((uint32_t)m_addr[1] << 16) |
                                     ((uint32_t)m_addr[2] << 8)  |  (uint32_t)m_addr[3]);
-    NRF_RADIO->PREFIX0 = addr_conv((uint32_t)m_addr[4]);
+    /* addr_conv()'s __REV() is only correct for a 4-byte value (BASE0); for
+     * a lone prefix byte it lands in bits[31:24] instead of AP0's bits[7:0].
+     * Shift back down -- see esb_radio.c for the full explanation. */
+    NRF_RADIO->PREFIX0 = addr_conv((uint32_t)m_addr[4]) >> 24;
     NRF_RADIO->RXADDRESSES = RADIO_RXADDRESSES_ADDR0_Enabled << RADIO_RXADDRESSES_ADDR0_Pos;
     NRF_RADIO->TXADDRESS   = 0;
     NRF_RADIO->TXPOWER     = RADIO_TXPOWER_TXPOWER_Pos8dBm << RADIO_TXPOWER_TXPOWER_Pos;

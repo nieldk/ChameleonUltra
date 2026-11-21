@@ -111,7 +111,10 @@ static void radio_tx_config(void) {
     /* addr is base-first [base0..3, prefix], the order a capture shows it. */
     NRF_RADIO->BASE0   = addr_conv(((uint32_t)m_addr[0] << 24) | ((uint32_t)m_addr[1] << 16) |
                                     ((uint32_t)m_addr[2] << 8)  |  (uint32_t)m_addr[3]);
-    NRF_RADIO->PREFIX0 = addr_conv((uint32_t)m_addr[4]);
+    /* addr_conv()'s __REV() is only correct for a 4-byte value (BASE0); for
+     * a lone prefix byte it lands in bits[31:24] instead of AP0's bits[7:0].
+     * Shift back down -- see esb_radio.c for the full explanation. */
+    NRF_RADIO->PREFIX0 = addr_conv((uint32_t)m_addr[4]) >> 24;
     NRF_RADIO->TXADDRESS   = 0;                     /* transmit on pipe 0 */
     NRF_RADIO->TXPOWER     = RADIO_TXPOWER_TXPOWER_Pos8dBm << RADIO_TXPOWER_TXPOWER_Pos;
     NRF_RADIO->SHORTS      = RADIO_SHORTS_TXREADY_START_Msk | RADIO_SHORTS_END_DISABLE_Msk;
