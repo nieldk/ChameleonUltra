@@ -67,6 +67,7 @@ typedef enum {
     STANDALONE_MODE_ESB_INJECT  = 0x11,  /* transmit (inject) host-built ESB frames, e.g. Logitech Unifying keystrokes */
     STANDALONE_MODE_ESB_ENUM    = 0x12,  /* active enumeration of a Unifying dongle: ping prefixes, ACK = paired device */
     STANDALONE_MODE_ESB_PRX     = 0x13,  /* emulate a Unifying receiver: RX + decrypt keystrokes (test peer) */
+    STANDALONE_MODE_ZB_TX       = 0x14,  /* transmit a raw 802.15.4 frame (e.g. a NWK Leave to force re-pair) */
 
     STANDALONE_MODE__COUNT              /* sentinel - keep last */
 } standalone_mode_t;
@@ -196,6 +197,7 @@ extern const standalone_mode_iface_t mode_esb_promisc_iface;    /* brute-force p
 extern const standalone_mode_iface_t mode_esb_inject_iface;     /* transmit host-built ESB frames (Unifying keystrokes) */
 extern const standalone_mode_iface_t mode_esb_enum_iface;       /* active enumeration of a Unifying dongle */
 extern const standalone_mode_iface_t mode_esb_prx_iface;        /* emulate a Unifying receiver (RX + decrypt) */
+extern const standalone_mode_iface_t mode_zb_tx_iface;          /* transmit a raw 802.15.4 frame (NWK Leave, etc.) */
 
 /* -------------------------------------------------------------------------
  * Public API

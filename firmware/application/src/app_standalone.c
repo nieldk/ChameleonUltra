@@ -72,6 +72,9 @@
 #ifndef CONFIG_STANDALONE_ESB_PRX
 #define CONFIG_STANDALONE_ESB_PRX  0
 #endif
+#ifndef CONFIG_STANDALONE_ZB_TX
+#define CONFIG_STANDALONE_ZB_TX  0
+#endif
 #ifndef CONFIG_STANDALONE_ESB_PROMISC
 #define CONFIG_STANDALONE_ESB_PROMISC  0
 #endif
@@ -186,6 +189,9 @@ static const standalone_mode_iface_t *const m_modes[] = {
 #endif
 #if CONFIG_STANDALONE_ESB_PRX
     &mode_esb_prx_iface,
+#endif
+#if CONFIG_STANDALONE_ZB_TX
+    &mode_zb_tx_iface,
 #endif
 };
 

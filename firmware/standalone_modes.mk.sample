@@ -32,6 +32,7 @@
 # STANDALONE_ESB_ENUM        ?= 1   # active Unifying dongle enumeration (ping prefixes, ACK = paired device, experimental)
 # STANDALONE_ESB_INJECT      ?= 1   # transmit host-built ESB frames, e.g. Unifying keystroke injection (experimental)
 # STANDALONE_ESB_PRX         ?= 1   # emulate a Unifying receiver (RX + decrypt), two-CU test peer (experimental)
+# STANDALONE_ZB_TX           ?= 1   # transmit a raw 802.15.4 frame, e.g. a NWK Leave to force Zigbee re-pair (experimental)
 # STANDALONE_SPECTRUM        ?= 1   # one-shot 2.4 GHz ISM energy-detect sweep via SoftDevice timeslots
 # STANDALONE_USB_NET         ?= 1   # USB Ethernet + CLI over TCP; swaps USB to TinyUSB + lwIP (run ./fetch_usbnet_deps.sh first, ~10 KB RAM)
 

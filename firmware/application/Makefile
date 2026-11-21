@@ -38,6 +38,7 @@ STANDALONE_ESB_PROMISC     ?= 0   # disabled by default (brute-force partial-add
 STANDALONE_ESB_INJECT      ?= 0   # disabled by default (transmit host-built ESB frames, e.g. Unifying keystrokes -- experimental)
 STANDALONE_ESB_ENUM        ?= 0   # disabled by default (active enumeration of a Unifying dongle via ESB ACK -- experimental)
 STANDALONE_ESB_PRX         ?= 0   # disabled by default (emulate a Unifying receiver: RX + decrypt, two-CU test peer -- experimental)
+STANDALONE_ZB_TX           ?= 0   # disabled by default (transmit a raw 802.15.4 frame, e.g. a NWK Leave to force re-pair -- experimental)
 LF_IA_DEBUG                ?= 0   # disabled by default (interactive LF engine's trace ring + envelope capture, ~10KB RAM; bring-up only)
 
 CFLAGS += -DCONFIG_STANDALONE_AUTHTRACE=$(STANDALONE_AUTHTRACE)
@@ -59,6 +60,7 @@ CFLAGS += -DCONFIG_STANDALONE_ESB_PROMISC=$(STANDALONE_ESB_PROMISC)
 CFLAGS += -DCONFIG_STANDALONE_ESB_INJECT=$(STANDALONE_ESB_INJECT)
 CFLAGS += -DCONFIG_STANDALONE_ESB_ENUM=$(STANDALONE_ESB_ENUM)
 CFLAGS += -DCONFIG_STANDALONE_ESB_PRX=$(STANDALONE_ESB_PRX)
+CFLAGS += -DCONFIG_STANDALONE_ZB_TX=$(STANDALONE_ZB_TX)
 CFLAGS += -DCONFIG_GDB_GATEWAY_EXEC=$(GDB_GATEWAY_EXEC)
 CFLAGS += -DCONFIG_GDB_GATEWAY_PKT=$(GDB_GATEWAY_PKT)
 CFLAGS += -DLF_IA_DEBUG=$(LF_IA_DEBUG)
@@ -300,6 +302,11 @@ endif
 ifeq ($(strip $(STANDALONE_GDB_GATEWAY)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_gdb_gateway.c
 SRC_FILES += $(PROJ_DIR)/utils/gdb_rsp.c
+endif
+ifeq ($(strip $(STANDALONE_ZB_TX)),1)
+SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_zb_tx.c
+SRC_FILES += $(PROJ_DIR)/zigbee/zb_tx_radio.c
+INC_FOLDERS += $(PROJ_DIR)/zigbee
 endif
 ifeq ($(strip $(STANDALONE_ZIGBEE)),1)
 SRC_FILES += $(PROJ_DIR)/standalone_modes/mode_zigbee.c

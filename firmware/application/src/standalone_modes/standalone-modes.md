@@ -652,6 +652,30 @@ locks a single channel (the Nth busiest, default 1 = busiest); `--lock-top N` in
 builds a `--channels` hop set from the N busiest, trading some dwell time per channel
 for covering more than one.
 
+### `zb-tx` / `zb-leave` ,  force a re-pair to grab the key  *(needs `STANDALONE_ZB_TX=1`)*
+
+`zb-tx` transmits one raw 802.15.4 frame (built host-side) on a Zigbee channel, N
+times -- the TX counterpart of the passive `zigbee` mode. Its first use is
+`standalone zb-leave`, which builds a **NWK-secured Leave** and transmits it to
+force a device to re-pair; capturing the rejoin then yields the network key
+(cli_zigbee already recovers it from the join's APS Transport-Key under the
+default/known TC link key).
+
+```
+# recover the network key once (passive), then force a re-pair:
+standalone zb-leave --key <32hex nwk key> --target 1234 --channel 15 \
+    --dst-pan 1463 --src-ieee 00124b0001020304 --counter 0x2000
+# capture the rejoin on another CU in `zigbee` mode -> Transport-Key -> key
+```
+
+The Leave is CCM*-secured with the network key (the inverse of cli_zigbee's
+`nwk_decrypt`), so it works on secured networks -- but the target may validate
+the spoofed source short/IEEE and the NWK frame counter, so `--counter` must be
+ahead of the device's last-seen value and the source must look trusted, or the
+stack drops it. No CSMA/CCA back-off (straight inject). Chicken-and-egg note: the
+Leave needs the network key, which you get from one passively-captured join
+first. Firmware UNBUILT here; the 802.15.4 TX timing is the bring-up variable.
+
 If BLE activity leaves no gap for a slot, the SoftDevice cancels or blocks the request (`canceled`/`blocked`
 rise). Requests time out after 200 ms and are re-issued from the 20 ms tick. The slot length is halved on each cancel or block down to 5 ms (`slot_us` in `status`) and grown again after
 every 16 granted slots. A NORMAL-priority timeslot yields to connection events.
