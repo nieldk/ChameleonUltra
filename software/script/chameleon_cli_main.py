@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
+import random
 import shutil
 import sys
+import time
 import traceback
 import chameleon_com
 import colorama
@@ -63,8 +65,17 @@ TAGLINE = "P H R E A K B Y T E   E D I T I O N"
 _TEXT_COL = 9
 _TEXT_ROW = 6
 
+# Glyph pool for the matrix-style reveal below -- half-width katakana (the
+# classic "Matrix rain" look) plus alnum/punctuation so it still reads fine
+# on a console whose font is missing the katakana glyphs.
+_MATRIX_GLYPHS = "日ﾊﾉﾎﾓﾖﾄｲｸｺｼﾇﾔ" + "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ+-*/<>|=!?"
 
-def _compose_banner(badge):
+_BANNER_COLOR_MAP = {"G": CG, "Y": CY}
+
+
+def _banner_grid(badge):
+    """Raw (width-padded, not rstripped) char/color grid for the banner --
+    shared by the static print and the matrix-reveal animation below."""
     art_w = max(len(l) for l in CHAMELEON_ART)
     txt_w = max(len(l) for l in BLOCK_TEXT)
     badge_row = _TEXT_ROW + len(BLOCK_TEXT)
@@ -94,7 +105,12 @@ def _compose_banner(badge):
     tagline_col = max(0, (w - len(TAGLINE)) // 2)
     paste([TAGLINE], tag_row, tagline_col, "Y")
 
-    return [("".join(row[: len(row)]).rstrip(), col_row) for row, col_row in zip(chars, colors)]
+    return chars, colors, h, w
+
+
+def _compose_banner(badge):
+    chars, colors, h, w = _banner_grid(badge)
+    return [("".join(row).rstrip(), col_row) for row, col_row in zip(chars, colors)]
 
 
 def _color_banner(rows):
@@ -110,9 +126,83 @@ def _color_banner(rows):
                 cur = colors[i]
         if text:
             segments.append((cur, text[start:]))
-        color_map = {"G": CG, "Y": CY}
-        lines.append(color_string(*[(color_map[c], s) for c, s in segments]) if segments else "")
+        lines.append(
+            color_string(*[(_BANNER_COLOR_MAP[c], s) for c, s in segments]) if segments else ""
+        )
     return "\n".join(lines)
+
+
+def _render_banner_frame(chars, colors, h, w, front, band):
+    """One animation frame: columns left of front-band are the real glyph in
+    its real color, columns inside the band flicker a random matrix glyph in
+    green, columns not yet reached are blank. Cells that are blank in the
+    final banner stay blank the whole time -- only the art/text itself
+    flickers, not the background."""
+    rows = []
+    for r in range(h):
+        segments = []
+        start = 0
+        cur = None
+        line = []
+        for c in range(w):
+            ch = chars[r][c]
+            if ch == " ":
+                disp, col = " ", cur if cur is not None else "G"
+            elif c < front - band:
+                disp, col = ch, colors[r][c]
+            elif c < front:
+                disp, col = random.choice(_MATRIX_GLYPHS), "G"
+            else:
+                disp, col = " ", cur if cur is not None else "G"
+            line.append(disp)
+            if col != cur:
+                if line[:-1]:
+                    segments.append((cur, "".join(line[start:-1])))
+                start = len(line) - 1
+                cur = col
+        if line:
+            segments.append((cur, "".join(line[start:])))
+        rows.append(
+            color_string(*[(_BANNER_COLOR_MAP[c], s) for c, s in segments]) if segments else ""
+        )
+    return rows
+
+
+def _animate_banner_reveal(badge):
+    """Matrix-style cascading build-up for the startup banner: a scrambled
+    glyph band sweeps left to right and settles into the real banner behind
+    it. Falls back to the plain static banner when stdout isn't a real
+    terminal (piped output, logs, CI) since cursor-repositioning escapes
+    would just corrupt that output."""
+    chars, colors, h, w = _banner_grid(badge)
+
+    # Cursor-up-and-overwrite only works if every line fits on one terminal
+    # row. A redirected/non-tty stream, or a terminal narrower than the
+    # banner (lines would wrap and the overwrite would leave garbage above),
+    # both fall back to the plain static banner.
+    if not sys.stdout.isatty() or shutil.get_terminal_size().columns < w:
+        print(_color_banner(_compose_banner(badge)))
+        return
+
+    band = 6
+    step_cols = 1
+    frame_delay = 0.012
+
+    sys.stdout.write("\n" * h)
+    sys.stdout.flush()
+    front = 0
+    while front < w + band:
+        front += step_cols
+        frame = _render_banner_frame(chars, colors, h, w, front, band)
+        sys.stdout.write(f"\x1b[{h}A")
+        sys.stdout.write("\n".join(frame) + "\n")
+        sys.stdout.flush()
+        time.sleep(frame_delay)
+
+    # Final frame: the exact static banner, so the settled result (and
+    # anything that scrapes it) matches print_banner()'s non-animated output.
+    sys.stdout.write(f"\x1b[{h}A")
+    print(_color_banner(_compose_banner(badge)))
 
 
 ICEMAN = r"""
@@ -185,7 +275,7 @@ class ChameleonCLI:
         except Exception:
             pass
         badge = LITE_BADGE if model == 1 else ULTRA_BADGE
-        print(_color_banner(_compose_banner(badge)))
+        _animate_banner_reveal(badge)
 
     def exec_cmd(self, cmd_str):
         if cmd_str == "":
