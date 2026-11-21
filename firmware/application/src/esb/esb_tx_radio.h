@@ -35,8 +35,8 @@ typedef struct {
  * around to read that ACK (blind sweep), so delivery is by redundancy, not
  * confirmation. ACK-confirmed stop is a documented follow-up.
  *
- * addr[0] is the prefix byte, addr[1..4] the base, same convention as
- * esb_radio_start. frames is `count` records of `lens[i]` bytes each (the raw
+ * addr is base-first [base0..3, prefix], same convention as esb_radio_start
+ * and a promiscuous capture. frames is `count` records of `lens[i]` bytes each (the raw
  * ESB payload, no length/CRC -- the radio frames and CRCs them). channels is
  * `n_ch` MHz offsets from 2400. per_frame_gap_ms spaces successive logical
  * frames (8 ms for Unifying; shorter drops USB HID reports on some hosts).

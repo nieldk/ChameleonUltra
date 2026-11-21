@@ -30,9 +30,9 @@ typedef struct {
  * different packet framing (Nrf_1Mbit/Nrf_2Mbit PHY, not 802.15.4). This is
  * RX only; nothing is transmitted.
  *
- * addr[0] is the pipe prefix byte, addr[1..4] the base address, in the
- * order these addresses are normally written/exchanged (e.g. a Logitech
- * Unifying receiver's own address convention -- see mode_esb.c). bitrate_2mbit
+ * addr is base-first: addr[0..3] the base, addr[4] the prefix byte -- the
+ * order a promiscuous capture shows the 5 address bytes, and the order every
+ * ESB mode (esb, esb-enum, esb-inject) takes an address in. bitrate_2mbit
  * selects Nrf_2Mbit (true) or Nrf_1Mbit (false); which one a given peripheral
  * actually uses isn't something this code can detect, only the caller/config.
  *

@@ -6416,7 +6416,7 @@ class StandaloneEsbInject(DeviceRequiredUnit):
         parser = ArgumentParserNoExit()
         parser.description = 'Build and inject Unifying keystrokes for a string'
         parser.add_argument('--addr', required=True, metavar='<hex>',
-                            help='target 10-hex-char address, prefix byte first')
+                            help='target 10-hex-char address, base-first as a capture shows it')
         parser.add_argument('--key', required=True, metavar='<hex>',
                             help='16-byte device key (hex)')
         parser.add_argument('--text', required=True, metavar='<str>', help='text to type')
@@ -7301,7 +7301,7 @@ class StandaloneConfig(DeviceRequiredUnit):
         parser.add_argument('--dwell', type=int, default=None,
                             help='[zigbee/esb] hop dwell per channel in ms (50-60000, default 500)')
         parser.add_argument('--address', default=None,
-                            help='[esb] 10-hex-char known address, prefix byte first '
+                            help='[esb] 10-hex-char known address, base-first as a capture shows it '
                                  '(e.g. a paired Logitech Unifying receiver\'s address)')
         parser.add_argument('--bitrate', choices=['1m', '2m'], default=None,
                             help='[esb] PHY bitrate (default 2m)')

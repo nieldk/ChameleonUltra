@@ -60,7 +60,7 @@ static volatile bool    m_run;
 static volatile bool    m_open;
 static volatile uint8_t m_channel = 2;          /* wanted, 0..100 MHz offset from 2400 */
 static uint8_t          m_slot_ch = 2;          /* in use this slot */
-static uint8_t          m_addr[5];              /* addr[0]=prefix byte, addr[1..4]=base */
+static uint8_t          m_addr[5];              /* base-first: addr[0..3]=base, addr[4]=prefix */
 static bool              m_2mbit = true;
 static uint8_t           m_pkt[1 + ESB_MAX_PAYLOAD];   /* [LENGTH byte][payload] */
 static esb_frame_t       m_ring[RING_SZ];
@@ -106,9 +106,10 @@ static void radio_rx_begin(void) {
     NRF_RADIO->CRCPOLY = 0x11021UL;
     NRF_RADIO->CRCINIT = 0xFFFFUL;
 
-    NRF_RADIO->BASE0   = addr_conv(((uint32_t)m_addr[1] << 24) | ((uint32_t)m_addr[2] << 16) |
-                                    ((uint32_t)m_addr[3] << 8)  |  (uint32_t)m_addr[4]);
-    NRF_RADIO->PREFIX0 = addr_conv((uint32_t)m_addr[0]);   /* pipe 0's prefix byte, low byte of the word */
+    /* addr is base-first [base0..3, prefix], the order a capture shows it. */
+    NRF_RADIO->BASE0   = addr_conv(((uint32_t)m_addr[0] << 24) | ((uint32_t)m_addr[1] << 16) |
+                                    ((uint32_t)m_addr[2] << 8)  |  (uint32_t)m_addr[3]);
+    NRF_RADIO->PREFIX0 = addr_conv((uint32_t)m_addr[4]);   /* pipe 0's prefix byte */
     NRF_RADIO->RXADDRESSES = RADIO_RXADDRESSES_ADDR0_Enabled << RADIO_RXADDRESSES_ADDR0_Pos;
 
     m_slot_ch            = m_channel;
