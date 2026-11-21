@@ -288,6 +288,7 @@
 #define DATA_CMD_STANDALONE_GET_RESULT_FOR      (7012)
 #define DATA_CMD_STANDALONE_CLEAR_RESULT_FOR    (7013)
 #define DATA_CMD_STANDALONE_GET_STATUS          (7014)
+#define DATA_CMD_STANDALONE_ESB_INJECT_LOAD     (7015)  /* host -> device: stream built ESB frames into the inject mode's RAM */
 
 #define DATA_CMD_EM410X_SET_EMU_ID              (5000)
 #define DATA_CMD_EM410X_GET_EMU_ID              (5001)

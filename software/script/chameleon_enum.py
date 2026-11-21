@@ -245,6 +245,7 @@ class Command(enum.IntEnum):
     STANDALONE_GET_RESULT_FOR   = 7012
     STANDALONE_CLEAR_RESULT_FOR = 7013
     STANDALONE_GET_STATUS       = 7014
+    STANDALONE_ESB_INJECT_LOAD  = 7015
 
     EM410X_SET_EMU_ID = 5000
     EM410X_GET_EMU_ID = 5001
@@ -912,6 +913,7 @@ class StandaloneMode(enum.IntEnum):
     SPECTRUM    = 0x0E   # one-shot 2.4 GHz ISM energy-detect sweep
     ESB         = 0x0F   # passive ESB-framed RX, known address (e.g. Logitech Unifying)
     ESB_PROMISC = 0x10   # brute-force partial-address ESB sniff, unknown address (experimental)
+    ESB_INJECT  = 0x11   # transmit host-built ESB frames, e.g. Logitech Unifying keystrokes (experimental)
 
     @classmethod
     def from_name(cls, name: str) -> "StandaloneMode":

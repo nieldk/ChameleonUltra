@@ -3073,6 +3073,16 @@ class ChameleonCMD:
         return self.device.send_cmd_sync(Command.STANDALONE_TRIGGER, b'',
                                          timeout=10)
 
+    def standalone_esb_inject_load(self, op, framedata=b''):
+        """Stream host-built ESB frames into the esb-inject mode (CMD 7015).
+
+        op: 0 resets the mode's frame buffer, 1 appends. framedata is a
+        concatenation of length-prefixed records [u8 len][u8 payload[len]].
+        Only valid when esb-inject is the selected mode.
+        """
+        payload = bytes([op & 0xFF]) + bytes(framedata)
+        return self.device.send_cmd_sync(Command.STANDALONE_ESB_INJECT_LOAD, payload)
+
     def standalone_disarm(self):
         """Disarm the currently armed standalone mode, triggering on_exit
         (saves result data to FDS)."""
