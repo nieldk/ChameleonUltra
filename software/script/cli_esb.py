@@ -71,21 +71,20 @@ def summarize(recs) -> str:
     return f"{len(recs)} frame(s): {parts}"
 
 
-# --- esb-promisc: brute-force partial-address captures -------------------
+# --- esb-promisc: unknown-address captures --------------------------------
 #
 # Every record here is a CANDIDATE, not a confirmed frame -- the firmware
 # runs with CRC off (there's nothing to validate an unknown address
-# against), so isolated hits on noise are expected. See
-# esb_promisc_radio.h/mode_esb_promisc.c for exactly what's grounded
-# (the BALEN-shrink partial-match technique, confirmed on this RADIO
-# family for BLE) vs. unverified (that it ports to ESB/Unifying, and the
-# exact byte order of the leaked remainder). This module does NOT attempt
-# address reconstruction -- that needs a real capture to pin the byte
-# order down first; it only groups and dumps candidates so that can be
-# done by hand against a capture with a partially-known address.
+# against), so isolated hits on noise are expected. The radio config is
+# LOGITacker's BALEN=1 illegal-match scheme on all 8 pipes (see
+# esb_promisc_radio.h); prefix_guess/base_guess below are just which pipe
+# matched and that pipe's fixed prefix byte, not address bytes -- the real
+# address is reconstructed from the captured bits themselves, below.
 
 def parse_promisc_records(blob: bytes):
-    """Split the firmware log into (channel, prefix_guess, base_guess, raw) tuples."""
+    """Split the firmware log into (channel, prefix_guess, base_guess, raw) tuples.
+    prefix_guess is which of the 8 fixed pipes matched (0..7), base_guess is
+    that pipe's fixed prefix byte -- log/debug fields, not address bytes."""
     out, i = [], 0
     while i + 4 <= len(blob):
         ch, prefix, base, ln = blob[i], blob[i + 1], blob[i + 2], blob[i + 3]
@@ -246,8 +245,8 @@ def esb_crc_candidates(prefix: int, base: int, raw: bytes, addr_bytes: int = 5,
     and bit-reversed (lsb). For each, slides the 2-byte CRC boundary over
     payload lengths and keeps the ones where CRC-16 over the leading bits
     equals the next 16. Shortest payload first; the 'bitorder' tag pins the
-    real layout once a frame validates. (prefix/base are the preamble marker,
-    not address bytes, so they are not used in the reconstruction.)"""
+    real layout once a frame validates. (prefix/base are which fixed pipe
+    matched, not address bytes, so they are not used in the reconstruction.)"""
     out = []
     hdr = addr_bytes * 8 + 9          # address + 9-bit PCF, before payload
     raw = bytes(raw)

@@ -1,8 +1,18 @@
 /*
- * esb_promisc_radio.c - brute-force partial-address ESB/proprietary-PHY
- * sniffer for an unknown address. See esb_promisc_radio.h for what's
- * grounded vs. unverified here; this is a genuinely different radio config
- * from esb_radio.c's known-address path, not a variant of it.
+ * esb_promisc_radio.c - unknown-address ESB/proprietary-PHY sniffer. See
+ * esb_promisc_radio.h for what's grounded vs. unverified here; this is a
+ * genuinely different radio config from esb_radio.c's known-address path,
+ * not a variant of it.
+ *
+ * BALEN=0 (match the preamble only) is not a real mode: the nRF52 datasheet
+ * documents BALEN as 2..4 only, and address matching can't be bypassed on
+ * this RADIO peripheral (confirmed: nothing was ever captured). What does
+ * work on this exact RADIO family is LOGITacker's (mame82/RoganDawes)
+ * nrf_esb_illegalmod.c: BALEN=1 (one base + one prefix byte, still out of
+ * spec but functional on real silicon) matched on all 8 logical pipes at
+ * once, each pipe a different fixed base/prefix so the 16-bit match space
+ * is spread widely instead of relying on one guess. That's what this file
+ * now does; constants below are theirs, ported as-is.
  *
  * Timeslot/session plumbing is identical to esb_radio.c/zb_radio.c; only
  * radio_rx_begin() differs (PCNF0=0 no length field, BALEN=1, CRC off) and
@@ -23,22 +33,32 @@
 #define STOP_GUARD_US  2000u
 #define RING_SZ        16u
 
-/* Preamble-sync capture: every ESB packet starts with a 1-byte preamble
- * (0xAA if the first address bit is 0, else 0x55 -- nRF52840 PS, RADIO), so
- * matching on that preamble instead of guessing the address catches every
- * on-air frame. BALEN below the legal 2..4 shortens the match to the
- * preamble; 0 = prefix only (the 8 preamble bits). The captured bytes then
- * begin at the real address, which the host CRC-checks. Guessing the address
- * one value per 30 ms slot (the old path) armed the right bytes for 30 ms out
- * of a multi-minute sweep and effectively never caught a real device. */
-#define PROMISC_BALEN  0u          /* 0 = match the preamble byte only; try 1 if silent */
+#define PROMISC_BALEN  1u   /* out of the documented 2..4 range; proven functional by LOGITacker on this RADIO family */
+
+/* bit-reverse one byte: nRF52 address bytes are matched bit-reversed
+ * relative to normal byte order (addr_conv()/bytewise_bit_swap() in
+ * esb_radio.c do the same thing for the known-address path). */
+static uint8_t rbit8(uint8_t b) {
+    b = (uint8_t)((b & 0xF0u) >> 4 | (b & 0x0Fu) << 4);
+    b = (uint8_t)((b & 0xCCu) >> 2 | (b & 0x33u) << 2);
+    b = (uint8_t)((b & 0xAAu) >> 1 | (b & 0x55u) << 1);
+    return b;
+}
+
+/* LOGITacker's promiscuous BASE/PREFIX constants (nrf_esb_illegalmod.c),
+ * spreading the 2-byte illegal match across all 8 pipes. Each base array is
+ * one byte repeated 4 times, so BASE0/BASE1 reduce to that byte's
+ * bit-reversed value replicated in every lane -- byte-order reversal is a
+ * no-op on 4 identical bytes. */
+#define PROMISC_BASE0_BYTE  0xA8u
+#define PROMISC_BASE1_BYTE  0xAAu
+static const uint8_t PROMISC_PREFIX[8] = {0xAA, 0x1F, 0x9F, 0xA8, 0xAF, 0xA9, 0x8F, 0xAA};
 
 static nrf_radio_request_t                      m_req;
 static nrf_radio_signal_callback_return_param_t m_ret;
 static volatile bool    m_run;
 static volatile bool    m_open;
 static volatile uint8_t  m_channel;            /* read at each slot begin; set_channel takes effect next slot */
-static uint8_t           m_preamble;        /* preamble byte matched this session: 0xAA or 0x55 */
 static uint8_t           m_pkt[ESB_PROMISC_CAP_LEN];
 static esb_promisc_frame_t m_ring[RING_SZ];
 static volatile uint8_t  m_head, m_tail;
@@ -58,24 +78,29 @@ static void radio_rx_begin(void) {
     NRF_RADIO->POWER = 1;
     NRF_RADIO->MODE  = RADIO_MODE_MODE_Nrf_2Mbit << RADIO_MODE_MODE_Pos;
 
-    /* No length field at all -- PCNF0=0, matching POC||GTFO #17's
-     * Micro:bit BLE-sniffer config. Everything after the matched address
-     * bytes is raw, fixed-length capture, not a parsed ESB payload. */
+    /* No length field at all -- PCNF0=0, same as LOGITacker's illegalmod
+     * config. Everything after the matched address bytes is raw,
+     * fixed-length capture, not a parsed ESB payload. */
     NRF_RADIO->PCNF0 = 0;
     NRF_RADIO->PCNF1 = (RADIO_PCNF1_WHITEEN_Disabled << RADIO_PCNF1_WHITEEN_Pos) |
                        (RADIO_PCNF1_ENDIAN_Big        << RADIO_PCNF1_ENDIAN_Pos) |
-                       (PROMISC_BALEN                 << RADIO_PCNF1_BALEN_Pos) |   /* match the preamble, not an address */
+                       (PROMISC_BALEN                 << RADIO_PCNF1_BALEN_Pos) |   /* 1 base + 1 prefix byte, illegal but matched */
                        (ESB_PROMISC_CAP_LEN           << RADIO_PCNF1_STATLEN_Pos) |
                        (ESB_PROMISC_CAP_LEN           << RADIO_PCNF1_MAXLEN_Pos);
     NRF_RADIO->CRCCNF = RADIO_CRCCNF_LEN_Disabled << RADIO_CRCCNF_LEN_Pos;   /* no way to validate an unknown frame */
 
-    /* Match on the preamble byte (0xAA/0x55) so every packet syncs. An
-     * alternating byte stays alternating whatever the on-air bit order, so no
-     * addr_conv is needed; only the phase matters, and that is the runtime
-     * polarity. BASE0 fills all four bytes in case PROMISC_BALEN is raised. */
-    NRF_RADIO->BASE0   = (uint32_t)m_preamble * 0x01010101UL;
-    NRF_RADIO->PREFIX0 = m_preamble;
-    NRF_RADIO->RXADDRESSES = RADIO_RXADDRESSES_ADDR0_Enabled << RADIO_RXADDRESSES_ADDR0_Pos;
+    /* All 8 pipes live at once, each with LOGITacker's fixed base/prefix. */
+    NRF_RADIO->BASE0 = (uint32_t)rbit8(PROMISC_BASE0_BYTE) * 0x01010101UL;
+    NRF_RADIO->BASE1 = (uint32_t)rbit8(PROMISC_BASE1_BYTE) * 0x01010101UL;
+    NRF_RADIO->PREFIX0 = (uint32_t)rbit8(PROMISC_PREFIX[0])
+                       | ((uint32_t)rbit8(PROMISC_PREFIX[1]) << 8)
+                       | ((uint32_t)rbit8(PROMISC_PREFIX[2]) << 16)
+                       | ((uint32_t)rbit8(PROMISC_PREFIX[3]) << 24);
+    NRF_RADIO->PREFIX1 = (uint32_t)rbit8(PROMISC_PREFIX[4])
+                       | ((uint32_t)rbit8(PROMISC_PREFIX[5]) << 8)
+                       | ((uint32_t)rbit8(PROMISC_PREFIX[6]) << 16)
+                       | ((uint32_t)rbit8(PROMISC_PREFIX[7]) << 24);
+    NRF_RADIO->RXADDRESSES = 0xFFu;   /* pipes 0..7 */
 
     NRF_RADIO->FREQUENCY = m_channel;
     NRF_RADIO->PACKETPTR = (uint32_t)m_pkt;
@@ -116,14 +141,15 @@ static void radio_off(void) {
 
 static void radio_hit(void) {
     NRF_RADIO->EVENTS_END = 0;
+    uint8_t pipe = (uint8_t)(NRF_RADIO->RXMATCH & 0x7u);   /* which of the 8 pipes matched */
     uint8_t next = (uint8_t)((m_head + 1u) % RING_SZ);
     if (next == m_tail) {
         m_st.dropped++;
     } else {
         esb_promisc_frame_t *f = &m_ring[m_head];
         f->channel      = m_channel;
-        f->prefix_guess  = m_preamble;   /* preamble matched; raw[] begins at the real address */
-        f->base_guess    = 0;
+        f->prefix_guess = pipe;                   /* matched pipe 0..7, not a preamble byte anymore */
+        f->base_guess   = PROMISC_PREFIX[pipe];    /* that pipe's fixed prefix byte, for the log */
         memcpy(f->raw, m_pkt, ESB_PROMISC_CAP_LEN);
         m_head = next;
         m_st.hits++;
@@ -194,10 +220,11 @@ bool esb_promisc_radio_start(uint8_t channel, uint8_t prefix_lo, uint8_t prefix_
     m_slot_us = SLOT_US;
     m_head = m_tail = 0;
     m_channel   = channel;
-    /* prefix_lo is repurposed as a polarity selector for preamble-sync:
-     * 0 matches the 0xAA preamble, non-zero the 0x55 one. prefix_hi is kept
-     * in the API for config compatibility but no longer brute-forced. */
-    m_preamble  = (prefix_lo != 0) ? 0x55u : 0xAAu;
+    /* prefix_lo/prefix_hi are kept in the API for config-blob compatibility
+     * but unused: the fixed 8-pipe BASE/PREFIX scheme above matches all of
+     * them at once, there's nothing left to select or brute-force. */
+    (void)prefix_lo;
+    (void)prefix_hi;
     m_run = true;
     if (sd_radio_session_open(radio_cb) != NRF_SUCCESS) {
         m_run = false;

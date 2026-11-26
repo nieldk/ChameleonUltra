@@ -10,8 +10,8 @@
 
 typedef struct {
     uint8_t channel;
-    uint8_t prefix_guess;             /* preamble byte matched (0xAA/0x55), not an address guess */
-    uint8_t base_guess;                /* unused in preamble-sync (0); kept for log/record compat */
+    uint8_t prefix_guess;              /* which of the 8 fixed pipes matched (0..7) */
+    uint8_t base_guess;                 /* that pipe's fixed prefix byte, for the log */
     uint8_t raw[ESB_PROMISC_CAP_LEN];  /* captured from the real address onward: addr + PCF + payload + CRC */
 } esb_promisc_frame_t;
 
@@ -26,23 +26,25 @@ typedef struct {
     uint32_t slot_us;
 } esb_promisc_stats_t;
 
-/* Preamble-sync ESB/proprietary-PHY sniffer for an UNKNOWN address. Every ESB
- * packet begins with a 1-byte preamble (0xAA or 0x55 depending on the first
- * address bit -- nRF52840 PS, RADIO), so instead of guessing the address we
- * match on that preamble: PCNF0=0 (no length field), CRC off, and PCNF1 BALEN
- * below the legal 2..4 so the match is just the preamble byte. The radio then
- * syncs on EVERY on-air frame and the real address + PCF + payload + CRC land
- * in the fixed-length capture, starting at the address. The host validates the
- * 2-byte ESB CRC-16 over the capture to separate real frames from the many
- * preamble matches on noise (see cli_esb.esb_crc_candidates). The old path
- * guessed PREFIX + 1 BASE byte one value per slot; with a 65536-value space and
- * ~30 ms per guess the right bytes were armed for 30 ms out of a multi-minute
- * sweep, so a real device was effectively never caught.
+/* ESB/proprietary-PHY sniffer for an UNKNOWN address, ported from LOGITacker's
+ * (mame82/RoganDawes) nrf_esb_illegalmod.c -- the proven-working design on
+ * this exact RADIO family, not an original scheme. BALEN=1 (one base + one
+ * prefix byte matched, still below the documented 2..4 range but functional
+ * on real silicon) is matched on all 8 logical pipes at once, each pipe a
+ * different fixed base/prefix, so the illegal 2-byte match space is spread
+ * across 8 guesses simultaneously instead of relying on one. CRC is off (no
+ * way to validate an unknown frame on-device); PCF + payload + CRC land in the
+ * fixed-length capture, starting at the matched address. The host validates
+ * the 2-byte ESB CRC-16 over the capture to separate real frames from the
+ * inevitable noise matches a 2-byte illegal address produces (see
+ * cli_esb.esb_crc_candidates). An earlier version of this file tried BALEN=0
+ * on a single pipe, matching only the preamble byte; that isn't a mode the
+ * nRF52 RADIO documents or supports, and it never caught a real device.
  *
- * prefix_lo selects the preamble polarity (0 -> 0xAA, non-zero -> 0x55), since a
- * real link uses one phase; flip it if a channel with known traffic stays
- * silent. prefix_hi is kept in the signature for config-blob compatibility but
- * is no longer a guess range. channel 0..100 is the direct 2400+N MHz offset.
+ * prefix_lo/prefix_hi are kept in the signature for config-blob compatibility
+ * but are unused -- the fixed 8-pipe scheme above matches all of them at
+ * once, nothing is selected or brute-forced per call. channel 0..100 is the
+ * direct 2400+N MHz offset.
  */
 bool esb_promisc_radio_start(uint8_t channel, uint8_t prefix_lo, uint8_t prefix_hi);
 void esb_promisc_radio_stop(void);
