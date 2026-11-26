@@ -845,42 +845,43 @@ function renderEsb(recs){
   });
 }
 
-function parseEsbPromisc(raw){  // REC_HDR=4: channel, prefix_guess, base_guess, len, raw[len]
+function parseEsbPromisc(raw){  // REC_HDR=4: channel, pipe, pipe_prefix, len, raw[len]
   const out=[]; let i=0;
   while(i+4<=raw.length){
-    const ch=raw[i], prefix=raw[i+1], base=raw[i+2], ln=raw[i+3];
+    const ch=raw[i], pipe=raw[i+1], pipePrefix=raw[i+2], ln=raw[i+3];
     if(i+4+ln>raw.length) break;
-    out.push({channel:ch, prefix, base, raw:raw.slice(i+4,i+4+ln)});
+    out.push({channel:ch, pipe, pipePrefix, raw:raw.slice(i+4,i+4+ln)});
     i+=4+ln;
   }
   return out;
 }
-// (prefix, base) -> hit count. A guess with many hits is a real candidate;
-// one or two is likely noise (CRC is off in this mode).
+// pipe (0..7, which of the 8 fixed BALEN=1 pipes matched) -> hit count. pipe
+// and pipePrefix are log fields, not address bytes (see esb_promisc_radio.h);
+// real frames vs. noise is a CRC-16 check (cli_esb.esb_crc_candidates), not
+// reproduced here.
 function promiscHitCounts(recs){
   const counts=new Map();
-  for(const r of recs){ const k=r.prefix+"/"+r.base; counts.set(k,(counts.get(k)||0)+1); }
+  for(const r of recs){ counts.set(r.pipe,(counts.get(r.pipe)||0)+1); }
   return counts;
 }
 function summarizeEsbPromisc(recs){
   if(!recs.length) return "no hits";
   const counts=promiscHitCounts(recs);
   const top=[...counts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5)
-    .map(([k,n])=>{ const [p,b]=k.split("/").map(Number);
-      return "prefix=0x"+p.toString(16).padStart(2,"0")+"/base=0x"+b.toString(16).padStart(2,"0")+":"+n; })
+    .map(([pipe,n])=>"pipe="+pipe+":"+n)
     .join(", ");
-  return recs.length+" hit(s) across "+counts.size+" guess(es); top: "+top;
+  return recs.length+" hit(s) across "+counts.size+" pipe(s); top: "+top;
 }
 function renderEsbPromisc(recs){
   const ul=$("saved"); ul.textContent="";
   const counts=promiscHitCounts(recs);
   recs.forEach(r=>{
-    const n=counts.get(r.prefix+"/"+r.base)||0;
+    const n=counts.get(r.pipe)||0;
     const li=document.createElement("li"); li.className="ev";
     const top=document.createElement("div"); top.className="top";
     const s=document.createElement("strong"); s.textContent="ch "+r.channel;
     const tm=document.createElement("time");
-    tm.textContent="prefix 0x"+r.prefix.toString(16).padStart(2,"0")+" base 0x"+r.base.toString(16).padStart(2,"0")+"  ("+n+" hit"+(n===1?"":"s")+" at this guess)";
+    tm.textContent="pipe "+r.pipe+" prefix 0x"+r.pipePrefix.toString(16).padStart(2,"0")+"  ("+n+" hit"+(n===1?"":"s")+" on this pipe)";
     top.append(s,tm);
     const d=document.createElement("div"); d.className="det"; d.textContent=hex(Array.from(r.raw));
     li.append(top,d); ul.append(li);
