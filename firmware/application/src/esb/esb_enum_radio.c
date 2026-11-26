@@ -114,6 +114,8 @@ static bool ping_ack(uint8_t prefix, uint8_t ch) {
     NRF_RADIO->EVENTS_END      = 0;
     NRF_RADIO->EVENTS_DISABLED = 0;
 
+    bool ack = false;   /* real bug, not just the warning: `goto off` below skipped this
+                         * declaration, so a TX timeout returned an uninitialized value */
     m_st.pings++;
     NRF_RADIO->TASKS_TXEN = 1;
     uint32_t i = 0;
@@ -126,8 +128,8 @@ static bool ping_ack(uint8_t prefix, uint8_t ch) {
     NRF_RADIO->SHORTS = RADIO_SHORTS_READY_START_Msk | RADIO_SHORTS_END_DISABLE_Msk;
     uint32_t deadline = elapsed_us() + RX_RAMP_US + (m_2mbit ? ACK_WAIT_US_2M : ACK_WAIT_US_1M);
     while (!NRF_RADIO->EVENTS_END && elapsed_us() < deadline) { __NOP(); }
-    bool ack = NRF_RADIO->EVENTS_END &&
-               (NRF_RADIO->CRCSTATUS == RADIO_CRCSTATUS_CRCSTATUS_CRCOk);
+    ack = NRF_RADIO->EVENTS_END &&
+          (NRF_RADIO->CRCSTATUS == RADIO_CRCSTATUS_CRCSTATUS_CRCOk);
     if (ack) m_st.acks++;
 off:
     NRF_RADIO->SHORTS          = 0;

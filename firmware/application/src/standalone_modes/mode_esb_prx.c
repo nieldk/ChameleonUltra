@@ -75,8 +75,11 @@ static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len) {
     memset(m_prev, 0, 6);
     uint8_t ch = m_hop ? UNIFYING_CH[0] : m_channel;
     if (!esb_prx_radio_start(m_addr, ch, m_2mbit, m_ack)) return STANDALONE_RC_INTERNAL;
-    NRF_LOG_INFO("esb-prx: receiver on %02x%02x%02x%02x%02x ch=%u hop=%u ack=%u",
-                 m_addr[0], m_addr[1], m_addr[2], m_addr[3], m_addr[4], ch, m_hop, m_ack);
+    /* 8 args would need LOG_INTERNAL_8, which this SDK's nrf_log_internal.h
+     * doesn't define (max is LOG_INTERNAL_6) -- split across two calls. */
+    NRF_LOG_INFO("esb-prx: receiver on %02x%02x%02x%02x%02x",
+                 m_addr[0], m_addr[1], m_addr[2], m_addr[3], m_addr[4]);
+    NRF_LOG_INFO("esb-prx: ch=%u hop=%u ack=%u", ch, m_hop, m_ack);
     return STANDALONE_RC_OK;
 }
 
