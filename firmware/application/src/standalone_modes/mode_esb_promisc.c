@@ -1,26 +1,32 @@
 /*
  * mode_esb_promisc.c
  *
- * Standalone mode: preamble-sync ESB sniff for an UNKNOWN address (e.g.
- * finding a Logitech Unifying device with no prior knowledge of it) -- see
- * esb_promisc_radio.h. The radio matches on the ESB preamble, so every
- * on-air frame is captured. CRC is off here (nothing validates an unknown
- * address on-chip), so captures include many preamble matches on noise; the
- * host CRC-checks each capture (cli_esb) to pick out the real frames.
+ * Standalone mode: ESB sniff for an UNKNOWN address (e.g. finding a Logitech
+ * Unifying device with no prior knowledge of it) -- see esb_promisc_radio.h.
+ * The radio runs LOGITacker's illegal BALEN=1 match on all 8 pipes at once, so
+ * noise still triggers EVENTS_END regularly; CRC is off on-chip (there's
+ * nothing to validate an unknown address against there either), so this file
+ * runs its own CRC-16 check (esb_crc_valid/esb_unifying_strict_ok, below) on
+ * every popped frame in on_tick() BEFORE logging it -- only CRC-valid frames
+ * ever reach the log/host, noise is counted in m_filtered and dropped. cli_esb
+ * on the host re-runs the same check on what's logged (belt and suspenders,
+ * not load-bearing); `standalone esb-promisc status` shows hits (radio-level
+ * matches) vs. filtered (dropped here) vs. logged, which is the number that
+ * actually matters when nothing shows up in get-result.
  *
  * Config (4-5 bytes): u8 version=1, u8 channel (0-100; the fixed channel when
- * not hopping, else the sweep's start), u8 polarity (prefix_lo: 0 = 0xAA
- * preamble, non-zero = 0x55; flip it if a known-active channel stays silent),
- * u8 prefix_hi (kept for config-blob compatibility, no longer a guess range),
- * and an optional u8 flags: bit0 = hop the Unifying channel set (a device
- * hops, so a fixed channel catches it ~4% of the time), bit1 = strict
- * (only log Unifying-shaped frames, len 5/10/22, whose vendor checksum is
- * valid -- drops the CRC false positives a quiet channel produces).
+ * not hopping, else the sweep's start), u8 prefix_lo, u8 prefix_hi (both kept
+ * for config-blob compatibility only -- the fixed 8-pipe scheme below has no
+ * guess range left to select), and an optional u8 flags: bit0 = hop the
+ * Unifying channel set (a device hops, so a fixed channel catches it rarely),
+ * bit1 = strict (only log Unifying-shaped frames, len 5/10/22, whose vendor
+ * checksum is valid -- tighter than the CRC-only filter already applied).
  *
- * Log record: u8 channel, u8 prefix_guess, u8 base_guess, u8 len,
- * u8 raw[len] (len is always ESB_PROMISC_CAP_LEN here; stored explicitly
- * so the host-side format doesn't silently break if that constant ever
- * changes). Same drain/persist conventions as every other mode.
+ * Log record: u8 channel, u8 pipe (0..7, which fixed pipe matched), u8
+ * pipe_prefix (that pipe's fixed prefix byte), u8 len, u8 raw[len] (len is
+ * always ESB_PROMISC_CAP_LEN here; stored explicitly so the host-side format
+ * doesn't silently break if that constant ever changes). Same drain/persist
+ * conventions as every other mode.
  */
 
 #include "app_standalone.h"
@@ -64,7 +70,7 @@ static uint32_t m_log_words[(LOG_SZ + 3) / 4];
 #define m_log ((uint8_t *)m_log_words)
 static size_t   m_used, m_cursor;
 static uint32_t m_overflow;
-static uint32_t m_filtered;      /* preamble matches dropped: no valid ESB CRC */
+static uint32_t m_filtered;      /* radio-level pipe matches dropped: no valid ESB CRC */
 static bool     m_loaded, m_dirty;
 
 /* ESB 2-byte CRC-16/CCITT-FALSE check, mirroring cli_esb's host validation so
@@ -216,9 +222,11 @@ static standalone_rc_t on_enter(const uint8_t *cfg, size_t cfg_len) {
     m_hop_idx  = 0;
     m_hop_tick = 0;
     uint8_t start_ch = m_hop ? UNIFYING_CH[0] : m_channel;
+    /* m_prefix_lo/m_prefix_hi are passed through for config-blob compat only;
+     * esb_promisc_radio_start() ignores them now (fixed 8-pipe scheme). */
     if (!esb_promisc_radio_start(start_ch, m_prefix_lo, m_prefix_hi)) return STANDALONE_RC_INTERNAL;
     log_ensure_loaded();
-    NRF_LOG_INFO("esb-promisc: preamble-sync ch=%u hop=%u strict=%u", start_ch, m_hop, m_strict);
+    NRF_LOG_INFO("esb-promisc: 8-pipe BALEN=1 sync ch=%u hop=%u strict=%u", start_ch, m_hop, m_strict);
     return STANDALONE_RC_OK;
 }
 
@@ -299,9 +307,11 @@ static size_t get_status(char *out, size_t out_max) {
     esb_promisc_stats_t s;
     esb_promisc_radio_get_stats(&s);
     uint8_t cur_ch = m_hop ? UNIFYING_CH[m_hop_idx] : m_channel;
-    STATUS_KV(out, out_max, len, "radio=%s ch=%u preamble=0x%02x hop=%u strict=%u\n",
-              esb_promisc_radio_running() ? "rx" : "off", cur_ch, m_prefix_lo ? 0x55u : 0xAAu,
-              m_hop, m_strict);
+    /* No single preamble byte anymore (8 fixed pipes matched at once), so
+     * there's nothing meaningful to print there -- see hits/filtered below
+     * for what actually indicates traffic. */
+    STATUS_KV(out, out_max, len, "radio=%s ch=%u pipes=8 hop=%u strict=%u\n",
+              esb_promisc_radio_running() ? "rx" : "off", cur_ch, m_hop, m_strict);
     STATUS_KV(out, out_max, len, "slots=%lu blocked=%lu canceled=%lu us=%lu\n",
               (unsigned long)s.slots, (unsigned long)s.blocked, (unsigned long)s.canceled,
               (unsigned long)s.slot_us);
